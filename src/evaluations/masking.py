@@ -3,6 +3,7 @@ import pyro
 import pyro.distributions as dist
 import torch
 import scipy.sparse as sp
+import scipy 
 
 # Cluster + junction counts set to zero for those predefined indices 
 # From model fit, get estimate of what those values should be given learned PSI values 
@@ -185,9 +186,13 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     # get L1 absolute mean error between masked predicted and true PSI values
     l1_error = np.mean(np.abs(masked_pred - masked_true_psi))
 
-    # get pearson product 
-    pearson_cor = np.corrcoef(masked_true_psi, masked_pred)[0,1]
+    # get another measure of error between predicted and true PSI values
+    l2_error = np.mean((masked_pred - masked_true_psi)**2)
+
+    # get spearman correlation between masked predicted and true PSI values
+    spearman_cor = scipy.stats.spearmanr(masked_pred, masked_true_psi)[0]
 
     print("L1 error: ", l1_error)
-    print("Pearson correlation: ", pearson_cor)
-    return l1_error, pearson_cor
+    print("Spearman correlation: ", spearman_cor)
+    print("L2 error: ", l2_error)
+    return l1_error, spearman_cor, l2_error

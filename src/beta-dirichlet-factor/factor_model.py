@@ -102,7 +102,9 @@ def model(y, total_counts, K, use_global_prior=True):
 
     else:
         # this is the non hierarchical version
-        psi_dist = dist.Beta(1.,1.).expand([K,P]).to_event(2)  # simpler non-hierarchical version
+        a = pyro.sample("a", dist.Gamma(1., 1.))
+        b = pyro.sample("b", dist.Gamma(1., 1.))
+        psi_dist = dist.Beta(a, b).expand([K,P]).to_event(2)  # simpler non-hierarchical version
         psi = pyro.sample("psi", psi_dist) # shape is K,P
 
     # Sampling pi values and conc for each factor
