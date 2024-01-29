@@ -93,34 +93,16 @@ def model(y, total_counts, K, use_global_prior=True):
     N, P = y.shape
 
     if use_global_prior:
-
-        # Global priors for PSI
-        
-        # sample K values for a and b
-        a = pyro.sample("a", dist.Gamma(1., 1.).expand([K]).to_event(1)) # watch out for these .to_event(1), if using multiple a,bs (one for each K, need to include this so they are treated independently)
-        b = pyro.sample("b", dist.Gamma(1., 1.).expand([K]).to_event(1))
-
-        # with a common prior, capturing the idea that some junctions might be 
-        # consistently used across different factors.
-        # Capture shared + unique behavior of each junction
-
-        # some junctions will be more globally used (more consitutive regardless of splicing)
-        # a and b for every junction shared across factors 
-
-        # Sample PSI for each junction
-        with pyro.plate('junctions', P):
-            psi = pyro.sample("psi", dist.Beta(a, b).to_event(1))
-        
-        psi = psi.T # shape is K,P
-
-    # original code check, check if there was one a globally and b globally 
-
-    else:
         # Independent junction-specific parameters without global influence
         a = pyro.sample("a", dist.Gamma(1., 1.).expand([P]).to_event(1))
         b = pyro.sample("b", dist.Gamma(1., 1.).expand([P]).to_event(1))# per junction to model average behaviour
         # in this setup,the behavior of each junction is modeled independently of others
         psi_dist = dist.Beta(a, b).expand([K, P]).to_event(2) 
+        psi = pyro.sample("psi", psi_dist) # shape is K,P
+
+    else:
+        # this is the non hierarchical version
+        psi_dist = dist.Beta(1.,1.).expand([K,P]).to_event(2)  # simpler non-hierarchical version
         psi = pyro.sample("psi", psi_dist) # shape is K,P
 
     # Sampling pi values and conc for each factor
@@ -217,9 +199,9 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
     all_results = []
 
     if use_global_prior:
-        print("Using global prior for psi, junctions are shared across factors")
+        print("Using prior for a and b per junction to model average behaviour!")
     else:
-        print("Not using global prior for psi, junctions are independent across factors")
+        print("Not using priors on a and b, running simpler non-hierarchical version!")
         
     for i, seed in enumerate(seeds):
         print(f"Initialization {i+1} with seed {seed}")
