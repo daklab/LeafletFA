@@ -55,8 +55,8 @@ def setup_data_loaders(junction_tensor, cluster_tensor, batch_size=128, use_cuda
     generator = torch.Generator(device="cuda" if use_cuda else "cpu")
 
     # Splitting the dataset into train and test
-    train_size = int(0.8 * len(dataset))  # 80% of the dataset for training
-    test_size = len(dataset) - train_size  # Remaining 20% for testing
+    train_size = int(0.8 * len(dataset))  # 80% training
+    test_size = len(dataset) - train_size  # 20% testing
 
     # Make sure random-split is on cpu or else it will be very slow
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size], generator=generator)

@@ -13,9 +13,15 @@ import pyro.distributions as dist
 from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoDiagonalNormal
 import torch
+print (torch.__version__)
+print (torch.version.cuda)
+print (torch.cuda.get_device_name())
+
 import matplotlib.pyplot as plt
 import random
 import datetime
+from torch.distributions import Distribution
+Distribution.set_default_validate_args(False)
 
 def my_log_prob(y_sparse, total_counts_sparse, pred):
     
@@ -36,8 +42,14 @@ def my_log_prob(y_sparse, total_counts_sparse, pred):
 
     Returns:
     torch.Tensor: The sum of log probabilities for all observed non-zero data points.
-    """
         
+    Compute the log probability of observed data under a binomial distribution
+    with added stability through epsilon.
+    
+    -> Compute the log probability of observed data under a binomial distribution
+    with added stability through epsilon.
+    """
+
     # Extract non-zero elements and their indices from y and total_counts
     y_indices = y_sparse._indices() #y_indices[0] is the row index, y_indices[1] is the column index
     y_values = y_sparse._values()
@@ -51,7 +63,6 @@ def my_log_prob(y_sparse, total_counts_sparse, pred):
 
     # Compute log probabilities at these indices
     log_probs = dist.Binomial(total_counts_values, pred[y_indices[0], y_indices[1]]).log_prob(y_values)
-    #print(log_probs.sum())
     # Sum the log probabilities
     return log_probs.sum()
 
@@ -93,12 +104,14 @@ def model(y, total_counts, K, use_global_prior=True):
     N, P = y.shape
 
     if use_global_prior:
-        # Independent junction-specific parameters without global influence
+        # get a and b per junction to model average behaviour
         a = pyro.sample("a", dist.Gamma(1., 1.).expand([P]).to_event(1))
-        b = pyro.sample("b", dist.Gamma(1., 1.).expand([P]).to_event(1))# per junction to model average behaviour
-        # in this setup,the behavior of each junction is modeled independently of others
-        psi_dist = dist.Beta(a, b).expand([K, P]).to_event(2) 
+        b = pyro.sample("b", dist.Gamma(1., 1.).expand([P]).to_event(1))
+        # still need to do .expand([K,P]) * 
+        psi_dist = dist.Beta(a, b).expand([K,P]).to_event(2) 
+        # to_event affects log prob calculation and want joint prob how does it actually work...
         psi = pyro.sample("psi", psi_dist) # shape is K,P
+        psi = psi.to(dtype=torch.float64)
 
     else:
         # this is the non hierarchical version
@@ -106,21 +119,26 @@ def model(y, total_counts, K, use_global_prior=True):
         b = pyro.sample("b", dist.Gamma(1., 1.))
         psi_dist = dist.Beta(a, b).expand([K,P]).to_event(2)  # simpler non-hierarchical version
         psi = pyro.sample("psi", psi_dist) # shape is K,P
+        psi = psi.to(dtype=torch.float64)
 
     # Sampling pi values and conc for each factor
     pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K)) # shape is K, represents the base probabilities for each of the K factors via uniform prior (initially all factors are equally likely)
     conc = pyro.sample("conc", dist.Gamma(1, 1)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
 
-    # Sampling the assignment of each cell to a factor
+    # Sample 'assign' from a Dirichlet distribution to determine the mixture proportions for each data point.
+    # The 'pi' vector represents base probabilities for each of the K components, and 'conc' is a concentration parameter.
+    # The clamp operation ensures that the product of 'pi' and 'conc' stays within valid bounds for the Dirichlet distribution,
+    # i.e., values are strictly greater than 0 and less than 1, with an added epsilon for numerical stability.
+    # This prevents numerical issues such as division by zero or taking the log of zero when computing probabilities.
+    # Epsilon is a small value added to avoid probabilities exactly at 0, and 1-epsilon ensures values do not exceed 1.
+    # This adjusted 'pi * conc' vector is then used as the concentration parameter for the Dirichlet distribution from which 'assign' is sampled.
     with pyro.plate('data2', N):
-        assign_dist = dist.Dirichlet(pi * conc)
-        assign = pyro.sample("assign", assign_dist)
+        assign = pyro.sample("assign", dist.Dirichlet(pi * conc))
+        assign = assign.to(dtype=torch.float64)
 
     # Compute the predicted probabilities for each cell  (mixture of beta distributions)
     pred = torch.mm(assign, psi)
-
-    #print("a shape:", a.shape, "b shape:", b.shape)
-    #print("psi shape:", psi.shape, "pred shape:", pred.shape)
+ 
     # Use custom log probability function to compute the likelihood of observations
     log_prob = my_log_prob(y, total_counts, pred) 
     pyro.factor("obs", log_prob) 
@@ -128,29 +146,24 @@ def model(y, total_counts, K, use_global_prior=True):
 def fit(y, total_counts, K, use_global_prior, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
     
     """
-    Fit a probabilistic model using Stochastic Variational Inference (SVI).
-
-    This function performs optimization to fit the model to the data. It uses the SVI approach
-    with the Adam optimizer, and includes features like early stopping to prevent overfitting.
+    Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
+    to ensure numerical stability and early stopping to prevent overfitting.
 
     Parameters:
-    y (torch.Tensor): A tensor representing observed junction counts.
-    total_counts (torch.Tensor): A tensor representing the observed intron cluster counts.
-    K (int): The number of components in the mixture model.
-    guide (function): A guide function for the SVI (variational distribution).
-    patience (int, optional): The number of epochs to wait without improvement before stopping early. Default is 5.
-    min_delta (float, optional): Minimum change in the loss to qualify as an improvement. Default is 0.01.
-    lr (float, optional): Learning rate for the Adam optimizer. Default is 0.05.
-    num_epochs (int, optional): Maximum number of epochs for training. Default is 500.
+    - y (torch.Tensor): A tensor representing observed junction counts.
+    - total_counts (torch.Tensor): A tensor representing the observed intron cluster counts.
+    - K (int): The number of components in the mixture model.
+    - use_global_prior (bool): Flag to use a global prior in the model.
+    - guide (function): A guide function for the SVI (variational distribution).
+    - patience (int): The number of epochs to wait without improvement before stopping. Default is 5.
+    - min_delta (float): Minimum change in the loss to qualify as an improvement. Default is 0.01.
+    - lr (float): Learning rate for the Adam optimizer. Default is 0.05.
+    - num_epochs (int): Maximum number of epochs for training. Default is 500.
+    - clip_norm (float): Maximum gradient norm for clipping. Default is 10.
 
     Returns:
-    list: A list of loss values for each epoch during the optimization process.
-
-    The function iteratively updates the model parameters using the SVI step method.
-    It monitors the training loss, and if the loss does not improve by at least `min_delta`
-    for a `patience` number of consecutive epochs, the training will stop early. This helps
-    in preventing overfitting. The function returns the history of loss values for each epoch.
-    """    
+    - list: A list of loss values for each epoch during the optimization process.
+    """
     
     adam = pyro.optim.Adam({"lr": lr})
     svi = SVI(model, guide, adam, loss=Trace_ELBO())
@@ -159,26 +172,26 @@ def fit(y, total_counts, K, use_global_prior, guide, patience=5, min_delta=0.01,
     best_loss = float('inf')
     epochs_since_improvement = 0
 
-    for j in range(num_epochs):
-        #print(j)
-        # Pass use_global_prior to the model in the SVI step
+    for epoch in range(num_epochs):
+        # Perform a single step of SVI optimization.
         loss = svi.step(y, total_counts, K, use_global_prior)
         losses.append(loss)
 
-        # Check for improvement
+        # Check for improvement based on min_delta and update best loss and epochs_since_improvement.
         if best_loss - loss > min_delta:
             best_loss = loss
             epochs_since_improvement = 0
         else:
             epochs_since_improvement += 1
 
-        # Early stopping check
+        # Early stopping if no improvement for a number of epochs specified by patience.
         if epochs_since_improvement >= patience:
-            print(f"Stopping early at epoch {j}")
+            print(f"Stopping early at epoch {epoch}. Best Loss: {best_loss}")
             break
 
-        if j % 10 == 0:
-            print(f"Epoch {j}, Loss: {loss}")
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch}, Loss: {loss}")
+
     return losses
 
 def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, save_to_file=True, K=50, loss_plot=True, lr = 0.05, num_epochs=100):
