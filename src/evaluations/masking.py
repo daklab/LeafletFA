@@ -189,6 +189,8 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     # get another measure of error between predicted and true PSI values
     l2_error = np.mean((masked_pred - masked_true_psi)**2)
 
+    # report root mean square error instead of l2 (more like std dev which would be more intuitive)
+
     # get spearman correlation between masked predicted and true PSI values
     spearman_cor = scipy.stats.spearmanr(masked_pred, masked_true_psi)[0]
 

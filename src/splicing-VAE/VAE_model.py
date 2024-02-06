@@ -27,7 +27,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class SparseProportionDataset(Dataset):
     def __init__(self, junction_counts, intron_cluster_counts):
         self.junction_counts = junction_counts.to_dense()
@@ -56,46 +55,15 @@ class SparseProportionDataset(Dataset):
             'intron_cluster_counts': intron_cluster_count
         }
 
-#class SparseProportionDataset(Dataset):
-#    def __init__(self, junction_counts, intron_cluster_counts):
-#        """
-#        Initializes the dataset with sparse tensors for proportions, junction counts, and intron cluster counts.
-#        proportions: A sparse tensor representing the proportion of successes.
-#        junction_counts: A sparse tensor representing the number of successes.
-#        intron_cluster_counts: A sparse tensor representing the number of trials.
-#        """
-#        self.junction_counts = junction_counts.to_dense()
-#        self.intron_cluster_counts = intron_cluster_counts.to_dense()
-#        self.proportions = self.junction_counts / self.intron_cluster_counts
-#
-#    def __len__(self):
-#        # Assuming all tensors have the same first dimension size
-#        return self.proportions.size(0)
-#
-#    def __getitem__(self, idx):
-#        """
-#        Retrieves the dense slice of the dataset for the given index. This involves converting the sparse slice
-#        into a dense format.
-#        """
-#        # Convert sparse slice to dense format, if necessary
-#        # For very large sparse matrices, consider using batch processing techniques.
-#        
-#        proportion = self.proportions[idx]
-#        junction_count = self.junction_counts[idx]
-#        intron_cluster_count = self.intron_cluster_counts[idx]
-#        
-#        return {
-#            'proportions': proportion,
-#            'junction_counts': junction_count,
-#            'intron_cluster_counts': intron_cluster_count
-#        }
-
-def setup_data_loaders(junction_counts, intron_cluster_counts, batch_size=128, use_cuda=False):
+def setup_data_loaders(junction_counts, intron_cluster_counts, batch_size=128, use_cuda=False, perc_train=0.6):
     
     # if using cuda move junction tensor and cluster tensor to cuda
     if use_cuda:
         junction_tensor = junction_counts.cuda()
         cluster_tensor = intron_cluster_counts.cuda()
+    else:
+        junction_tensor = junction_counts
+        cluster_tensor = intron_cluster_counts
 
     dataset = SparseProportionDataset(junction_tensor, cluster_tensor)
     
@@ -103,124 +71,126 @@ def setup_data_loaders(junction_counts, intron_cluster_counts, batch_size=128, u
     generator = torch.Generator(device="cuda" if use_cuda else "cpu")
 
     # Splitting the dataset into train and test
-    train_size = int(0.8 * len(dataset))  # 80% training
-    test_size = len(dataset) - train_size  # 20% testing
+    print("Percentage of data used for training: ", perc_train)
+    train_size = int(perc_train * len(dataset))  
+    test_size = len(dataset) - train_size 
 
     # Make sure random-split is on cpu or else it will be very slow
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size], generator=generator)
 
-    #kwargs = {'num_workers': 0, 'pin_memory': use_cuda}
-
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, generator=torch.Generator(device="cuda" if use_cuda else "cpu")) #, **kwargs)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, generator=torch.Generator(device="cuda" if use_cuda else "cpu")) #, **kwargs)
-    return train_loader, test_loader
+    
+    # also return full dataset for evaluation
+    full_data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, generator=torch.Generator(device="cuda" if use_cuda else "cpu")) #, **kwargs)
+    
+    return train_loader, test_loader, full_data_loader
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dims, z_dim):
-        super().__init__()  # Simplified super call for Python 3
+    def __init__(self, input_dim, hidden_dims, z_dim, dropout_rate=0.1):
+        super().__init__()
         
-        # Build a sequential neural network model dynamically based on the provided list of hidden dimensions.
-        # The first layer transforms the input dimension to the first hidden layer dimension.
-        modules = [nn.Linear(input_dim, hidden_dims[0]), nn.ReLU()]
-        # Iterate over the list of hidden dimensions to create additional layers.
-        # For each layer, create a linear transformation followed by a ReLU activation function,
-        # transforming from the current hidden layer dimension to the next one.
-        for i in range(len(hidden_dims)-1):
-            modules.append(nn.Linear(hidden_dims[i], hidden_dims[i+1]))
+        modules = []
+        # Input layer
+        modules.append(nn.Linear(input_dim, hidden_dims[0]))
+        modules.append(nn.BatchNorm1d(hidden_dims[0]))  # Batch normalization
+        modules.append(nn.ReLU())
+        modules.append(nn.Dropout(dropout_rate))  # Dropout
+
+        # Hidden layers
+        for i in range(1, len(hidden_dims)):
+            modules.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
+            modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
             modules.append(nn.ReLU())
-        # Wrap the layers into a sequential container to automate forward propagation through these layers.
+            modules.append(nn.Dropout(dropout_rate))  # Dropout
+
         self.body = nn.Sequential(*modules)
         
-        # After passing through the hidden layers, output two vectors from the final hidden layer dimension:
-        # one for the means (μ) and one for the log variances (log(σ^2)) of the latent variables.
-        # These will parameterize the Gaussian distributions from which we'll sample the latent variables.
-        self.linear_means = nn.Linear(hidden_dims[-1], z_dim)  # Linear transformation for the mean μ of the latent variables.
-        self.linear_log_var = nn.Linear(hidden_dims[-1], z_dim)  # Linear transformation for the log variance log(σ^2) of the latent variables.
+        # Output layers for mean and log variance
+        self.linear_means = nn.Linear(hidden_dims[-1], z_dim)
+        self.linear_log_var = nn.Linear(hidden_dims[-1], z_dim)
 
     def forward(self, x):
-        # Forward pass through the initial body of the network
-        x = self.body(x)  # Pass the input x through the sequential layers defined in self.body.
-        
-        # Calculate the mean μ and log variance log(σ^2) for each example in the batch.
-        # These will be used in the reparameterization trick to sample from the latent space.
-        means = self.linear_means(x)  # Compute the means μ for the latent variables.
-        log_vars = self.linear_log_var(x)  # Compute the log variances log(σ^2) for the latent variables.
-        
-        # Return the mean and log variance of the latent space variables.
-        # These are critical for the reparameterization step and subsequent loss calculation.
+        x = self.body(x)
+        means = self.linear_means(x)
+        log_vars = self.linear_log_var(x)
         return means, log_vars
 
 class Decoder(nn.Module):
-    def __init__(self, z_dim, hidden_dims, output_dim):
-        super().__init__()  # Simplified super call for Python 3
-        # Initialize the decoder with dimensions for the latent space (z_dim),
-        # a list of dimensions for hidden layers (hidden_dims), and the dimensionality
-        # of the output data (output_dim).
+    def __init__(self, z_dim, hidden_dims, output_dim, dropout_rate=0.1):
+        super().__init__()
         
-        # Create a reverse sequence of layers from the latent space back to the observed space.
-        # Start with a linear layer that maps from the latent space dimension (z_dim) to the
-        # dimension of the last hidden layer (the first in the reverse sequence).
-        modules = [nn.Linear(z_dim, hidden_dims[-1]), nn.ReLU()]
-        
-        # Iterate over the hidden_dims in reverse order (except the last one already used),
-        # adding a linear layer and a ReLU activation for each. This progressively expands
-        # the representation back towards the input dimensionality.
+        modules = []
+        # Start with a linear layer that maps from the latent space dimension (z_dim) to the first hidden layer dimension.
+        modules.append(nn.Linear(z_dim, hidden_dims[-1]))
+        modules.append(nn.BatchNorm1d(hidden_dims[-1]))  # Batch normalization
+        modules.append(nn.ReLU())
+        modules.append(nn.Dropout(dropout_rate))  # Dropout
+
+        # Iterate over the hidden_dims in reverse order, adding a linear layer, batch normalization, ReLU, and dropout for each.
         for i in range(len(hidden_dims)-2, -1, -1):
             modules.append(nn.Linear(hidden_dims[i+1], hidden_dims[i]))
+            modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
             modules.append(nn.ReLU())
+            modules.append(nn.Dropout(dropout_rate))  # Dropout
         
-        # The final linear layer transforms the output of the last hidden layer
-        # to the desired output dimension. No activation is applied here yet, as
-        # we typically apply the final activation (e.g., sigmoid for probabilities)
-        # outside the model or in the forward pass, depending on the specific use case.
+        # The final linear layer transforms the output of the last hidden layer to the desired output dimension.
         modules.append(nn.Linear(hidden_dims[0], output_dim))
-        
+        # Note: Do not apply sigmoid here; return logits directly for numerical stability in loss calculation.
+
         # Wrap the defined layers into a sequential module for simplicity.
         self.body = nn.Sequential(*modules)
 
     def forward(self, z):
-        # Forward pass for the decoder: given a latent representation z,
-        # compute the reconstructed data.
-        
-        # Pass the latent vector z through the sequence of layers to obtain
-        # the reconstruction. The final layer's output is passed through a sigmoid
-        # to ensure the output values are in the [0, 1] range, suitable for proportions.
-        reconstruction = torch.sigmoid(self.body(z))
-        
-        # Return the reconstructed data.
+        # Forward pass: given a latent representation z, compute the reconstructed data.
+        reconstruction = self.body(z)
+        # Return the reconstructed data in logits form.
         return reconstruction
-
-def binomial_loss(y_true_counts, n_cluster_counts, y_pred_probs, eps=1e-04):
+    
+def binomial_loss_stable(y_true_counts, n_cluster_counts, logits, eps=1e-04):
     """
     Calculate the binomial loss for a batch of data, focusing on valid data points where cluster counts are greater than 0.
 
     Args:
-        y_true_counts (Tensor): A tensor containing the true junction counts for each observation. (coming from dataloader)
-        y_pred_probs (Tensor): A tensor containing the predicted probabilities of observing each junction count.
+        y_true_counts (Tensor): A tensor containing the true junction counts for each observation. (coming from dataloader).
+        logits (Tensor): The logits (unactivated outputs).  
         n_cluster_counts (Tensor): A tensor containing the total possible counts (number of trials) for each observation.
         eps (float, optional): A small value to ensure numerical stability in log calculations and probability bounds. Defaults to 1e-04.
 
     Returns:
         Tensor: The average binomial loss over all valid data points in the batch.
     """
-        
-    # Ensure predictions are within the valid range [eps, 1-eps] to prevent log(0) issues.
-    y_pred_probs = torch.clamp(y_pred_probs, eps, 1 - eps)
-    
-    # Create a mask to identify valid data points with non-zero cluster counts.
-    valid_data_mask = (n_cluster_counts > 0)
-    
-    # Apply the mask to select valid observations, ignoring NaNs and zeros in the dataset.
-    val_junc_counts = y_true_counts[valid_data_mask]
-    val_total_counts = n_cluster_counts[valid_data_mask]
-    val_y_pred_probs = y_pred_probs[valid_data_mask]
 
-    # Calculate the binomial loss for valid observations using negative log likelihood.
-    loss = - (val_junc_counts * torch.log(val_y_pred_probs) + (val_total_counts - val_junc_counts) * torch.log(1 - val_y_pred_probs))
-    
-    # Normalize the loss by the number of valid data points to get the average loss.
-    loss = loss.sum() / valid_data_mask.sum()
-    return loss
+    # ensure that logits are not infinte
+    assert not torch.isinf(logits).any()
+
+    # Use torch.logaddexp for numerical stability
+    log1p_exp_logits = torch.logaddexp(torch.zeros_like(logits), logits)
+    # assert no nan or inf in log1p_exp_logits
+    assert not torch.isnan(log1p_exp_logits).any()
+    assert not torch.isinf(log1p_exp_logits).any()
+
+    succ = (y_true_counts * logits) 
+    fail = (n_cluster_counts * log1p_exp_logits)
+
+    assert not torch.isnan(succ).any()
+    assert not torch.isinf(succ).any()
+    assert not torch.isnan(fail).any()
+    assert not torch.isinf(fail).any()
+
+    # Calculate the log likelihood
+    loglik = (y_true_counts * logits) - (n_cluster_counts * log1p_exp_logits)
+
+    # basic calculation
+    # loglik = (y_true_counts * (logits)) - (n_cluster_counts * torch.log(1 + torch.exp(logits)))
+
+    # assert no nan in loglik
+    assert not torch.isnan(loglik).any()
+    # asser no inf in loglik
+    assert not torch.isinf(loglik).any()
+
+    loss = -loglik.mean()
+    return loss 
 
 
 def loss_function(recon_x, x, mu, logvar, n_cluster_counts, eps=1e-04):
@@ -239,7 +209,7 @@ def loss_function(recon_x, x, mu, logvar, n_cluster_counts, eps=1e-04):
         Tensor: The total loss for the batch, combining both reconstruction and KL divergence losses.
     """
     # Calculate the reconstruction loss using the custom binomial loss function
-    recon_loss = binomial_loss(x, n_cluster_counts, recon_x, eps)
+    recon_loss = binomial_loss_stable(x, n_cluster_counts, recon_x, eps)
     
     # Calculate the KL divergence loss for regularization
     kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -247,7 +217,6 @@ def loss_function(recon_x, x, mu, logvar, n_cluster_counts, eps=1e-04):
     # Sum the reconstruction loss and KL divergence to get the total loss
     total_loss = recon_loss + kl_div
     return total_loss
-
 
 #  Package the model and guide in a PyTorch module: 
 class VAE(nn.Module):
@@ -307,6 +276,11 @@ class VAE(nn.Module):
         z = self.reparameterize(mu, logvar)  # Reparameterize to sample from the latent space
         return self.decoder(z), mu, logvar  # Decode the sample from the latent space, return reconstruction, mu, and logvar
 
+    def extract_latent_variables(self, x, apply_noise=True):
+        mu, logvar = self.encoder(x)
+        z = self.reparameterize(mu, logvar, apply_noise)
+        return z
+
 
 def train(model, train_loader, optimizer, epoch, log_interval=10):
     """
@@ -357,10 +331,17 @@ def evaluate(model, test_loader):
             loss = loss_function(recon_batch, data['junction_counts'], mu, logvar, data['intron_cluster_counts'])
             test_loss += loss.item()
     average_loss = test_loss / len(test_loader.dataset)
-    print(f'====> Test set average loss: {average_loss:.4f}')
+    print(f'====> Evaluation set average loss: {average_loss:.4f}')
     return average_loss
 
-def main(junction_tensor, intron_tensor):
+def main(junction_tensor, intron_tensor, BATCH_SIZE, USE_CUDA, NUM_EPOCHS, LEARNING_RATE, HIDDEN_DIMS, Z_DIM, OUTPUT_DIM):
+    
+    # add docstring
+    """
+    Main function to train VAE model on splicing data
+
+    """
+    
     # Configuration
     LEARNING_RATE = 1e-3
     NUM_EPOCHS = 10
@@ -373,7 +354,7 @@ def main(junction_tensor, intron_tensor):
     OUTPUT_DIM = INPUT_DIM  # Assuming output dimension matches input
 
     # Data Preparation
-    train_loader, test_loader = setup_data_loaders(junction_tensor, intron_tensor, BATCH_SIZE, USE_CUDA)
+    train_loader, test_loader, full_data_loader = setup_data_loaders(junction_tensor, intron_tensor, BATCH_SIZE, USE_CUDA)
 
     # Model Initialization
     model = VAE(INPUT_DIM, HIDDEN_DIMS, Z_DIM, OUTPUT_DIM)
@@ -383,11 +364,29 @@ def main(junction_tensor, intron_tensor):
     # Optimizer Setup
     optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 
+    # best validation loss 
+    best_val_loss = float('inf')
+    max_patience = 5
+    best_epoch = 0
+    train_losses = []
+    val_losses = []
+    
     # Training Loop
     for epoch in range(1, NUM_EPOCHS + 1):
-        train(model, train_loader, optimizer, epoch)
-        if epoch % 5 == 0 or epoch == NUM_EPOCHS:  # Evaluate every 5 epochs and on the last epoch
-            evaluate(model, test_loader)
+        print(f"Epoch {epoch}")
+        avg_train_loss = train(model, train_loader, optimizer, epoch)
+        avg_val_loss = evaluate(model, test_loader)
+        train_losses.append(avg_train_loss)
+        val_losses.append(avg_val_loss)
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_epoch = epoch
+            patience = max_patience
+        else:
+            patience -= 1
+            if patience == 0:
+                print(f"Early stopping at epoch {epoch}")
+                break
 
 if __name__ == "__main__":
     main()
