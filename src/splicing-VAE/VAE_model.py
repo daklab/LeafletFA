@@ -239,24 +239,16 @@ class VAE(nn.Module):
         self.encoder = Encoder(input_dim, hidden_dims, z_dim)
         self.decoder = Decoder(z_dim, hidden_dims, output_dim)
 
-    def reparameterize(self, mu, logvar):
-        """
-        Performs the reparameterization trick to sample from the latent space.
+    def reparameterize(self, mu, logvar, apply_noise=True):
+        
+        std = torch.exp(0.5 * logvar)
+        if apply_noise:
+            eps = torch.randn_like(std)
+            return mu + eps * std
+        else:
+            print("Noise applied: ", apply_noise)
+            return mu  # Return the mean without noise if apply_noise is False
 
-        This method takes the mean and log variance of the latent space distribution (as output by the encoder),
-        and samples from this distribution by adding a scaled random noise, thus enabling backpropagation through
-        stochastic nodes.
-
-        Args:
-            mu (Tensor): The mean of the latent space distribution.
-            logvar (Tensor): The logarithm of the variance of the latent space distribution.
-
-        Returns:
-            Tensor: A sample from the latent distribution defined by mu and logvar.
-        """
-        std = torch.exp(0.5 * logvar)  # Calculate the standard deviation from log variance
-        eps = torch.randn_like(std)  # Sample random noise having the same dimension as the standard deviation
-        return mu + eps * std  # Return the reparameterized latent variable
 
     def forward(self, x):
         """
@@ -275,8 +267,8 @@ class VAE(nn.Module):
         mu, logvar = self.encoder(x)  # Encode the input to get the mean and log variance of the latent space
         z = self.reparameterize(mu, logvar)  # Reparameterize to sample from the latent space
         return self.decoder(z), mu, logvar  # Decode the sample from the latent space, return reconstruction, mu, and logvar
-
-    def extract_latent_variables(self, x, apply_noise=True):
+    
+    def extract_latent_variables(self, x, apply_noise):
         mu, logvar = self.encoder(x)
         z = self.reparameterize(mu, logvar, apply_noise)
         return z
