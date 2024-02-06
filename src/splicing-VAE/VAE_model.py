@@ -12,9 +12,6 @@ import numpy as np
 
 import pyro
 import pyro.distributions as dist
-#import pyro.contrib.examples.util  # patches torchvision
-from pyro.infer import SVI, Trace_ELBO
-from pyro.optim import Adam
 
 #assert pyro.__version__.startswith('1.8.6')
 pyro.distributions.enable_validation(False)
@@ -24,35 +21,31 @@ import random
 import datetime
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, random_split
+from torch.optim import Adam
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class SparseProportionDataset(Dataset):
     def __init__(self, junction_counts, intron_cluster_counts):
-        """
-        Initializes the dataset with sparse tensors for proportions, junction counts, and intron cluster counts.
-        proportions: A sparse tensor representing the proportion of successes.
-        junction_counts: A sparse tensor representing the number of successes.
-        intron_cluster_counts: A sparse tensor representing the number of trials.
-        """
         self.junction_counts = junction_counts.to_dense()
         self.intron_cluster_counts = intron_cluster_counts.to_dense()
-        self.proportions = self.junction_counts / self.intron_cluster_counts
+        
+        # Avoid division by zero by setting zeros in intron_cluster_counts to 1 temporarily for division.
+        # This mask will be used to set proportions to 0 where intron_cluster_counts are 0.
+        safe_intron_counts = self.intron_cluster_counts.clone()
+        safe_intron_counts[safe_intron_counts == 0] = 1
+        
+        # Calculate proportions safely, then reset proportions to 0 where intron_cluster_counts are 0.
+        self.proportions = self.junction_counts / safe_intron_counts
+        self.proportions[self.intron_cluster_counts == 0] = 0
 
     def __len__(self):
-        # Assuming all tensors have the same first dimension size
         return self.proportions.size(0)
 
     def __getitem__(self, idx):
-        """
-        Retrieves the dense slice of the dataset for the given index. This involves converting the sparse slice
-        into a dense format.
-        """
-        # Convert sparse slice to dense format, if necessary
-        # For very large sparse matrices, consider using batch processing techniques.
-        
         proportion = self.proportions[idx]
         junction_count = self.junction_counts[idx]
         intron_cluster_count = self.intron_cluster_counts[idx]
@@ -62,6 +55,40 @@ class SparseProportionDataset(Dataset):
             'junction_counts': junction_count,
             'intron_cluster_counts': intron_cluster_count
         }
+
+#class SparseProportionDataset(Dataset):
+#    def __init__(self, junction_counts, intron_cluster_counts):
+#        """
+#        Initializes the dataset with sparse tensors for proportions, junction counts, and intron cluster counts.
+#        proportions: A sparse tensor representing the proportion of successes.
+#        junction_counts: A sparse tensor representing the number of successes.
+#        intron_cluster_counts: A sparse tensor representing the number of trials.
+#        """
+#        self.junction_counts = junction_counts.to_dense()
+#        self.intron_cluster_counts = intron_cluster_counts.to_dense()
+#        self.proportions = self.junction_counts / self.intron_cluster_counts
+#
+#    def __len__(self):
+#        # Assuming all tensors have the same first dimension size
+#        return self.proportions.size(0)
+#
+#    def __getitem__(self, idx):
+#        """
+#        Retrieves the dense slice of the dataset for the given index. This involves converting the sparse slice
+#        into a dense format.
+#        """
+#        # Convert sparse slice to dense format, if necessary
+#        # For very large sparse matrices, consider using batch processing techniques.
+#        
+#        proportion = self.proportions[idx]
+#        junction_count = self.junction_counts[idx]
+#        intron_cluster_count = self.intron_cluster_counts[idx]
+#        
+#        return {
+#            'proportions': proportion,
+#            'junction_counts': junction_count,
+#            'intron_cluster_counts': intron_cluster_count
+#        }
 
 def setup_data_loaders(junction_counts, intron_cluster_counts, batch_size=128, use_cuda=False):
     
@@ -176,7 +203,7 @@ def binomial_loss(y_true_counts, n_cluster_counts, y_pred_probs, eps=1e-04):
     Returns:
         Tensor: The average binomial loss over all valid data points in the batch.
     """
-    
+        
     # Ensure predictions are within the valid range [eps, 1-eps] to prevent log(0) issues.
     y_pred_probs = torch.clamp(y_pred_probs, eps, 1 - eps)
     
@@ -196,9 +223,9 @@ def binomial_loss(y_true_counts, n_cluster_counts, y_pred_probs, eps=1e-04):
     return loss
 
 
-def loss_function(recon_x, x, mu, logvar, n_cluster_counts):
+def loss_function(recon_x, x, mu, logvar, n_cluster_counts, eps=1e-04):
     """
-    Compute the total loss for a batch, including both the binomial reconstruction loss and the KL divergence.
+    Compute the total loss for a batch, combining the binomial reconstruction loss and the KL divergence.
 
     Args:
         recon_x (Tensor): The reconstructed data (predicted probabilities) from the decoder.
@@ -206,18 +233,18 @@ def loss_function(recon_x, x, mu, logvar, n_cluster_counts):
         mu (Tensor): The mean vector from the encoder's latent space representation.
         logvar (Tensor): The log variance vector from the encoder's latent space representation.
         n_cluster_counts (Tensor): The total cluster counts corresponding to the number of trials for each observation.
+        eps (float, optional): A small value to ensure numerical stability. Defaults to 1e-04.
 
     Returns:
         Tensor: The total loss for the batch, combining both reconstruction and KL divergence losses.
     """
+    # Calculate the reconstruction loss using the custom binomial loss function
+    recon_loss = binomial_loss(x, n_cluster_counts, recon_x, eps)
     
-    # Calculate the reconstruction loss using the custom binomial loss function.
-    recon_loss = binomial_loss(x, recon_x, n_cluster_counts)
-    
-    # Calculate the KL divergence loss for regularization.
+    # Calculate the KL divergence loss for regularization
     kl_div = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     
-    # Sum the reconstruction loss and KL divergence to get the total loss.
+    # Sum the reconstruction loss and KL divergence to get the total loss
     total_loss = recon_loss + kl_div
     return total_loss
 
@@ -300,21 +327,16 @@ def train(model, train_loader, optimizer, epoch, log_interval=10):
     
     # Iterate over batches of data in the training dataset
     for batch_idx, data in enumerate(train_loader):
-        optimizer.zero_grad()  # Clear gradients for the next train steps
-        recon_batch, mu, logvar = model(data['proportions'])  # Perform a forward pass of the model
-        # Calculate the loss for the current batch
+        optimizer.zero_grad()
+        recon_batch, mu, logvar = model(data['proportions'])
         loss = loss_function(recon_batch, data['junction_counts'], mu, logvar, data['intron_cluster_counts'])
-        loss.backward()  # Perform backpropagation
-        train_loss += loss.item()  # Accumulate the loss
-        optimizer.step()  # Perform a single optimization step
-        
-        # Log training status
-        if batch_idx % log_interval == 0:
-            print(f'Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} '
-                  f'({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item() / len(data)}')
+        loss.backward()
+        train_loss += loss.item()
+        optimizer.step()
     
-    # Print average loss for the epoch
-    print(f'====> Epoch: {epoch} Average loss: {train_loss / len(train_loader.dataset)}')
+    average_loss = train_loss / len(train_loader.dataset)
+    print(f'====> Epoch: {epoch} Average training loss: {average_loss:.4f}')
+    return average_loss
 
 def evaluate(model, test_loader):
     """
@@ -328,21 +350,17 @@ def evaluate(model, test_loader):
         float: The average loss for the test dataset.
     """
     model.eval()  # Set the model to evaluation mode
-    test_loss = 0  # Accumulator for the test loss
-    
-    with torch.no_grad():  # No gradients needed for evaluation
+    test_loss = 0
+    with torch.no_grad():
         for data in test_loader:
             recon_batch, mu, logvar = model(data['proportions'])
-            # Calculate loss for the current batch without backpropagation
             loss = loss_function(recon_batch, data['junction_counts'], mu, logvar, data['intron_cluster_counts'])
             test_loss += loss.item()
-    
-    # Calculate the average loss over all test data
-    avg_test_loss = test_loss / len(test_loader.dataset)
-    print(f'====> Test set loss: {avg_test_loss:.4f}')
-    return avg_test_loss
+    average_loss = test_loss / len(test_loader.dataset)
+    print(f'====> Test set average loss: {average_loss:.4f}')
+    return average_loss
 
-def main():
+def main(junction_tensor, intron_tensor):
     # Configuration
     LEARNING_RATE = 1e-3
     NUM_EPOCHS = 10
@@ -363,7 +381,7 @@ def main():
         model.cuda()
 
     # Optimizer Setup
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = Adam(model.parameters(), lr=LEARNING_RATE)
 
     # Training Loop
     for epoch in range(1, NUM_EPOCHS + 1):
