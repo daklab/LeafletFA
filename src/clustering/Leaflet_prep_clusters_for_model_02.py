@@ -42,7 +42,10 @@ def main(intron_clusters, output_file, has_genes, chunk_size, metadata):
     
     """ 
     Create input for sparse representation that we will feed into Leaflets models 
-    beta-binomial LDA model 
+
+    Required columns in metadata file are: bam_file_name (cell id), free_annotation (cell type information)
+    If has genes is yes, then gene_id column is also required
+
     """
 
     start_time = time.time()
@@ -58,6 +61,7 @@ def main(intron_clusters, output_file, has_genes, chunk_size, metadata):
             clusts_list.append(executor.submit(process_chunk, chunk))
 
     clusts = pd.concat([future.result() for future in clusts_list])
+    print("Done processing intron clusters")
 
     # if metadata file is provided, add cell type information to the output file
     if args.metadata is not None:
@@ -68,10 +72,10 @@ def main(intron_clusters, output_file, has_genes, chunk_size, metadata):
         # Create a dictionary to store the mapping
         mappings = []
 
-        # Create a subset of clsuts dataframe just dataframe with unique cell
+        # Create a subset of clusts dataframe just dataframe with unique cell
         clusts_cells = clusts.drop_duplicates(subset=['cell'])
 
-        # Iterate through the rows in the metadata dataframe
+        # Iterate through the rows in the metadata dataframe to find the matching cell
         for index, row in tqdm(metadata.iterrows()):
             bam_file_name = row['bam_file_name']
             # Check for partial matches in the 'cell' column of the clusts dataframe
@@ -98,6 +102,8 @@ def main(intron_clusters, output_file, has_genes, chunk_size, metadata):
     print("The number of junctions evaluated is " + str(len(clusts.junction_id.unique())))
     # numer of uniqiue cells 
     print("The number of cells evaluated is " + str(len(clusts.cell_id.unique())))
+    # print the number of clusters with only one junction
+    print("The number of clusters with only one junction is " + str(len(clusts[clusts.Count==1].Cluster.unique())))
 
     if(has_genes=="yes"):
         print("A gtf file was used to generate intron clusters")
@@ -127,27 +133,32 @@ def main(intron_clusters, output_file, has_genes, chunk_size, metadata):
     summarized_data = summarized_data.drop_duplicates(subset=['cell_id', 'junction_id'], keep='last') #double check if this is still necessary
 
     print("Merge cluster counts with summarized data")
+
     summarized_data = clust_cell_counts.merge(summarized_data)
     print("Done merging cluster counts with summarized data")
 
-    cells = np.unique(summarized_data['cell_id'].values)
+    print(np.unique(summarized_data['cell_id'].values))
     summarized_data["junc_ratio"] = summarized_data["junc_count"] / summarized_data["Cluster_Counts"]
 
-    #save file and use as input for LDA script 
+    #save file and use as input Leaflet models 
     summarized_data['cell_id_index'] = summarized_data.groupby('cell_id').ngroup()
     summarized_data['junction_id_index'] = summarized_data.groupby('junction_id').ngroup()
-    print("Done making the input file for beta-binomial mixture model, now saving splitting it up by cell type and saving as hdf file")
-    # split summarized_data file by cell_type and save each one as a hdf file with output_file + cell type name
-    summarized_data_split = summarized_data.groupby('cell_type')
-    print(summarized_data.cell_type.unique())
-    for name, group in summarized_data_split:
-        # if "/" detected in name (cell_type) replace it with "_"
-        if "/" in name:
-            name = name.replace("/", "_")
-        print("saving " + name + " as hdf file")
-        group.to_hdf(output_file + "_" + name + ".h5", key='df', mode='w', complevel=9, complib='zlib')
+    
+    if metadata is not None:
+        print("Done making the input file for Leaflet models, now saving splitting it up by cell type and saving as hdf file")
+        # split summarized_data file by cell_type and save each one as a hdf file with output_file + cell type name
+        summarized_data_split = summarized_data.groupby('cell_type')
+        for name, group in summarized_data_split:
+            # if "/" detected in name (cell_type) replace it with "_"
+            if "/" in name:
+                name = name.replace("/", "_")
+            print("saving " + name + " as hdf file")
+            group.to_hdf(output_file + "_" + name + ".h5", key='df', mode='w', complevel=9, complib='zlib')
 
-    print("Done generating input file for beta-binomial LDA model. This process took " + str(round(time.time() - start_time)) + " seconds")
+    if metadata is None:
+        # save summarized_data as hdf file
+        summarized_data.to_hdf(output_file + ".h5", key='df', mode='w', complevel=9, complib='zlib')    
+    print("Done generating input file for Leaflet model. This process took " + str(round(time.time() - start_time)) + " seconds")
 
 if __name__ == '__main__':
     intron_clusters=args.intron_clusters
