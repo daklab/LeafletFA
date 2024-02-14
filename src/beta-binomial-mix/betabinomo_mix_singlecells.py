@@ -243,16 +243,18 @@ def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, nu
     elbos = [ get_elbo(ALPHA, PI, GAMMA, PHI, my_data, hypers) ] 
 
     print("Got the initial ELBO ^")
- 
+    
+    print("The tolerance is set to ", tolerance)
+
     for iteration in range(num_iterations):
         print("ELBO", elbos[-1],  "CAVI iteration # ", iteration+1, end = "\r")
         ALPHA, PI, GAMMA, PHI = update_variational_parameters(ALPHA, PI, GAMMA, PHI, my_data, hypers)
         elbo = get_elbo(ALPHA, PI, GAMMA, PHI, my_data, hypers)
         elbos.append(elbo)
-        if abs(elbos[-1] - elbos[-2]) < tolerance:
-            convergence_message = "ELBO converged @ {} CAVI iteration # {} complete".format(elbos[-1], iteration + 1)
-            print(convergence_message)
-            break
+        #if abs(elbos[-1] - elbos[-2]) < tolerance:
+        #    convergence_message = "ELBO converged @ {} CAVI iteration # {} complete".format(elbos[-1], iteration + 1)
+        #    print(convergence_message)
+        #    break
 
     #if convergence_message:
     #    print(convergence_message)

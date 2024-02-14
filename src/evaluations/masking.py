@@ -11,7 +11,7 @@ import scipy
 # L1 mean absolute error can be used to evaluate imputed vs observed PSI values for J-C pairs
 
 
-def generate_mask(intron_clusts, mask_percentage=0.1, seed=42):
+def generate_mask(intron_clusts, mask_percentage=0.1, seed=42, randomize_seed=False):
 
     '''
     Generate a mask for a given intron cluster matrix.
@@ -32,7 +32,12 @@ def generate_mask(intron_clusts, mask_percentage=0.1, seed=42):
     '''
 
     # Set seed
-    np.random.seed(seed)
+    if randomize_seed:
+        seed = np.random.randint(0, 1000000)
+    else:
+        np.random.seed(seed)
+
+    print("The seed is: ", seed)
 
     # Get number of cells and junctions
     num_cells = intron_clusts.shape[0]
@@ -190,6 +195,7 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     l2_error = np.mean((masked_pred - masked_true_psi)**2)
 
     # report root mean square error instead of l2 (more like std dev which would be more intuitive)
+    rmse = np.sqrt(l2_error)
 
     # get spearman correlation between masked predicted and true PSI values
     spearman_cor = scipy.stats.spearmanr(masked_pred, masked_true_psi)[0]
@@ -197,4 +203,5 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     print("L1 error: ", l1_error)
     print("Spearman correlation: ", spearman_cor)
     print("L2 error: ", l2_error)
-    return l1_error, spearman_cor, l2_error
+    print("RMSE: ", rmse)
+    return l1_error, spearman_cor, l2_error, rmse

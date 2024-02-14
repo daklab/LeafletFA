@@ -65,7 +65,7 @@ def make_torch_data(final_data, **float_type):
 
 # load data 
 
-def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_cells_sample = None, max_intron_count=None, has_genes="no"):
+def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_cells_sample = None, max_intron_count=None, remove_singletons=True, has_genes="no"):
 
     """
     Load and preprocess cluster data from HDF5 files, either from a single file or a directory of files.
@@ -126,9 +126,29 @@ def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_
     if num_cells_sample:
         summarized_data = summarized_data.sample(n=num_cells_sample)
    
-    print(summarized_data["cell_type"].unique())
-    print(len(summarized_data["cell_id"].unique()))
-    print(summarized_data.junction_id_index.max())
+    if remove_singletons:
+        print("Removing singletons ...")
+        # Get unique junction-clusters pairs remove clusters that only have one junction
+        junctions_per_cluster = summarized_data[["Cluster", "junction_id"]].drop_duplicates()
+        junctions_per_cluster = junctions_per_cluster.groupby("Cluster").size().reset_index(name='counts')
+        junctions_per_cluster = junctions_per_cluster[junctions_per_cluster["counts"] > 1]
+        print("Number of junctions before removing singletons: ", summarized_data.junction_id_index.max())
+        summarized_data = summarized_data[summarized_data["Cluster"].isin(junctions_per_cluster["Cluster"])]
+        # redo cell id indexing in summarized data, assign cell id index to each cell id
+        summarized_data["cell_id_index"] = pd.factorize(summarized_data.cell_id)[0]
+        # same for junction id indexing
+        summarized_data["junction_id_index"] = pd.factorize(summarized_data.junction_id)[0]
+        print("Number of junctions after removing singletons: ", summarized_data.junction_id_index.max())
+
+    print("The number of unique cell types in the data is: ", len(summarized_data["cell_type"].unique()))
+    print("The number of unique cells in the data is: ", len(summarized_data["cell_id"].unique()))
+    print("The number of unique junctions in the data is: ", len(summarized_data["junction_id"].unique()))
+
+    # assert no more intron clusters of size one
+    junctions_per_cluster = summarized_data[["Cluster", "junction_id"]].drop_duplicates()
+    junctions_per_cluster = junctions_per_cluster.groupby("Cluster").size().reset_index(name='counts')
+    junctions_per_cluster = junctions_per_cluster[junctions_per_cluster["counts"] == 1]
+    assert len(junctions_per_cluster) == 0
 
     # remove outliers 
     if max_intron_count:
@@ -150,8 +170,6 @@ def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_
 
     junction_ids_conversion = summarized_data[["junction_id_index", "junction_id", "Cluster"]].drop_duplicates()
     junction_ids_conversion = junction_ids_conversion.sort_values("junction_id_index")
-
-    print(summarized_data.head())
 
     if has_genes == "yes":
         junction_ids_conversion = summarized_data[["junction_id_index", "junction_id", "Cluster", "gene_id"]].drop_duplicates()
