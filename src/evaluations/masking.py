@@ -34,8 +34,11 @@ def generate_mask(intron_clusts, mask_percentage=0.1, seed=42, randomize_seed=Fa
     # Set seed
     if randomize_seed:
         seed = np.random.randint(0, 1000000)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
     else:
         np.random.seed(seed)
+        torch.manual_seed(seed)
 
     print("The seed is: ", seed)
 
@@ -55,7 +58,8 @@ def generate_mask(intron_clusts, mask_percentage=0.1, seed=42, randomize_seed=Fa
     assert np.all(intron_clusts.toarray()[indices_to_mask_from] >= 1)
 
     # sample the mask_percentage amount of indices_to_mask_from 
-    indices = np.random.choice(len(indices_to_mask_from[0]), size=num_masked, replace=False)  
+    indices = np.random.choice(len(indices_to_mask_from[0]), size=num_masked, replace=False)
+    print(indices[0:50])  
 
     # Getting pairs
     mask_rows_ind = indices_to_mask_from[0]
@@ -69,7 +73,7 @@ def generate_mask(intron_clusts, mask_percentage=0.1, seed=42, randomize_seed=Fa
     assert np.all(intron_clusts.toarray()[mask == 1] >= 1)
 
     print("Number of entries (junction-cell pairs) masked: ", np.sum(mask))
-    return mask
+    return mask, seed
 
 # Second function to apply mask to intron cluster matrix and junction count matrix
 

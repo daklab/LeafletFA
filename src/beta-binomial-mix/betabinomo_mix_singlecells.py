@@ -225,7 +225,7 @@ def update_variational_parameters(ALPHA, PI, GAMMA, PHI, final_data, hypers):
 
 # %%
 
-def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, num_iterations=5, tolerance=1e-6):
+def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, num_iterations=5, tolerance=1e-3):
     
     '''
     Run CAVI
@@ -234,7 +234,7 @@ def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, nu
     if hypers is None: 
         hypers = {
             "eta" : 1/K, # 1 or 1/K
-            "alpha_prior" : 1., # karin had 0.65 
+            "alpha_prior" : 1., 
             "pi_prior" : 1. 
         }
         
@@ -251,13 +251,13 @@ def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, nu
         ALPHA, PI, GAMMA, PHI = update_variational_parameters(ALPHA, PI, GAMMA, PHI, my_data, hypers)
         elbo = get_elbo(ALPHA, PI, GAMMA, PHI, my_data, hypers)
         elbos.append(elbo)
-        #if abs(elbos[-1] - elbos[-2]) < tolerance:
-        #    convergence_message = "ELBO converged @ {} CAVI iteration # {} complete".format(elbos[-1], iteration + 1)
-        #    print(convergence_message)
-        #    break
+        if abs(elbos[-1] - elbos[-2]) < tolerance:
+            convergence_message = "ELBO converged @ {} CAVI iteration # {} complete".format(elbos[-1], iteration + 1)
+            print(convergence_message)
+            break
 
-    #if convergence_message:
-    #    print(convergence_message)
+    if convergence_message:
+        print(convergence_message)
 
     print("Finished CAVI!")
     return(ALPHA.cpu(), PI.cpu(), GAMMA.cpu(), PHI.cpu(), elbos) # move results back to CPU to avoid clogging GPU

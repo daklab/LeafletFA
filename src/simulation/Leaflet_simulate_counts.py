@@ -2,9 +2,13 @@ import pandas as pd
 import numpy as np
 from scipy.sparse import coo_matrix
 import os
+from tqdm import tqdm
+import torch 
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # write function that takes in Cluster name 
-def check_SS_cluster(cluster_name):
+def check_SS_cluster(final_data, junc_info, cluster_name):
     
     # this cluster can also be used to label intron clusters as exon inclusion/exclusion event 
     juncs_c = junc_info[junc_info["Cluster"] == cluster_name]
@@ -49,8 +53,9 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
     print("Using pre-defined cell types!")
     cell_type_labels = cell_types.cat.codes.to_numpy()
     K = len(cell_types.cat.categories)  # number of cell types
-    
-    print(N, P, K, len(cell_types))
+    print("The number of cell types is:", K)
+    print("The number of cells is:", N)
+    print("The number of junctions is:", P)
     
     # number of intron clusters 
     num_clusters = len(junc_info.Cluster.unique())
@@ -103,7 +108,12 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
             cell_type_psi_df = pd.concat([cell_type_psi_df, probs_df])
 
     cell_type_psi_df = cell_type_psi_df.sort_values(by=['new_junction_id_index'])
-    cell_type_psi = torch.tensor(cell_type_psi_df[[0,1]].to_numpy()) #should specify K columns insted of "0,1"
+    # keep just the first K columns of cell_type_psi_df
+    # specify which columns to keep (K columns)
+    cols_keep = cell_type_psi_df.columns[0:K]
+    print("The columns to keep are:", cols_keep)
+    cell_type_psi = torch.tensor(cell_type_psi_df[cols_keep].to_numpy())
+    # cell_type_psi = torch.tensor(cell_type_psi_df[[0,1]].to_numpy()) #should specify K columns insted of "0,1"
     print("Done simulating PSI!")
 
     # use real cluster counts to simulate junc counts with binomial distribution
@@ -155,3 +165,22 @@ def get_cluster_PSI(cluster, sim_data, junc_info):
     # convert clust_cells_psi to dataframe
     clust_cells_psi = pd.DataFrame(clust_cells_psi, columns = ["cell_id_index", "Cluster", "cluster_psi"])
     return(clust_cells_psi)
+
+def quick_clust_plot(clust, simple_data):
+    simple_data_junc = simple_data[simple_data["Cluster"] == clust]
+    # make violin plot with jitter 
+    print(simple_data_junc.cell_type.value_counts())
+    sample_label = simple_data_junc.sample_label.unique()[0]
+    plt.figuresize=(6, 6)
+    sns.violinplot(data = simple_data_junc, x = "junc_ratio", y = "cell_type", hue="junction_id_index")
+    # make xlim -1 to 1.1
+    plt.xlim(-0.2, 1.2)
+    # add sample_label to title 
+    plt.title(sample_label + " label for cluster:" + str(clust), fontsize=16)
+    # set x axis label to "Junction Usage Ratio (PSI)"
+    plt.xlabel("Junction Usage Ratio (PSI)", fontsize=20)
+    plt.ylabel("Cell Type Group", fontsize=20)
+    # increase x and y tick label size to 14
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    plt.show()

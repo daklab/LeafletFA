@@ -189,7 +189,7 @@ def fit(y, total_counts, K, use_global_prior, guide, patience=5, min_delta=0.01,
             print(f"Stopping early at epoch {epoch}. Best Loss: {best_loss}")
             break
 
-        if epoch % 10 == 0:
+        if epoch % 20 == 0:
             print(f"Epoch {epoch}, Loss: {loss}")
 
     return losses

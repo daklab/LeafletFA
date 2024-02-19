@@ -87,20 +87,20 @@ def setup_data_loaders(junction_counts, intron_cluster_counts, batch_size=128, u
     return train_loader, test_loader, full_data_loader
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dims, z_dim, dropout_rate=0.1):
+    def __init__(self, input_dim, hidden_dims, z_dim, dropout_rate=0.0):
         super().__init__()
         
         modules = []
         # Input layer
         modules.append(nn.Linear(input_dim, hidden_dims[0]))
-        modules.append(nn.BatchNorm1d(hidden_dims[0]))  # Batch normalization
+        #modules.append(nn.BatchNorm1d(hidden_dims[0]))  # Batch normalization
         modules.append(nn.ReLU())
         modules.append(nn.Dropout(dropout_rate))  # Dropout
 
         # Hidden layers
         for i in range(1, len(hidden_dims)):
             modules.append(nn.Linear(hidden_dims[i-1], hidden_dims[i]))
-            modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
+            #modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
             modules.append(nn.ReLU())
             modules.append(nn.Dropout(dropout_rate))  # Dropout
 
@@ -117,20 +117,20 @@ class Encoder(nn.Module):
         return means, log_vars
 
 class Decoder(nn.Module):
-    def __init__(self, z_dim, hidden_dims, output_dim, dropout_rate=0.1):
+    def __init__(self, z_dim, hidden_dims, output_dim, dropout_rate=0.0):
         super().__init__()
         
         modules = []
         # Start with a linear layer that maps from the latent space dimension (z_dim) to the first hidden layer dimension.
         modules.append(nn.Linear(z_dim, hidden_dims[-1]))
-        modules.append(nn.BatchNorm1d(hidden_dims[-1]))  # Batch normalization
+        #modules.append(nn.BatchNorm1d(hidden_dims[-1]))  # Batch normalization
         modules.append(nn.ReLU())
         modules.append(nn.Dropout(dropout_rate))  # Dropout
 
         # Iterate over the hidden_dims in reverse order, adding a linear layer, batch normalization, ReLU, and dropout for each.
         for i in range(len(hidden_dims)-2, -1, -1):
             modules.append(nn.Linear(hidden_dims[i+1], hidden_dims[i]))
-            modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
+            #modules.append(nn.BatchNorm1d(hidden_dims[i]))  # Batch normalization
             modules.append(nn.ReLU())
             modules.append(nn.Dropout(dropout_rate))  # Dropout
         
