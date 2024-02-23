@@ -227,7 +227,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         random.seed(seed)
 
         # Define the guide
-        print("Define the guide")
+        print("Define the guide using AutoDiagonalNormal based on the model structure.")
         guide = AutoDiagonalNormal(model)
 
         # Fit the model
