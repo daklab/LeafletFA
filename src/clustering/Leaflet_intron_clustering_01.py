@@ -26,8 +26,8 @@ parser.add_argument('--junc_files', dest='junc_files',
 parser.add_argument('--sequencing_type', dest='sequencing_type',
                     help='were the junction obtained using data from single cell or bulk sequencing? options are "single_cell" or "bulk". Note if sequencing was done using smart-seq2, then use "bulk" option')
 
-parser.add_argument('--gtf_file', dest='gtf_file',
-                    help='a path to a gtf file to annotate high confidence junctions, ideally from long read sequencing')
+parser.add_argument('--gtf_file', dest='gtf_file', default=None,
+                    help='a path to a gtf file to annotate high confidence junctions, ideally from long read sequencing, if not provided, then the script will not annotate junctions based on gtf file')
 
 parser.add_argument('--output_file', dest='output_file', 
                     default='intron_clusters.txt',
