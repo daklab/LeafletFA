@@ -28,8 +28,8 @@ Distribution.set_default_validate_args(False)
 
 # Define functions for factor model 
 
-def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc, mu):
-    
+def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
+   
     """
     Compute the log probability of observed data under either a binomial or beta-binomial distribution,
     depending on the concentration parameter.
@@ -38,7 +38,7 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc, mu):
     tensor representation of observed data. It dynamically chooses between a binomial 
     distribution and a beta-binomial distribution based on the value of the input concentration parameter.
     The binomial distribution is parameterized by predicted probabilities (`pred`), while the
-    beta-binomial distribution parameters (alpha and beta) are derived from the input concentration and an expected mean (`mu`).
+    beta-binomial distribution parameters (alpha and beta) are derived from the input concentration and the predicted probabilities.
 
     Parameters:
     y_sparse (torch.Tensor): A sparse tensor representing observed junction count data, where each non-zero
@@ -46,19 +46,13 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc, mu):
     total_counts_sparse (torch.Tensor): A sparse tensor representing the total intron cluster counts
                                         (i.e., the number of trials in a binomial distribution) for each junction.
     pred (torch.Tensor): A dense tensor of predicted probabilities for success in each trial (i.e., the 'p' in a binomial distribution).
-                         This parameter is used directly in the binomial distribution and indirectly influences the beta-binomial
-                         distribution through the derivation of alpha and beta parameters.
+                         This parameter is used directly in the binomial distribution and influences the beta-binomial
+                         distribution through the derivation of alpha and beta parameters based on the concentration parameter.
     input_conc (float or torch.Tensor): A concentration parameter affecting the distribution of probabilities,
                                         introducing variability in the success probability across trials for the
                                         beta-binomial distribution. If set to "infinite" (or a very large value),
                                         a binomial distribution is used, implying a fixed probability of success
                                         across all trials.
-    mu (float, optional): The expected mean of the Beta distribution, used to derive alpha and beta parameters
-                          for the beta-binomial distribution. Defaults to 0.5, indicating no prior bias towards
-                          success or failure.
-    name (str, optional): The name associated with the Pyro sample derived from `input_conc`. This is used as
-                          the key in Pyro's internal trace when `input_conc` is a distribution. Defaults to
-                          "concentration".
 
     Returns:
     torch.Tensor: The sum of log probabilities for all observed non-zero data points across all cell-junction pairs.
@@ -68,8 +62,9 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc, mu):
                 between observed junction counts and total intron cluster counts.
     """
 
+
     # Convert input_conc to a Pyro sample or a fixed value
-    conc = convertr(input_conc, "bb_conc")
+    #conc = convertr(input_conc, "bb_conc")
 
     # Extract non-zero elements and their indices from y (junction counts) and total_counts (intron cluster counts)
     y_indices = y_sparse._indices() #y_indices[0] is the row index, y_indices[1] is the column index
@@ -82,20 +77,15 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc, mu):
     if not torch.equal(y_indices, total_counts_indices):
         raise ValueError("The indices of y_indices and total_counts_indices do not match.")
 
-    if torch.isinf(conc).any():
+    if torch.isinf(input_conc).any():
         # Use binomial distribution
-        log_probs = dist.Binomial(total_counts_values, pred[y_indices[0], y_indices[1]]).log_prob(y_values)
+        log_probs = dist.Binomial(total_counts_values, probs=pred[y_indices[0], y_indices[1]]).log_prob(y_values)
     else:
-        # Use beta-binomial distribution
-        # BetaBinomial distribution, concentration1 and concentration0 
-        # correspond to the alpha and beta parameters of the Beta distribution part, respectively. 
-        # The total_count parameter represents the number of trials for the Binomial part.
-        # Derive alpha and beta from conc and mu
-        # Ensure mu is defined for Beta-Binomial case
-        if mu is None:
-            raise ValueError("mu must be defined for Beta-Binomial distribution.")
-        alpha = mu * conc #(can also add epsilon noise here)
-        beta = (1 - mu) * conc #(can also add epsilon noise here)
+        # Extract the success probabilities for the relevant indices
+        success_probs = pred[y_indices[0], y_indices[1]]
+        # Derive alpha and beta from success_probs and input_conc
+        alpha = success_probs * input_conc
+        beta = (1 - success_probs) * input_conc
         log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
     # Sum the log probabilities
@@ -145,7 +135,7 @@ def convertr(hyperparam, name):
         # Assuming running outside of Pyro model context, hence using a fixed tensor
         return torch.tensor(hyperparam, dtype=torch.float32)
 
-def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None, mu_prior = None):
+def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     """
     Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
@@ -166,8 +156,6 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None, mu
     - use_global_prior (bool, optional): Whether to use a global prior for psi. Defaults to True.
     - input_conc_prior (float, torch.Tensor, torch.distributions.Distribution, optional): Prior or fixed value for the concentration 
       parameter of the Beta-Binomial distribution. If not provided, defaults to a Gamma(2.0, 1.0) distribution.
-    - mu_prior (float, torch.distributions.Distribution, optional): Prior or fixed value for the mean (mu) of the 
-      Beta distribution used in the Beta-Binomial distribution. If not provided, defaults to a Beta(1.0, 1.0) distribution.
 
     Returns:
     None: This function contributes to the Pyro model's trace and does not return any value.
@@ -175,16 +163,13 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None, mu
 
     N, P = y.shape
 
-    # Set default priors if none provided
+    # Set default prior if none provided
     if input_conc_prior is None:
-        input_conc_prior = dist.Gamma(2.0, 1.0)
-    if mu_prior is None:
-        mu_prior = dist.Beta(1.0, 1.0)
+        input_conc_prior = dist.Gamma(2.0, 2.0)
 
-    # Sample input_conc and mu from their respective priors
-    input_conc = convertr(input_conc_prior, "input_conc")
-    mu = convertr(mu_prior, "mu") if mu_prior is not None else 0.5  # Ensure mu has a value even if mu_prior is None
-
+    # Sample input_conc from its prior
+    input_conc = convertr(input_conc_prior, "bb_conc")
+    
     # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
     if use_global_prior:
         a = pyro.sample("a", dist.Gamma(1., 1.).expand([P]).to_event(1)) # every junction has its own a and b
@@ -208,7 +193,7 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None, mu
     pred = torch.mm(assign, psi)
 
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
-    log_prob = my_log_prob(y, total_counts, pred, input_conc_prior, mu) 
+    log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
 
 def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
@@ -260,7 +245,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 20 == 0:
+        if epoch % 35 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
@@ -300,7 +285,10 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
     else:
         print(f"Using a Beta-binomial distribution with concentration parameter {input_conc}.")
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    
+    # Run the model for each seed
     for i, seed in enumerate(seeds):
+        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         print(f"Initialization {i+1} with seed {seed}")
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         # Set the seed

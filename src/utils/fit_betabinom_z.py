@@ -251,4 +251,4 @@ if __name__=="__main__":
 
 # To-do (improvemenets)
 #  Vectorized operations, strategic data filtering, and the use of categorical data types can improve performance.
-#  Error Handling: Your code includes try-except blocks without specifying exception types or handling errors explicitly. Specifying the types of exceptions you expect can make your error handling more robust and help with debugging.
+#  Error Handling: currently have try-except blocks without specifying exception types or handling errors explicitly. Specifying the types of exceptions we expect can make the error handling more robust and help with debugging.
