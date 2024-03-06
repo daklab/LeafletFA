@@ -20,22 +20,23 @@ from tqdm import tqdm
 import sklearn.cluster
 from scipy.stats import binom
 
-# %%    
-#parser = argparse.ArgumentParser(description='Read in file that lists junctions for all samples, one file per line and no header')
+from importlib import reload
 
-#parser.add_argument('--input_file', dest='input_file', 
-              #      help='name of the file that has the intron cluster events and junction information from running 01_prepare_input_coo.py')
-#args = parser.parse_args()
+import umap
+import scanpy as sc
 
 # +++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# Functions for probabilistic beta-binomial AS model 
+# Functions for probabilistic binomial AS mixture model 
 
 def init_var_params(K, final_data, float_type, init_labels = None, eps = 1e-2):
     
     '''
     Function for initializing variational parameters using global variables N, J, K   
     Sample variables from prior distribtuions 
-    To-Do: implement SVD for more relevant initializations
+    If init_labels is not None, then we will initialize the cell state proportions with these labels
+    init_labels can just be cell_ids_conversion["cell_type"]
+    If user wants to run the model with init_labels then final_data has to have a column for cell_type_dummy_variable
+    So that we can map back the cell type assignment
     '''
     
     print('Initialize VI params')
@@ -49,18 +50,17 @@ def init_var_params(K, final_data, float_type, init_labels = None, eps = 1e-2):
 
     # Topic Proportions (cell states proportions), GAMMA ~ Dirichlet(eta) 
     if not init_labels is None:
-        GAMMA = torch.full((N, K), 1./K, **float_type)
-        GAMMA[torch.arange(N),init_labels] = 2.
-        PHI = GAMMA[final_data.cell_index,:] # will get normalized below
+        print("Initializing cell state proportions with init_labels")
+        # Set GAMMA to dummy values based on the initial labels
+        cell_type_dummy = pd.get_dummies(init_labels)
+        PHI = torch.tensor(cell_type_dummy.values, **float_type)
+        # GAMMA is the sum of the cell state proportions for each cell
+        GAMMA = PHI.sum(0)/PHI.sum(0).sum() 
     else:
         GAMMA = 1. + torch.rand(K, **float_type) 
         PHI = torch.rand(N, K, **float_type)
-    
     PHI /= PHI.sum(1, keepdim=True)
-
     return ALPHA, PI, GAMMA, PHI
-
-# %%
 
 # Functions for calculating the ELBO
 
@@ -211,16 +211,15 @@ def update_beta(PHI, final_data, hypers):
 
 # %%   
 
-def update_variational_parameters(ALPHA, PI, GAMMA, PHI, final_data, hypers):
+def update_variational_parameters(ALPHA, PI, GAMMA, PHI, final_data, hypers, fixed_cell_types = False):
     
     '''
     Update variational parameters for beta, theta and z distributions
     '''
-    # TODO: is this order good? idea is to update q(beta) first since we may have a 
-    # "good" initialization for GAMMA and PHI
     ALPHA, PI = update_beta(PHI, final_data, hypers)
-    PHI, GAMMA = update_z_theta(ALPHA, PI, GAMMA, PHI, final_data, hypers)
-
+    if not fixed_cell_types:
+        print("Updating z and theta")
+        PHI, GAMMA = update_z_theta(ALPHA, PI, GAMMA, PHI, final_data, hypers)
     return(ALPHA, PI, GAMMA, PHI)
 
 @dataclass
@@ -271,7 +270,7 @@ def make_torch_data(final_data, **float_type):
 
 # %%
 
-def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, num_iterations=5, tolerance=1e-3):
+def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, num_iterations=5, fixed_cell_types = False, tolerance=1e-3):
     
     '''
     Run CAVI
@@ -284,7 +283,19 @@ def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, nu
             "pi_prior" : 1. 
         }
         
+    
+    # If fixed_cell_types is True, do not update GAMMA and PHI, 
+    # fix them to the initial values
+    # This is useful for differential splicing analysis
+
     ALPHA, PI, GAMMA, PHI = init_var_params(K, my_data, float_type, init_labels = init_labels)
+
+    if fixed_cell_types:
+        print("Running CAVI with fixed cell types")
+        print("z and theta will not be updated!")
+    else:
+        print("Running CAVI with unknown cell types (not predefined)")
+        print("z and theta will be updated!")
 
     elbos = [ get_elbo(ALPHA, PI, GAMMA, PHI, my_data, hypers) ] 
 
@@ -294,7 +305,7 @@ def calculate_CAVI(K, my_data, float_type, hypers = None, init_labels = None, nu
 
     for iteration in range(num_iterations):
         print("ELBO", elbos[-1],  "CAVI iteration # ", iteration+1, end = "\r")
-        ALPHA, PI, GAMMA, PHI = update_variational_parameters(ALPHA, PI, GAMMA, PHI, my_data, hypers)
+        ALPHA, PI, GAMMA, PHI = update_variational_parameters(ALPHA, PI, GAMMA, PHI, my_data, hypers, fixed_cell_types)
         elbo = get_elbo(ALPHA, PI, GAMMA, PHI, my_data, hypers)
         elbos.append(elbo)
         if abs(elbos[-1] - elbos[-2]) < tolerance:

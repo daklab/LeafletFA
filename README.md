@@ -6,7 +6,9 @@ Leaflet consists of a Bayesian mixture model that identifies latent cell states 
 
 ## Compatibility with sequencing platforms 
 
-- Smart-Seq2 (for now*)
+- Smart-Seq2
+- Split-seq* 
+- 10X* (although we do not recommend using this data for alternative splicing analysis)
 
 ## Graphical Model (update)
 <img src="https://github.com/daklab/Leaflet/assets/23510936/3e147ba5-7ee8-47ae-b84c-5e99e0551acf" width="500">
@@ -19,7 +21,18 @@ Leaflet is a Python module which currently runs on Python version 3.9 or higher.
 
 This will automatically install any missing package dependencies.
 
-Alternatively, Leaflet can be installed via conda (in the future). 
+Alternatively, Leaflet can be installed via pyp (coming soon!). 
+
+## To-Do:
+
+- implement mixture model differential splicing given pre-defined cell types (freeze z and theta) only update alpha and beta variational params
+- implement differential splicing for factor model (DONE)
+- fix the concentration parameter to be learned in factor model 
+- make the package installable (at least the mixture model components for now since it is published) 
+- write reproducible tutorial for mixture model 
+- make sure Leaflet models work with Split-seq data 
+- re-write beta-binomial test code to use only python code 
+- re-write tutorial for running full pipeline in a jupyter notebook (run intron clustering step within python script rather than in bash, at least show how it can be done)
 
 ## Running Leaflet Scripts (in the future will just be internal callable functions from module)
 
