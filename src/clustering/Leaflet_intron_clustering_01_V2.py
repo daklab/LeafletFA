@@ -9,20 +9,28 @@ import warnings
 import glob 
 import time
 import gzip
+from pathlib import Path
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pyranges")
 
-parser = argparse.ArgumentParser(description='Read in file that lists junctions for all samples, one file per line and no header')
+parser = argparse.ArgumentParser(description='Read in file that lists junctions for all samples, \
+                                 one file per line and no header')
 
 parser.add_argument('--junc_files', dest='junc_files',
-                    help='path that has all junction files along with counts in single cells or bulk samples, make sure path ends in "/" Can also be a comma seperated list of paths.')
+                    help='path that has all junction files along with counts in single cells or bulk samples, \
+                    make sure path ends in "/" Can also be a comma seperated list of paths. If you have a complex folder structure, \
+                        provide the most root folder that contains all the junction files. The script will recursively search for junction files with the suffix provided in the next argument.')
 
 parser.add_argument('--sequencing_type', dest='sequencing_type',
-                    help='were the junction obtained using data from single cell or bulk sequencing? options are "single_cell" or "bulk". Note if sequencing was done using smart-seq2, then use "bulk" option')
+                    default='single_cell',
+                    help='were the junction obtained using data from single cell or bulk sequencing? \
+                        options are "single_cell" or "bulk". Default is "single_cell"')
 
 parser.add_argument('--gtf_file', dest='gtf_file', 
                     default = None,
-                    help='a path to a gtf file to annotate high confidence junctions, ideally from long read sequencing, if not provided, then the script will not annotate junctions based on gtf file')
+                    help='a path to a gtf file to annotate high confidence junctions, \
+                    ideally from long read sequencing, if not provided, then the script will not \
+                        annotate junctions based on gtf file')
 
 parser.add_argument('--output_file', dest='output_file', 
                     default='intron_clusters.txt',
@@ -34,7 +42,8 @@ parser.add_argument('--junc_bed_file', dest='junc_bed_file',
 
 parser.add_argument('--threshold_inc', dest='threshold_inc',
                     default=0.005,
-                    help='threshold to use for removing clusters that have junctions with low read counts at either end, default is 0.01')
+                    help='threshold to use for removing clusters that have junctions with low read counts \
+                        (proportion of reads relative to intron cluster) at either end, default is 0.01')
 
 parser.add_argument('--min_intron_length', dest='min_intron_length',
                     default=50,
@@ -50,7 +59,8 @@ parser.add_argument('--min_junc_reads', dest='min_junc_reads',
 
 parser.add_argument('--keep_singletons', dest='keep_singletons', 
                     default=False,
-                    help='Indicate whether you would like to keep "clusters" composed of just one junction. Default is False which means do not keep singletons')
+                    help='Indicate whether you would like to keep "clusters" composed of just one junction.\
+                          Default is False which means do not keep singletons')
 
 parser.add_argument('--junc_suffix', dest='junc_suffix', #set default param to *.junc, 
                     default='*.juncs', 
@@ -66,7 +76,9 @@ parser.add_argument('--filter_low_juncratios_inclust', dest='filter_low_juncrati
 
 parser.add_argument('--strict_filter', dest='strict_filter',
                     default=True,
-                    help='default is True, this means that only clusters with less junctions that the mean junction count per cluster is included. This is meant to remove very complex splicing events that might be hard to make sense of in the single cell context especially.')
+                    help='default is True, this means that only clusters with less junctions that the mean \
+                        junction count per cluster is included. This is meant to remove very complex \
+                        splicing events that might be hard to make sense of in the single cell context especially.')
 
 args = parser.parse_args()
 
@@ -77,6 +89,7 @@ args = parser.parse_args()
 def process_gtf(gtf_file): #make this into a seperate script that processes the gtf file into gr object that can be used in the main scriptas input 
 
     print("The gtf file you provided is " + gtf_file)
+    print("Now reading gtf file using gtfparse")
     print("This step may take a while depending on the size of your gtf file")
 
     # calculate how long it takes to read gtf_file and report it 
@@ -141,16 +154,8 @@ def filter_junctions_by_shared_splice_sites(df):
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, threshold_inc, min_intron, max_intron, min_junc_reads, singleton, strict_filter, junc_suffix, min_num_cells_wjunc, filter_low_juncratios_inclust):
-
-    #1. If gtf_file is not empty, read it in and process it
-
-    if gtf_file is not None:
-        gtf_exons_gr = process_gtf(gtf_file)
-        print("Done extracting exons from gtf file")
-    else:
-        pass
     
-    #2. Check format of junc_files and convert to list if necessary
+    #1. Check format of junc_files and convert to list if necessary
     # Can either be a list of folders with junction files or a single folder with junction files
 
     if "," in junc_files:
@@ -164,29 +169,53 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
 
     # 3. Process each path
     for junc_path in junc_files:
+        
         # make sure junc_path has "/" at the end
-        if not junc_path.endswith("/"):
-            junc_path = junc_path + "/"
+        #if not junc_path.endswith("/"):
+        #    junc_path = junc_path + "/"
+        
+        junc_path = Path(junc_path)
         print(f"Reading in junction files from {junc_path}")
-        junc_files_in_path = glob.glob(junc_path + "*" + junc_suffix)  # Adjusted to correctly form the glob pattern
+        
+        # Using rglob to recursively find files matching the suffix
+        junc_files_in_path = list(junc_path.rglob(junc_suffix))
         if not junc_files_in_path:
             print(f"No junction files found in {junc_path} with suffix {junc_suffix}")
             continue
+
+        #junc_files_in_path = glob.glob(junc_path + "*" + junc_suffix)  # Adjusted to correctly form the glob pattern
+        #if not junc_files_in_path:
+        #    print(f"No junction files found in {junc_path} with suffix {junc_suffix}")
+        #    continue
+        
         print(f"The number of regtools junction files to be processed is {len(junc_files_in_path)}")
+
+        files_not_read = []
 
         # 4. Read and process each file
         for junc_file in tqdm(junc_files_in_path):
             try:
                 juncs = pd.read_csv(junc_file, sep="\t", header=None)
                 juncs['file_name'] = junc_file  # Add the file name as a new column
-                juncs['cell_type'] = junc_file.split("/")[-1]
+                #juncs['cell_type'] = junc_file.split("/")[-1]
+                juncs['cell_type'] = junc_file
                 all_juncs_list.append(juncs)  # Append the DataFrame to the list
             except Exception as e:
                 print(f"Could not read in {junc_file}: {e}")  
+                files_not_read.append(junc_file)
+
+    print("The total number of files that could not be read is " + str(len(files_not_read)) + " as these had no junctions")
 
     # 5. Concatenate all DataFrames into a single DataFrame
-    
     all_juncs = pd.concat(all_juncs_list, ignore_index=True) if all_juncs_list else pd.DataFrame()
+
+    #1. If gtf_file is not empty, read it in and process it
+
+    if gtf_file is not None:
+        gtf_exons_gr = process_gtf(gtf_file)
+        print("Done extracting exons from gtf file")
+    else:
+        pass
 
     # 6. Convert parameters to integers outside the loop
 
@@ -218,6 +247,7 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
     all_juncs["intron_length"] = all_juncs["chromEnd"] - all_juncs["chromStart"]
     mask = (all_juncs["intron_length"] >= min_intron) & (all_juncs["intron_length"] <= max_intron)
     all_juncs = all_juncs[mask]
+    print("Filtering based on intron length")
 
     # Filter for 'chrom' column to handle "chr" prefix
     all_juncs = all_juncs.copy()
@@ -226,6 +256,7 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
     standard_chromosomes_pattern = r'^(?:chr)?(?:[1-9]|1[0-9]|2[0-2]|X|Y|MT)$'
     all_juncs = all_juncs[all_juncs['chrom'].str.match(standard_chromosomes_pattern)]
 
+    print("Cleaning up 'chrom' column")
     # Remove "chr" prefix from 'chrom' column
     all_juncs['chrom'] = all_juncs['chrom'].str.replace(r'^chr', '', regex=True)
     
@@ -233,12 +264,14 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
     all_juncs['junction_id'] = all_juncs['chrom'] + '_' + all_juncs['chromStart'].astype(str) + '_' + all_juncs['chromEnd'].astype(str)
     
     # Get total score for each junction and merge with all_juncs with new column "total_counts"
+    
     all_juncs = all_juncs.groupby('junction_id').agg({'score': 'sum'}).reset_index().merge(all_juncs, on='junction_id', how='left')
 
     # rename score_x and score_y to total_junc_counts and score 
     all_juncs.rename(columns={'score_x': 'counts_total', 'score_y': 'score'}, inplace=True)
 
     # 7. Make gr object from ALL junctions across all cell types 
+    print("Making gr object from all junctions across all cell types")
     juncs_gr = pr.from_dict({"Chromosome": all_juncs["chrom"], "Start": all_juncs["chromStart"], "End": all_juncs["chromEnd"], "Strand": all_juncs["strand"], "Cell": all_juncs["cell_type"], "junction_id": all_juncs["junction_id"], "counts_total": all_juncs["counts_total"]})
 
     # we don't actually care about cell types anymore, we just want to obtain a list of junctions to include 

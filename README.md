@@ -30,7 +30,7 @@ Alternatively, Leaflet can be installed via pyp (coming soon!).
 - fix the concentration parameter to be learned in factor model 
 - make the package installable (at least the mixture model components for now since it is published) 
 - write reproducible tutorial for mixture model 
-- make sure Leaflet models work with Split-seq data 
+- make sure Leaflet models work with Split-seq data (check what you get when compare known cell types with fixed params)
 - re-write beta-binomial test code to use only python code 
 - re-write tutorial for running full pipeline in a jupyter notebook (run intron clustering step within python script rather than in bash, at least show how it can be done)
 
