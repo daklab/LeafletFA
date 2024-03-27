@@ -73,6 +73,8 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
     total_counts_indices = total_counts_sparse._indices()
     total_counts_values = total_counts_sparse._values()
 
+    print("input_conc", input_conc)
+
     # Ensure that y and total_counts align on the same indices
     if not torch.equal(y_indices, total_counts_indices):
         raise ValueError("The indices of y_indices and total_counts_indices do not match.")
@@ -81,14 +83,17 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
         # Use binomial distribution
         log_probs = dist.Binomial(total_counts_values, probs=pred[y_indices[0], y_indices[1]]).log_prob(y_values)
     else:
+        print("Using Beta-Binomial distribution")
         # Extract the success probabilities for the relevant indices
         success_probs = pred[y_indices[0], y_indices[1]]
         # Derive alpha and beta from success_probs and input_conc
         alpha = success_probs * input_conc
         beta = (1 - success_probs) * input_conc
+        # Calculate the log probabilities for the beta-binomial distribution
         log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
     # Sum the log probabilities
+    print("log_probs", log_probs.sum())   
     return log_probs.sum()
 
 def convertr(hyperparam, name):
@@ -129,10 +134,13 @@ def convertr(hyperparam, name):
     """
     
     if isinstance(hyperparam, torch.distributions.Distribution):
-        # Sample input_conc from a prior (Gamma distribution is a common choice for concentration parameters)
+        # Sample from a prior (Gamma distribution is a common choice for concentration parameters)
         return pyro.sample(name, hyperparam)
+    elif hyperparam is None:
+        # If no prior provided, use a default Gamma distribution
+        return pyro.sample(name, dist.Gamma(2.0, 2.0))
     else:
-        # Assuming running outside of Pyro model context, hence using a fixed tensor
+        # Assuming hyperparam is a fixed value, hence using a fixed tensor
         return torch.tensor(hyperparam, dtype=torch.float32)
 
 def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
@@ -162,13 +170,11 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     """
 
     N, P = y.shape
-
-    # Set default prior if none provided
-    if input_conc_prior is None:
-        input_conc_prior = dist.Gamma(2.0, 2.0)
-
+    
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
+    
+    print("input_conc", input_conc)
     
     # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
     if use_global_prior:
@@ -212,7 +218,6 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
     - min_delta (float): Minimum change in the loss to qualify as an improvement. Default is 0.01.
     - lr (float): Learning rate for the Adam optimizer. Default is 0.05.
     - num_epochs (int): Maximum number of epochs for training. Default is 500.
-    - clip_norm (float): Maximum gradient norm for clipping. Default is 10.
 
     Returns:
     - list: A list of loss values for each epoch during the optimization process.
@@ -229,6 +234,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
 
     for epoch in range(num_epochs):
         # Perform a single step of SVI optimization.
+        print("The input_conc is: ", input_conc)
         loss = svi.step(y, total_counts, K, use_global_prior, input_conc)
         losses.append(loss)
 
@@ -306,6 +312,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # for each latent variable in the model. These parameters are optimized during inference to 
         # make the guide's distribution as close as possible to the true posterior.
         guide = AutoDiagonalNormal(model)
+
 
         # Fit the model
         print("Fit the model")
