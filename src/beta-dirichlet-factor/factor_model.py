@@ -15,7 +15,7 @@ from pyro.infer.autoguide import AutoDiagonalNormal
 import torch
 print (torch.__version__)
 print (torch.version.cuda)
-print (torch.cuda.get_device_name())
+#print (torch.cuda.get_device_name())
 
 import matplotlib.pyplot as plt
 import random
