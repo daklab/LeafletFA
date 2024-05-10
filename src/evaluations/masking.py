@@ -4,6 +4,8 @@ import pyro.distributions as dist
 import torch
 import scipy.sparse as sp
 import scipy 
+import scipy.stats
+from scipy.stats import binom
 
 # Cluster + junction counts set to zero for those predefined indices 
 # From model fit, get estimate of what those values should be given learned PSI values 
@@ -155,6 +157,62 @@ def prep_model_input(masked_junction_counts, masked_intron_clusts):
 
     return masked_junction_counts_tensor, masked_intron_clusts_tensor
 
+
+# need a slightly different function for evaluating mixture model 
+
+def evaluate_mixture_model(true_juncs, true_clusts, model_res, masked_matrix):
+    '''
+    Evaluate trained mixture model on masked data.
+
+    Parameters:
+    - true_juncs (torch.Tensor): True junction counts.
+    - true_clusts (torch.Tensor): True cluster counts.
+    - model_res (tuple): Tuple containing the results of the trained mixture model, 
+                         including ALPHA_f, PI_f, GAMMA_f, PHI_f, and elbos_all.
+    - masked_matrix (numpy.ndarray): Masked matrix indicating the entries to evaluate.
+
+    Returns:
+    - l1_error (torch.Tensor): L1 error (mean absolute difference) between predicted and true PSI values.
+    - l2_error (torch.Tensor): L2 error (root mean squared error) between predicted and true PSI values.
+    - correlation_coefficient (float): Pearson correlation coefficient between predicted and true PSI values.
+    - r_squared (torch.Tensor): R-squared (coefficient of determination) between predicted and true PSI values.
+    - log_likelihood (float): Log-likelihood score for how well the data fits using the predicted PSI values.
+    '''
+
+    # Extract latent variables from trained model 
+    ALPHA_f, PI_f, GAMMA_f, PHI_f, elbos_all = model_res
+    psi = ALPHA_f / (ALPHA_f+PI_f)   
+
+    # Calculate predicted PSI values for each cell and junction
+    pred = PHI_f @ psi.T 
+
+    # Let's look at only the masked entries
+    masked_pred = pred[np.nonzero(masked_matrix)]
+    true_psi = true_juncs / true_clusts
+
+    true_clusts_dense = true_clusts.toarray()
+    junc_counts_dense = true_juncs.toarray()
+
+    # Get true_psi values for masked indices 
+    masked_true_psi = true_psi[np.nonzero(masked_matrix)]
+
+    # Calculate L1 error
+    l1_error = torch.mean(torch.abs(masked_pred - masked_true_psi))
+
+    # Calculate L2 error (Root Mean Squared Error)
+    l2_error = torch.sqrt(torch.mean((masked_pred - masked_true_psi) ** 2))
+
+    # Calculate correlation coefficient
+    correlation_coefficient = np.corrcoef(masked_pred, masked_true_psi)[0, 1]
+
+    # Calculate log-likelihood
+    n_trials = true_clusts_dense[np.nonzero(masked_matrix)]
+    successes = junc_counts_dense[np.nonzero(masked_matrix)]
+    log_likelihood = np.sum(binom.logpmf(successes, n_trials, masked_pred))
+
+    return l1_error, l2_error, correlation_coefficient, log_likelihood
+
+
 # next function shoould evaluate model fit on masked data
 
 def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
@@ -173,10 +231,28 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     model_psi : torch.Tensor
         A J x K matrix of cell-specific factor loadings.
 
+    model_assign : torch.Tensor
+        A C x K matrix of cell-specific factor assignments.
+
+    mask : numpy.ndarray
+        A binary mask indicating the entries to evaluate.
+
     Returns
     -------
-    mse : float
-        The mean squared error between the imputed and observed junction counts.
+    l1_error : float
+        The mean absolute difference between masked predicted and true PSI values.
+
+    spearman_cor : float
+        The Spearman correlation coefficient between masked predicted and true PSI values.
+
+    l2_error : float
+        The mean squared error between masked predicted and true PSI values.
+
+    rmse : float
+        The root mean squared error between masked predicted and true PSI values.
+
+    log_likelihood : float
+        The log-likelihood of the observed data given the predicted PSI values, assuming a Beta-Binomial distribution.
     '''
 
     # get predicted PSI values for each cell and junction
@@ -204,8 +280,15 @@ def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
     # get spearman correlation between masked predicted and true PSI values
     spearman_cor = scipy.stats.spearmanr(masked_pred, masked_true_psi)[0]
 
+    # Calculate log-likelihood for Beta-Binomial distribution
+    n_trials = true_clusts[np.nonzero(mask)]
+    successes = true_juncs[np.nonzero(mask)]
+    log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
+
     print("L1 error: ", l1_error)
     print("Spearman correlation: ", spearman_cor)
     print("L2 error: ", l2_error)
     print("RMSE: ", rmse)
-    return l1_error, spearman_cor, l2_error, rmse
+    print("Log-likelihood: ", log_likelihood)
+
+    return l1_error, spearman_cor, l2_error, rmse, log_likelihood

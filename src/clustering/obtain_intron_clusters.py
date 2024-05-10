@@ -290,6 +290,9 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
     if min_junc_reads is not None:
         juncs_gr = juncs_gr[juncs_gr.counts_total > min_junc_reads]
 
+    # figure out the number of cells with each junction 
+    
+
     print("The number of junctions after filtering for minimum junction reads is " + str(len(juncs_gr.junction_id.unique())))
 
     #keep only junctions that could be actually related to isoforms that we expect in our cells (via gtf file provided)

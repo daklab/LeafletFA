@@ -73,7 +73,7 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
     total_counts_indices = total_counts_sparse._indices()
     total_counts_values = total_counts_sparse._values()
 
-    print("input_conc", input_conc)
+    ## print("input_conc", input_conc)
 
     # Ensure that y and total_counts align on the same indices
     if not torch.equal(y_indices, total_counts_indices):
@@ -83,7 +83,7 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
         # Use binomial distribution
         log_probs = dist.Binomial(total_counts_values, probs=pred[y_indices[0], y_indices[1]]).log_prob(y_values)
     else:
-        print("Using Beta-Binomial distribution")
+        ## print("Using Beta-Binomial distribution")
         # Extract the success probabilities for the relevant indices
         success_probs = pred[y_indices[0], y_indices[1]]
         # Derive alpha and beta from success_probs and input_conc
@@ -93,7 +93,7 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
         log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
     # Sum the log probabilities
-    print("log_probs", log_probs.sum())   
+    #print("log_probs", log_probs.sum())   
     return log_probs.sum()
 
 def convertr(hyperparam, name):
@@ -174,7 +174,7 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
     
-    print("input_conc", input_conc)
+    ## print("input_conc", input_conc)
     
     # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
     if use_global_prior:
@@ -233,8 +233,8 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
     epochs_since_improvement = 0
 
     for epoch in range(num_epochs):
-        # Perform a single step of SVI optimization.
-        print("The input_conc is: ", input_conc)
+        ## Perform a single step of SVI optimization.
+        ## print("The input_conc is: ", input_conc)
         loss = svi.step(y, total_counts, K, use_global_prior, input_conc)
         losses.append(loss)
 
@@ -251,7 +251,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 35 == 0:
+        if epoch % 40 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
