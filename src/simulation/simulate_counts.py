@@ -87,7 +87,8 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
             probs[0,] = (1-probs[1,1])/2
             probs[2,] = (1-probs[1,1])/2
             # convert probs to dataframe 
-            probs_df = pd.DataFrame(probs.numpy())
+            probs_df = pd.DataFrame(probs.cpu().numpy())  # Adjusted line
+            # probs_df = pd.DataFrame(probs.numpy())
             # add junction_id_index column to probs_df
             probs_df["new_junction_id_index"] = juncs_c["new_junction_id_index"].values
             probs_df["sample_label"] = "negative"
@@ -100,7 +101,8 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
             J3_prob = probs[1,]
             probs[0,] = (1-J3_prob)/2
             probs[2,] = (1-J3_prob)/2
-            probs_df = pd.DataFrame(probs.numpy())
+            probs_df = pd.DataFrame(probs.cpu().numpy())  # Adjusted line
+            # probs_df = pd.DataFrame(probs.numpy())
             probs_df["new_junction_id_index"] = juncs_c["new_junction_id_index"].values
             probs_df["sample_label"] = "positive"
             probs_df["Cluster"] = juncs_c["Cluster"].values[0]
@@ -118,14 +120,14 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
 
     # use real cluster counts to simulate junc counts with binomial distribution
     sim_junc_counts = cluster_counts.copy() 
-    sim_junc_counts.data = torch.distributions.binomial.Binomial( 
-         total_count=torch.tensor(cluster_counts.data), 
-         probs=cell_type_psi[
-             cluster_counts.col, # junction index
-             cell_type_labels[cluster_counts.row] # cell index 
-         ]
-    ).sample().numpy()
-    
+    sim_junc_counts.data = torch.distributions.binomial.Binomial(
+        total_count=torch.tensor(cluster_counts.data), 
+        probs=cell_type_psi[
+            cluster_counts.col,  # junction index
+            cell_type_labels[cluster_counts.row]  # cell index 
+        ]
+    ).sample().cpu().numpy()  # Adjusted line to add .cpu() before .numpy()
+
     print("Done simulating junc counts!")
     
     return sim_junc_counts, cell_type_labels, cell_type_psi, cell_type_psi_df

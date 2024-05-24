@@ -21,10 +21,19 @@ import matplotlib.pyplot as plt
 import random
 import logging
 logging.basicConfig(format='%(message)s', level=logging.INFO)
+from pyro.infer import Predictive
 
 import datetime
 from torch.distributions import Distribution
 Distribution.set_default_validate_args(False)
+
+import logging
+import matplotlib.pyplot as plt
+import torch
+import pyro
+import random
+import datetime
+import numpy as np
 
 # Define functions for factor model 
 
@@ -100,53 +109,30 @@ def convertr(hyperparam, name):
     Convert a hyperparameter input into a Pyro sample or a fixed PyTorch tensor.
 
     Parameters:
-    - hyperparam (torch.distributions.Distribution or float): The hyperparameter to convert.
-      This can be a PyTorch distribution, which indicates a stochastic parameter that should
-      be sampled within a Pyro model context. Alternatively, it can be a float, representing
-      a fixed value for the parameter.
+    - hyperparam (torch.distributions.Distribution or float or None): The hyperparameter to convert.
+      This can be a PyTorch distribution, a float, or None.
     - name (str): The name associated with the Pyro sample. This is used as the key in Pyro's
       internal trace when `hyperparam` is a distribution. For fixed values, this parameter
       is not directly used but is required for consistency with the sampling case.
 
     Returns:
     - torch.Tensor or pyro.Sample: If `hyperparam` is a distribution, returns a sample from
-      this distribution as part of a Pyro model's execution trace. If it is a fixed value,
+      this distribution as part of a Pyro model's execution trace. If it is a fixed value or None,
       returns a PyTorch tensor representing this value. The tensor's dtype is set to `torch.float32`,
       ensuring compatibility with most PyTorch and Pyro operations.
-
-    Example:
-    ```
-    # Using a stochastic hyperparameter
-    conc_param = dist.Gamma(2, 2)  # A PyTorch distribution
-    sampled_conc = convertr(conc_param, "concentration")
-
-    # Using a fixed hyperparameter
-    fixed_conc = 10.0  # A fixed value
-    fixed_conc_tensor = convertr(fixed_conc, "concentration")
-    ```
-
-    Note:
-    - When using this function within a Pyro model, ensure that `name` is unique across
-      different calls to avoid unintended behavior in the model's trace.
-    - The function assumes usage within a Pyro probabilistic model context for distribution
-      inputs. For fixed values, it operates independently of Pyro, simply returning a tensor.
     """
-    
+
     if isinstance(hyperparam, torch.distributions.Distribution):
-        # Sample from a prior (Gamma distribution is a common choice for concentration parameters)
         return pyro.sample(name, hyperparam)
     elif hyperparam is None:
-        # If no prior provided, use a default Gamma distribution
         return pyro.sample(name, dist.Gamma(2.0, 2.0))
-    elif torch.isinf(hyperparam):
-        # If hyperparam is set to infinity, use a fixed value to indicate a binomial distribution
-        return torch.tensor(hyperparam, dtype=torch.float32)
     else:
-        return torch.tensor(hyperparam, dtype=torch.float32)
-
-    # factor_model.py:144: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() 
-    # or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-    
+        # Ensure hyperparam is a tensor before checking if it's infinite
+        hyperparam_tensor = torch.as_tensor(hyperparam, dtype=torch.float32)
+        if torch.isinf(hyperparam_tensor).any():
+            return hyperparam_tensor
+        else:
+            return torch.tensor(hyperparam, dtype=torch.float32)
 
 def model(y, total_counts, K, use_global_prior=True, input_conc_prior = 10):
 
@@ -185,24 +171,26 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = 10):
 
     # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
     if use_global_prior:
-        a = pyro.sample("a", dist.Gamma(1., 1.).expand([P]).to_event(1)) # every junction has its own a and b
-        b = pyro.sample("b", dist.Gamma(1., 1.).expand([P]).to_event(1))
-        psi = pyro.sample("psi", dist.Beta(a, b).expand([K,P]).to_event(2))
+        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
+        b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
+        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
     else:
-        psi = pyro.sample("psi", dist.Beta(pyro.sample("a", dist.Gamma(1., 1.)), 
-                                           pyro.sample("b", dist.Gamma(1., 1.))).expand([K,P]).to_event(2))
+        psi = pyro.sample("psi", dist.Beta(pyro.sample("a", dist.Gamma(2., 2.)), 
+                                           pyro.sample("b", dist.Gamma(2, 2.))).expand([K,P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
 
     # sample priors for dirichlet distribution
     pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
-    conc = pyro.sample("dir_conc", dist.Gamma(1, 1)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
+    conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
 
     with pyro.plate('data', N):
         # sample the factor assignments from the categorical distribution
         assign = pyro.sample("assign", dist.Dirichlet(pi * conc))
         assign = assign.to(dtype=torch.float64)
 
+    # print("assign shape:", assign.shape)  # Expected to be [N, K]
+    # print("psi shape:", psi.shape)        # Expected to be [K, P]
     pred = torch.mm(assign, psi)
 
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
@@ -267,6 +255,117 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
             logging.info("Elbo loss: {}".format(loss))
     return losses
 
+def setup_logging():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def print_global_prior(use_global_prior):
+    if use_global_prior:
+        logging.info("Using prior for a and b per junction to model average behaviour!")
+    else:
+        logging.info("Not using priors on a and b, running simpler non-hierarchical version!")
+
+def print_concentration(input_conc):
+    if input_conc == float('inf'):
+        logging.info("Using a fixed probability of success across all trials (infinite concentration parameter) with a binomial distribution.")
+    elif input_conc is None:
+        logging.info("No input concentration parameter provided. Using default Gamma(2.0, 2.0) to initialize and learn bb concentration.")
+    else:
+        logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc}.")
+
+def initialize_seeds(num_initializations, seeds):
+    if seeds is None:
+        seeds = [random.randint(1, 10000) for _ in range(num_initializations)]
+    return seeds
+
+def fit_model(y, total_counts, K, use_global_prior, input_conc, seed, lr, num_epochs):
+    pyro.set_rng_seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)
+    guide = AutoDiagonalNormal(model)
+    # Under the hood, this defines a guide that uses a Normal distribution with 
+    # learnable parameters corresponding to each sample statement in the model. e.g. in our case, 
+    # this distribution should have a size of (5,) correspoding to the 3 regression coefficients for 
+    # each of the terms, and 1 component contributed each by the intercept term and sigma in the model.
+    losses = fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
+    return guide, losses
+
+def plot_losses(losses, i):
+    if plt.isinteractive():
+        plt.plot(losses)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title(f"Loss Plot for Initialization {i+1}")
+        plt.show()
+
+def save_results(all_results, save_to_file, file_prefix, K, num_initializations):
+    if save_to_file:
+        date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        file_name = f"{file_prefix}_{date}_{K}_{num_initializations}_factors.pt" if file_prefix else f"results_{date}_{K}_{num_initializations}_factors.pt"
+        torch.save(all_results, file_name)
+        logging.info(f"Results saved to {file_name}")
+
+
+def collect_samples(guide, y, total_counts, K, use_global_prior, num_samples=100):
+    """
+    Collect samples from the posterior distribution of latent variables using a guide function.
+
+    This function runs a probabilistic guide a specified number of times to collect samples from
+    the posterior distribution of latent variables given the data and model configuration. It
+    is useful for posterior predictive checks, inference, and uncertainty estimation.
+
+    Parameters:
+    - guide (callable): The guide function, usually the approximate posterior in Pyro.
+    - y (torch.Tensor): Observed junction counts.
+    - total_counts (torch.Tensor): Observed intron cluster counts.
+    - K (int): The number of cell states used to train the model.
+    - use_global_prior (bool): Flag to indicate whether junction a and b parameters are learned per junction or not.
+    - num_samples (int, optional): The number of samples to collect. Defaults to 100.
+
+    Returns:
+    - dict: A dictionary where keys are the names of the latent variables and values are numpy arrays
+            of collected samples.
+    """
+    samples = {}  # Dictionary to hold samples for each latent variable
+
+    for _ in range(num_samples):
+        
+        # Generate a trace of the guide execution
+        guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior)
+        
+        # Collect samples from the trace
+        for name, node in guide_trace.nodes.items():
+            if node["type"] == "sample":
+                # Initialize the sample list if the variable is encountered for the first time
+                if name not in samples:
+                    samples[name] = []
+                # Append the sample to the list, detached from the PyTorch computation graph
+                samples[name].append(node["value"].detach().cpu().numpy())
+
+    # Convert lists of samples to numpy arrays for easier downstream manipulation
+    for name in samples:
+        samples[name] = np.array(samples[name])
+    
+    return samples
+
+def calculate_summary_stats(samples):
+    stats = {}
+    for name, values in samples.items():
+        # Convert lists of numpy arrays back to tensors for statistical computation
+        values_tensor = torch.tensor(values, dtype=torch.float)
+        
+        # Ensure the tensor is on CPU before converting to numpy
+        if values_tensor.is_cuda:
+            values_tensor = values_tensor.cpu()
+
+        stats[name] = {
+            'mean': torch.mean(values_tensor, dim=0).numpy(),
+            'std': torch.std(values_tensor, dim=0).numpy(),
+            '5%': np.percentile(values_tensor.numpy(), 5, axis=0),
+            '95%': np.percentile(values_tensor.numpy(), 95, axis=0)
+        }
+    return stats
+
+
 def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, input_conc=10, save_to_file=True, K=50, loss_plot=True, lr = 0.05, num_epochs=100):
 
     """
@@ -312,6 +411,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         print(f"Initialization {i+1} with seed {seed}")
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+        
         # Set the seed
         pyro.set_rng_seed(seed)
         torch.manual_seed(seed)
@@ -326,8 +426,14 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # Variational Parameters: It automatically introduces variational parameters (means and variances) 
         # for each latent variable in the model. These parameters are optimized during inference to 
         # make the guide's distribution as close as possible to the true posterior.
-        guide = AutoDiagonalNormal(model)
+        
+        guide = AutoDiagonalNormal(model) # autoguide list and then add autodiagonalnormal to each part, poutine. block  
 
+        # Assuming `model` is your model function
+        trace = pyro.poutine.trace(model).get_trace(y, total_counts, K, use_global_prior)
+#        trace.compute_log_prob()  # optional: to compute log probabilities for all sample sites
+        print("Model trace:")
+        print(trace.format_shapes())
 
         # Fit the model
         print("Fit the model")
@@ -340,19 +446,32 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
             plt.title(f"Loss Plot for Initialization {i+1}")
             plt.show()
 
-        # Sample from the guide (posterior)
-        print("Sample from the guide (posterior)")
-        sampled_guide = guide()
-        guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior)
+        # Disable gradients for the guide parameters
+        guide.requires_grad_(False)
 
-        # Extract the latent variables 
-        print("Extract the latent variables")
-        latent_vars = {name: node["value"].detach().cpu().numpy() for name, node in guide_trace.nodes.items() if node["type"] == "sample"}
+        # Sample from the guide (posterior) multiple times
+        num_samples = 100
+
+        # Sample from the guide (posterior) multiple times
+        print("Sample from the guide (posterior)")
+        all_samples = collect_samples(guide, y, total_counts, K, use_global_prior, num_samples)
+
+        quantiles = (guide.quantiles([0.25, 0.5, 0.75]))
+
+        # Calculate summary statistics for each latent variable
+        print("Calculate summary statistics")
+        summary_stats = calculate_summary_stats(all_samples)
+
+        # Print summary statistics for each latent variable
+        for var, stats in summary_stats.items():
+            print(f"Summary statistics for {var}: {stats}")
+
+        # Append results
         all_results.append({
             'seed': seed,
             'losses': losses,
-            'sampled_guide': sampled_guide,
-            'latent_vars': latent_vars
+            'latent_vars': all_samples,  # store all sampled latent variables
+            'summary_stats': summary_stats  # store computed summary statistics
         })
 
     print("All initializations complete. Returning results.")
@@ -371,7 +490,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         print(f"Results saved to {file_name}")
         print("------------------------------------------------")
 
-    return all_results
+    return all_results, quantiles
 
 if __name__ == "__main__":
     main()
