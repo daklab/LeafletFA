@@ -34,6 +34,11 @@ import pyro
 import random
 import datetime
 import numpy as np
+from pyro.infer.autoguide import AutoDiagonalNormal
+from pyro import poutine
+
+# import the AutoGuideList class from the pyro.infer.autoguide module
+from pyro.infer.autoguide import AutoGuideList
 
 # Define functions for factor model 
 
@@ -134,7 +139,7 @@ def convertr(hyperparam, name):
         else:
             return torch.tensor(hyperparam, dtype=torch.float32)
 
-def model(y, total_counts, K, use_global_prior=True, input_conc_prior = 10):
+def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     """
     Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
@@ -197,7 +202,7 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = 10):
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
 
-def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
+def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
     
     """
     Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
@@ -208,6 +213,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
     - total_counts (torch.Tensor): A tensor representing the observed intron cluster counts.
     - K (int): The number of components in the mixture model.
     - use_global_prior (bool): Flag to use a global prior in the model.
+    - input_conc_prior: The prior or fixed value for the concentration parameter of the Beta-Binomial distribution.
     - guide (function): A guide function for the SVI (variational distribution).
     - patience (int): The number of epochs to wait without improvement before stopping. Default is 5.
     - min_delta (float): Minimum change in the loss to qualify as an improvement. Default is 0.01.
@@ -218,21 +224,42 @@ def fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=5, min
     - list: A list of loss values for each epoch during the optimization process.
     """
     
+    # Set up the optimizer for the SVI. Here, we use the Adam optimizer from Pyro's optim module,
+    # setting the learning rate to the provided value 'lr'. This optimizer will update the variational
+    # parameters during the optimization process to minimize the loss function.
     adam = pyro.optim.Adam({"lr": lr})
+
+    # Define the number of samples used to estimate the Evidence Lower Bound (ELBO). This is a measure
+    # of the difference between the variational approximation of the posterior and the true posterior.
+    # More samples can provide a more accurate estimate but will increase computation time.
     ELBO_SAMPLES = 1
-    loss = Trace_ELBO(num_particles=ELBO_SAMPLES)
+    
+    # Initialize the loss function as Trace_ELBO, which estimates the ELBO (using?).
+    # We use 'num_particles=ELBO_SAMPLES' to set the number of samples used in the ELBO estimation.
+    # This class will be used to calculate the loss between the model's predictions and the guide
+    # (approximate posterior) during training.
+    loss = Trace_ELBO(num_particles=ELBO_SAMPLES) 
+
+    # Set up the SVI object with the model, the guide (which is a function that should
+    # apply the defined guides), the chosen optimizer, and the loss function. This object will
+    # handle the process of variational inference by optimizing the parameters of the guide to
+    # minimize the ELBO.
     svi = SVI(model, guide, adam, loss)
+
+    # svi = SVI(model, guide, adam, Trace_ELBO())
+
+    # Clear Pyro's parameter store before starting the optimization. This ensures that previous
+    # runs do not interfere with the current optimization, providing a clean slate.
     pyro.clear_param_store()
+
     losses = []
     best_loss = float('inf')
     epochs_since_improvement = 0
 
-    # Sample input_conc from its prior
-    # print("The input_conc in fit function input: ", input_conc)     
-   
     for epoch in range(num_epochs):
-        ## Perform a single step of SVI optimization.
-        loss = svi.step(y, total_counts, K, use_global_prior, input_conc)
+
+        # Call SVI step passing the input_conc_prior dynamically
+        loss = svi.step(y, total_counts, K, use_global_prior, input_conc_prior)
         losses.append(loss)
 
         # Check for improvement based on min_delta and update best loss and epochs_since_improvement.
@@ -264,30 +291,25 @@ def print_global_prior(use_global_prior):
     else:
         logging.info("Not using priors on a and b, running simpler non-hierarchical version!")
 
-def print_concentration(input_conc):
-    if input_conc == float('inf'):
+def print_concentration(input_conc_prior):
+    """
+    Log the type of concentration parameter used in the model based on the prior provided.
+
+    Parameters:
+    - input_conc_prior: The prior or fixed value for the concentration parameter of the Beta-Binomial distribution.
+                        If None, the parameter will be learned and initialized with a default distribution.
+    """
+    if input_conc_prior == float('inf'):
         logging.info("Using a fixed probability of success across all trials (infinite concentration parameter) with a binomial distribution.")
-    elif input_conc is None:
+    elif input_conc_prior is None:
         logging.info("No input concentration parameter provided. Using default Gamma(2.0, 2.0) to initialize and learn bb concentration.")
     else:
-        logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc}.")
+        logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc_prior}.")
 
 def initialize_seeds(num_initializations, seeds):
     if seeds is None:
         seeds = [random.randint(1, 10000) for _ in range(num_initializations)]
     return seeds
-
-def fit_model(y, total_counts, K, use_global_prior, input_conc, seed, lr, num_epochs):
-    pyro.set_rng_seed(seed)
-    torch.manual_seed(seed)
-    random.seed(seed)
-    guide = AutoDiagonalNormal(model)
-    # Under the hood, this defines a guide that uses a Normal distribution with 
-    # learnable parameters corresponding to each sample statement in the model. e.g. in our case, 
-    # this distribution should have a size of (5,) correspoding to the 3 regression coefficients for 
-    # each of the terms, and 1 component contributed each by the intercept term and sigma in the model.
-    losses = fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
-    return guide, losses
 
 def plot_losses(losses, i):
     if plt.isinteractive():
@@ -305,32 +327,15 @@ def save_results(all_results, save_to_file, file_prefix, K, num_initializations)
         logging.info(f"Results saved to {file_name}")
 
 
-def collect_samples(guide, y, total_counts, K, use_global_prior, num_samples=100):
-    """
-    Collect samples from the posterior distribution of latent variables using a guide function.
-
-    This function runs a probabilistic guide a specified number of times to collect samples from
-    the posterior distribution of latent variables given the data and model configuration. It
-    is useful for posterior predictive checks, inference, and uncertainty estimation.
-
-    Parameters:
-    - guide (callable): The guide function, usually the approximate posterior in Pyro.
-    - y (torch.Tensor): Observed junction counts.
-    - total_counts (torch.Tensor): Observed intron cluster counts.
-    - K (int): The number of cell states used to train the model.
-    - use_global_prior (bool): Flag to indicate whether junction a and b parameters are learned per junction or not.
-    - num_samples (int, optional): The number of samples to collect. Defaults to 100.
-
-    Returns:
-    - dict: A dictionary where keys are the names of the latent variables and values are numpy arrays
-            of collected samples.
-    """
+def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=100):
     samples = {}  # Dictionary to hold samples for each latent variable
 
     for _ in range(num_samples):
-        
-        # Generate a trace of the guide execution
-        guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior)
+        # Generate a trace of the guide execution. Include `input_conc_prior` according to its presence.
+        if input_conc_prior is None:
+            guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior, input_conc_prior=None)
+        else:
+            guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior, input_conc_prior)
         
         # Collect samples from the trace
         for name, node in guide_trace.nodes.items():
@@ -346,6 +351,7 @@ def collect_samples(guide, y, total_counts, K, use_global_prior, num_samples=100
         samples[name] = np.array(samples[name])
     
     return samples
+
 
 def calculate_summary_stats(samples):
     stats = {}
@@ -365,11 +371,18 @@ def calculate_summary_stats(samples):
         }
     return stats
 
+def extract_variable_sizes(model, *args, **kwargs):
+    trace = poutine.trace(model).get_trace(*args, **kwargs)
+    sizes = {}
+    for name, node in trace.nodes.items():
+        if node["type"] == "sample" and not node["is_observed"]:
+            sizes[name] = node["value"].shape
+    return sizes
 
-def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, input_conc=10, save_to_file=True, K=50, loss_plot=True, lr = 0.05, num_epochs=100):
+def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100):
 
     """
-    Main function to fit the Bayesian model.
+    Main function to fit our Leaflet Bayesian beta-dirichlet factor model.
 
     Parameters:
     y (torch.Tensor): A tensor representing observed junction counts.
@@ -377,34 +390,17 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
     K (int, optional): The number of components in the mixture model. Default is 50.
     num_initializations (int, optional): Number of random initializations. Default is 5.
     seeds (list, optional): List of seeds for random initializations. Default is None, which will generate random seeds.
+    input_conc_prior: The prior or fixed value for the concentration parameter. If None, it will be learned.
     """
 
-    # If seeds are not provided, create a list of random seeds
+    # If seeds are not provided, create a list of random seeds and print them
     if seeds is None:
         seeds = [random.randint(1, 10000) for _ in range(num_initializations)]
+        print (f"Random seeds: {seeds}")
 
     all_results = []
     print(("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"))
-    if use_global_prior:
-        print("Using prior for a and b per junction to model average behaviour!")
-        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    else:
-        print("Not using priors on a and b, running simpler non-hierarchical version!")
-        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    
-    # if input_conc is infinity, print a message
-    if input_conc == float('inf'):
-        print("Using a fixed probability of success across all trials (infinite concentration parameter) with a binomial distribution.")
-        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    else:
-        print(f"Using a Beta-binomial distribution with concentration parameter {input_conc}.")
-        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        if input_conc is None:
-            print("No input concentration parameter provided. Using default Gamma(2.0, 2.0) to initialize and learn bb concentration.")
-            print("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        else:
-            print(f"Using a fixed concentration parameter of {input_conc} for the Beta-binomial distribution.")
-            print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++") 
+    print_concentration(input_conc_prior)  # Log the concentration setting
     
     # Run the model for each seed
     for i, seed in enumerate(seeds):
@@ -427,18 +423,16 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # for each latent variable in the model. These parameters are optimized during inference to 
         # make the guide's distribution as close as possible to the true posterior.
         
-        guide = AutoDiagonalNormal(model) # autoguide list and then add autodiagonalnormal to each part, poutine. block  
-
-        # Assuming `model` is your model function
-        trace = pyro.poutine.trace(model).get_trace(y, total_counts, K, use_global_prior)
-#        trace.compute_log_prob()  # optional: to compute log probabilities for all sample sites
-        print("Model trace:")
-        print(trace.format_shapes())
+        # Use the new combined guide
+        guide = AutoGuideList(model)
+        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi', 'a', 'b', 'pi', 'dir_conc', 'assign'])))
+        # Append input_conc if it's intended to be inferred
+        if input_conc_prior is None:
+            guide.append(AutoDiagonalNormal(poutine.block(model, expose=['bb_conc'])))
 
         # Fit the model
         print("Fit the model")
-        print(f"The bb conc going into the model is {input_conc}")
-        losses = fit(y, total_counts, K, use_global_prior, input_conc, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
+        losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
         if loss_plot:
             plt.plot(losses)
             plt.xlabel("Epoch")
@@ -446,17 +440,10 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
             plt.title(f"Loss Plot for Initialization {i+1}")
             plt.show()
 
-        # Disable gradients for the guide parameters
-        guide.requires_grad_(False)
-
-        # Sample from the guide (posterior) multiple times
-        num_samples = 100
-
         # Sample from the guide (posterior) multiple times
         print("Sample from the guide (posterior)")
-        all_samples = collect_samples(guide, y, total_counts, K, use_global_prior, num_samples)
 
-        quantiles = (guide.quantiles([0.25, 0.5, 0.75]))
+        all_samples = collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Calculate summary statistics for each latent variable
         print("Calculate summary statistics")
@@ -477,20 +464,19 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
     print("All initializations complete. Returning results.")
     print("------------------------------------------------")
 
+    # Get model variable sizes 
+    variable_sizes = extract_variable_sizes(model, y, total_counts, K, use_global_prior, input_conc_prior)
+    print("Variable sizes:", variable_sizes)
+
     if save_to_file:
         print("Saving results to file")
-
-        # add date time K to file name
         date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        if file_prefix is None:
-            file_name = f"results_{date}_{K}_{num_initializations}_factors.pt"
-        else:
-            file_name = f"{file_prefix}_{date}_{K}_{num_initializations}_factors.pt"
+        file_name = f"{file_prefix}_{date}_{K}_{num_initializations}_factors.pt" if file_prefix else f"results_{date}_{K}_{num_initializations}_factors.pt"
         torch.save(all_results, file_name)
         print(f"Results saved to {file_name}")
         print("------------------------------------------------")
 
-    return all_results, quantiles
+    return all_results, variable_sizes
 
 if __name__ == "__main__":
     main()
