@@ -36,7 +36,9 @@ import datetime
 import numpy as np
 from pyro.infer.autoguide import AutoDiagonalNormal
 from pyro import poutine
-
+from pyro.poutine import trace as p_trace
+import pyro.distributions as dist
+from torch.distributions import constraints
 # import the AutoGuideList class from the pyro.infer.autoguide module
 from pyro.infer.autoguide import AutoGuideList
 
@@ -165,42 +167,129 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     None: This function contributes to the Pyro model's trace and does not return any value.
     """
 
+    #print("++++++ MODEL CALLED ++++++")
     N, P = y.shape
     
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
     
-    # Print the input_conc_prior that model got for beta-binomial setting 
-    # print("The input_conc_prior is: ", input_conc)
-    # print("What went into the model is: ", input_conc_prior)
-
     # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
-    if use_global_prior:
-        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
-        b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
-        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
-        psi = psi.to(dtype=torch.float64)
-    else:
-        psi = pyro.sample("psi", dist.Beta(pyro.sample("a", dist.Gamma(2., 2.)), 
-                                           pyro.sample("b", dist.Gamma(2, 2.))).expand([K,P]).to_event(2))
-        psi = psi.to(dtype=torch.float64)
+    with poutine.block():
+        if use_global_prior:
+            a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
+            b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
+            psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
+            psi = psi.to(dtype=torch.float64)
+        else:
+            a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
+            b = pyro.sample("b", dist.Gamma(2., 2.))
+            psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
+            psi = psi.to(dtype=torch.float64)
+
+    #print("a: ", a)
+    #print("b: ", b)
+    #print("psi: ", psi)
 
     # sample priors for dirichlet distribution
-    pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
-    conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
+    #pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
+    with poutine.block():
+        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K)))
+        conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
 
-    with pyro.plate('data', N):
-        # sample the factor assignments from the categorical distribution
-        assign = pyro.sample("assign", dist.Dirichlet(pi * conc))
-        assign = assign.to(dtype=torch.float64)
+    # Debug statements
+    #print(f"pi (before assert): {pi}")
+    #print(f"pi sum: {pi.sum()}")
+    #print(f"conc: {conc}")
 
-    # print("assign shape:", assign.shape)  # Expected to be [N, K]
-    # print("psi shape:", psi.shape)        # Expected to be [K, P]
+    with poutine.block():
+        assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
+
+    assign = assign.to(dtype=torch.float64)
+    # Debug: Ensure no negative values in assign
+    assert torch.all(assign >= 0), "Assign has negative values!"
+    #print(f"assign (before assert): {assign}")
+
+    # Assert that values in pi sum up to 1 
+    assert torch.allclose(pi.sum(), torch.tensor(1.0)), f"pi does not sum to 1: {pi.sum()}"
+    # Assert that values in assign sum up to 1 for each cell (row)
+    assert torch.allclose(assign.sum(dim=1), torch.tensor(1.0, dtype=torch.float64)), f"assign rows do not sum to 1: {assign.sum(dim=1)}"
+
     pred = torch.mm(assign, psi)
 
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
+
+def guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
+
+    #print("++++++ GUIDE CALLED ++++++")
+    N, P = y.shape
+
+    if use_global_prior:    
+        # Learn individual a and b for each junction
+        a_loc = pyro.param("a_loc", torch.randn(P).abs() + 1.0, constraint=constraints.positive)
+        a_scale = pyro.param("a_scale", torch.ones(P).abs() + 0.1, constraint=constraints.positive)
+        b_loc = pyro.param("b_loc", torch.randn(P).abs() + 1.0, constraint=constraints.positive)
+        b_scale = pyro.param("b_scale", torch.ones(P).abs() + 0.1, constraint=constraints.positive)
+        a = pyro.sample("a", dist.LogNormal(a_loc, a_scale).to_event(1))
+        b = pyro.sample("b", dist.LogNormal(b_loc, b_scale).to_event(1))
+
+    else:
+        # Learn a single value for a and b for all junctions
+        a_loc = pyro.param("a_loc", torch.tensor(1.0), constraint=constraints.positive)
+        a_scale = pyro.param("a_scale", torch.tensor(0.1), constraint=constraints.positive)
+        b_loc = pyro.param("b_loc", torch.tensor(1.0), constraint=constraints.positive)
+        b_scale = pyro.param("b_scale", torch.tensor(0.1), constraint=constraints.positive)
+        a = pyro.sample("a", dist.LogNormal(a_loc, a_scale))
+        b = pyro.sample("b", dist.LogNormal(b_loc, b_scale))
+
+    # Logit-transformed psi variational parameters
+    y_loc = pyro.param("y_loc", torch.randn(K, P) * 0.1)
+    y_scale = pyro.param("y_scale", torch.ones(K, P) * 0.1 + 0.1, constraint=constraints.positive)
+    y = pyro.sample("y", dist.Normal(y_loc, y_scale).to_event(2))
+    psi = torch.sigmoid(y)  # Inverse logit to get psi
+
+    # Variational parameters for pi
+    pi_loc = pyro.param("pi_loc", torch.randn(K) * 0.1)
+    pi_scale = pyro.param("pi_scale", torch.ones(K) * 0.1 + 0.1, constraint=constraints.positive)
+    pi_raw = pyro.sample("pi", dist.Normal(pi_loc, pi_scale).to_event(1))
+    pi = torch.softmax(pi_raw, dim=-1)  # Ensure pi sums to 1
+
+    # Variational parameters for conc
+    conc_loc = pyro.param("conc_loc", torch.tensor(1.0), constraint=constraints.positive)
+    conc_scale = pyro.param("conc_scale", torch.tensor(0.1), constraint=constraints.positive)
+    conc = pyro.sample("dir_conc", dist.LogNormal(conc_loc, conc_scale))
+
+    # Variational parameters for assign
+    assign_loc = pyro.param("assign_loc", torch.randn(N, K) * 0.1)
+    assign_scale = pyro.param("assign_scale", torch.ones(N, K) * 0.1 + 0.1, constraint=constraints.positive)
+    assign_raw = pyro.sample("assign", dist.Normal(assign_loc, assign_scale).to_event(2))
+    assign = torch.softmax(assign_raw, dim=1)  # Ensure assign sums to 1 along rows
+
+    # Debug: Ensure no negative values in assign
+    assert torch.all(assign >= 0), "Assign has negative values!"
+
+    # Conditional variational parameters for bb_conc
+    if input_conc_prior is None:
+        bb_conc_loc = pyro.param("bb_conc_loc", torch.tensor(2.0), constraint=constraints.positive)
+        bb_conc_scale = pyro.param("bb_conc_scale", torch.tensor(0.1), constraint=constraints.positive)
+        bb_conc = pyro.sample("bb_conc", dist.LogNormal(bb_conc_loc, bb_conc_scale))
+
+    # Print shapes of the latent variables to verify correctness
+    #print("Guide parameters:")
+    #print(f"assign: {assign}")
+    #print(f"psi shape: {psi}")
+    #print(f"input_conc shape: {input_conc_prior if input_conc_prior is not None else bb_conc}")
+    #print(f"a shape: {a}")
+    #print(f"b shape: {b}")
+    #print(f"pi shape: {pi}")
+    #print(f"conc shape: {conc}")
+
+def check_for_nans():
+    for name, value in pyro.get_param_store().items():
+        if torch.isnan(value).any() or torch.isinf(value).any():
+            print(f"Parameter {name} contains NaNs or Infs")
+            print(value)
 
 def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
     
@@ -249,7 +338,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # svi = SVI(model, guide, adam, Trace_ELBO())
 
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
-    # runs do not interfere with the current optimization, providing a clean slate.
+    # runs do not interfere with the current optimization, providing a clean slate - do we ened this?
     pyro.clear_param_store()
 
     losses = []
@@ -275,15 +364,13 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 40 == 0:
+        if epoch % 10 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
             logging.info("Elbo loss: {}".format(loss))
+            
     return losses
-
-def setup_logging():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def print_global_prior(use_global_prior):
     if use_global_prior:
@@ -319,14 +406,6 @@ def plot_losses(losses, i):
         plt.title(f"Loss Plot for Initialization {i+1}")
         plt.show()
 
-def save_results(all_results, save_to_file, file_prefix, K, num_initializations):
-    if save_to_file:
-        date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        file_name = f"{file_prefix}_{date}_{K}_{num_initializations}_factors.pt" if file_prefix else f"results_{date}_{K}_{num_initializations}_factors.pt"
-        torch.save(all_results, file_name)
-        logging.info(f"Results saved to {file_name}")
-
-
 def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=100):
     samples = {}  # Dictionary to hold samples for each latent variable
 
@@ -348,10 +427,10 @@ def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prio
 
     # Convert lists of samples to numpy arrays for easier downstream manipulation
     for name in samples:
+        print(name)
         samples[name] = np.array(samples[name])
-    
-    return samples
 
+    return samples
 
 def calculate_summary_stats(samples):
     stats = {}
@@ -377,7 +456,38 @@ def extract_variable_sizes(model, *args, **kwargs):
     for name, node in trace.nodes.items():
         if node["type"] == "sample" and not node["is_observed"]:
             sizes[name] = node["value"].shape
+            # print(f"Variable {name} has shape {sizes[name]}")
     return sizes
+
+def extract_params_and_verify_guide(guide, *args, **kwargs):
+    # Initializing dictionary to hold the total size of params
+    param_sizes = {}
+
+    # Retrieving and printing parameters from Pyro's parameter store
+    for name, value in pyro.get_param_store().items():
+        print(f"Name: {name}, Shape: {value.shape}, Values: {value[:5]}")  # Print first 5 values for brevity
+        param_sizes[name] = value.numel()  # Store the number of elements in each parameter
+
+    # Generating a trace from the guide and examining the sample sites
+    guide_trace = p_trace(guide).get_trace(*args, **kwargs)
+    model_variable_sizes = {}
+    for name, site in guide_trace.nodes.items():
+        if site["type"] == "sample":
+            print(f"Guide variable Name: {name}, Shape: {site['value'].shape}")
+            model_variable_sizes[name] = site['value'].numel()
+
+    # Comparing total number of elements in loc and scale params with the model variables
+    total_loc_scale = sum(param_sizes.get(name, 0) for name in param_sizes if 'loc' in name or 'scale' in name)
+    total_model_vars = sum(model_variable_sizes.values())
+    
+    print(f"Total elements in loc/scale parameters: {total_loc_scale}")
+    print(f"Total elements in model variables: {total_model_vars}")
+    
+    # Checking if the totals match
+    if total_loc_scale == total_model_vars:
+        print("Total number of elements in guide parameters matches the model variables.")
+    else:
+        print("Mismatch in total number of elements between guide parameters and model variables.")
 
 def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100):
 
@@ -399,9 +509,9 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         print (f"Random seeds: {seeds}")
 
     all_results = []
-    print(("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"))
     print_concentration(input_conc_prior)  # Log the concentration setting
-    
+    print_global_prior(use_global_prior)  # Log the global prior setting
+
     # Run the model for each seed
     for i, seed in enumerate(seeds):
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -424,15 +534,25 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # make the guide's distribution as close as possible to the true posterior.
         
         # Use the new combined guide
-        guide = AutoGuideList(model)
-        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi', 'a', 'b', 'pi', 'dir_conc', 'assign'])))
+        # guide = AutoGuideList(model)
+        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi', 'a', 'b', 'pi', 'dir_conc', 'assign'])))
         # Append input_conc if it's intended to be inferred
-        if input_conc_prior is None:
-            guide.append(AutoDiagonalNormal(poutine.block(model, expose=['bb_conc'])))
+        #if input_conc_prior is None:
+        #    guide.append(AutoDiagonalNormal(poutine.block(model, expose=['bb_conc'])))
+
+        # Use the custom guide function
+        guide_fn = lambda y, total_counts, K, use_global_prior, input_conc_prior: guide(y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Fit the model
         print("Fit the model")
-        losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
+        losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide_fn, patience=10, min_delta=0.01, lr=0.01, num_epochs=num_epochs)
+
+        # Austomatically set guide 
+        #guide = AutoDiagonalNormal(model)
+
+        # Fit the model
+        # print("Fit the model")
+        # losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
         if loss_plot:
             plt.plot(losses)
             plt.xlabel("Epoch")
@@ -442,16 +562,11 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
 
         # Sample from the guide (posterior) multiple times
         print("Sample from the guide (posterior)")
-
         all_samples = collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Calculate summary statistics for each latent variable
         print("Calculate summary statistics")
         summary_stats = calculate_summary_stats(all_samples)
-
-        # Print summary statistics for each latent variable
-        for var, stats in summary_stats.items():
-            print(f"Summary statistics for {var}: {stats}")
 
         # Append results
         all_results.append({
@@ -466,7 +581,12 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
 
     # Get model variable sizes 
     variable_sizes = extract_variable_sizes(model, y, total_counts, K, use_global_prior, input_conc_prior)
-    print("Variable sizes:", variable_sizes)
+    # extract_params_and_verify_guide(guide, y, total_counts, K, use_global_prior, input_conc_prior)
+
+    #print("Guide variable sizes:", variable_sizes_guide)
+    print("------------------------------------------------")
+    print("Model variable sizes:", variable_sizes)
+    print("------------------------------------------------")
 
     if save_to_file:
         print("Saving results to file")
