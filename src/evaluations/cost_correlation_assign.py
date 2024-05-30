@@ -29,6 +29,8 @@ def compare_assignments(assign_matrices):
             # By negating the correlations, high correlations (close to 1) become low costs (close to -1), which 
             # the algorithm will then minimize, effectively maximizing the correlation.
 
+            # Hungarian algo would not work if K is different  
+
             cost_matrix = -corr_submatrix
 
             # Matching: The linear_sum_assignment function from SciPy returns the optimal row and column indices 

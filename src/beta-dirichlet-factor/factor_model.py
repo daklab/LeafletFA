@@ -167,47 +167,47 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     None: This function contributes to the Pyro model's trace and does not return any value.
     """
 
-    #print("++++++ MODEL CALLED ++++++")
+    # print("++++++ MODEL CALLED ++++++")
     N, P = y.shape
     
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
-    
-    # Sample psi from a Beta distribution with concentration parameters a and b (with or without global priors on a and b)
-    with poutine.block():
-        if use_global_prior:
-            a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
-            b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
-            psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
-            psi = psi.to(dtype=torch.float64)
-        else:
-            a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
-            b = pyro.sample("b", dist.Gamma(2., 2.))
-            psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
-            psi = psi.to(dtype=torch.float64)
+
+    # poutine.block: wrap parts of the model to effectively tell Pyro to ignore those parts during certain operations. 
+    # This can be useful when want to ensure that the generative process defined in the model is not affected by gradient computations or other inference mechanics.
+    # Why/how is this done automatically when auto guide is used?
+
+    if use_global_prior:
+        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
+        b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
+        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
+        psi = psi.to(dtype=torch.float64)
+    else:
+        a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
+        b = pyro.sample("b", dist.Gamma(2., 2.))
+        psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
+        psi = psi.to(dtype=torch.float64)
 
     #print("a: ", a)
     #print("b: ", b)
     #print("psi: ", psi)
 
     # sample priors for dirichlet distribution
-    #pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
-    with poutine.block():
-        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K)))
-        conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
+    pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
+    #pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K)))
+    conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
 
     # Debug statements
     #print(f"pi (before assert): {pi}")
     #print(f"pi sum: {pi.sum()}")
     #print(f"conc: {conc}")
 
-    with poutine.block():
-        assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
-
+    assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
     assign = assign.to(dtype=torch.float64)
+
     # Debug: Ensure no negative values in assign
     assert torch.all(assign >= 0), "Assign has negative values!"
-    #print(f"assign (before assert): {assign}")
+    # print(f"assign (before assert): {assign}")
 
     # Assert that values in pi sum up to 1 
     assert torch.allclose(pi.sum(), torch.tensor(1.0)), f"pi does not sum to 1: {pi.sum()}"
@@ -220,9 +220,11 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
 
-def guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
+def structured_guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
 
-    #print("++++++ GUIDE CALLED ++++++")
+    print("++++++ GUIDE CALLED ++++++")
+
+
     N, P = y.shape
 
     if use_global_prior:    
@@ -246,8 +248,10 @@ def guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
     # Logit-transformed psi variational parameters
     y_loc = pyro.param("y_loc", torch.randn(K, P) * 0.1)
     y_scale = pyro.param("y_scale", torch.ones(K, P) * 0.1 + 0.1, constraint=constraints.positive)
-    y = pyro.sample("y", dist.Normal(y_loc, y_scale).to_event(2))
-    psi = torch.sigmoid(y)  # Inverse logit to get psi
+    y = pyro.sample("y", dist.Normal(y_loc, y_scale).to_event(2)) #have to tell pyro that it's an auxillary variable (since it's not actually in the model)
+    psi = torch.sigmoid(y)  # Inverse logit to get psi also need to have a sample statement for psi... distribution for psi is a delta at sigmoid...jacoddian?? contribution of transform... needs to be included in ELBO
+    # can avoid doing this manually... transform distributions... 
+    # lognormal represetned as transform, starts with normal then log.. knows everything...
 
     # Variational parameters for pi
     pi_loc = pyro.param("pi_loc", torch.randn(K) * 0.1)
@@ -275,15 +279,7 @@ def guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
         bb_conc_scale = pyro.param("bb_conc_scale", torch.tensor(0.1), constraint=constraints.positive)
         bb_conc = pyro.sample("bb_conc", dist.LogNormal(bb_conc_loc, bb_conc_scale))
 
-    # Print shapes of the latent variables to verify correctness
-    #print("Guide parameters:")
-    #print(f"assign: {assign}")
-    #print(f"psi shape: {psi}")
-    #print(f"input_conc shape: {input_conc_prior if input_conc_prior is not None else bb_conc}")
-    #print(f"a shape: {a}")
-    #print(f"b shape: {b}")
-    #print(f"pi shape: {pi}")
-    #print(f"conc shape: {conc}")
+    return {'a': a, 'b': b, 'psi': psi, 'pi': pi, 'dir_conc': conc, 'assign': assign, 'bb_conc': bb_conc}
 
 def check_for_nans():
     for name, value in pyro.get_param_store().items():
@@ -351,6 +347,8 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
         loss = svi.step(y, total_counts, K, use_global_prior, input_conc_prior)
         losses.append(loss)
 
+        check_for_nans()
+
         # Check for improvement based on min_delta and update best loss and epochs_since_improvement.
         if best_loss - loss > min_delta:
             best_loss = loss
@@ -364,12 +362,12 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 10 == 0:
+        if epoch % 25 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
             logging.info("Elbo loss: {}".format(loss))
-            
+
     return losses
 
 def print_global_prior(use_global_prior):
@@ -427,7 +425,6 @@ def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prio
 
     # Convert lists of samples to numpy arrays for easier downstream manipulation
     for name in samples:
-        print(name)
         samples[name] = np.array(samples[name])
 
     return samples
@@ -534,25 +531,29 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # make the guide's distribution as close as possible to the true posterior.
         
         # Use the new combined guide
-        # guide = AutoGuideList(model)
-        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi', 'a', 'b', 'pi', 'dir_conc', 'assign'])))
+        guide = AutoGuideList(model)
+        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi']))) # the only thing we want guide to look at is PSI 
+        guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi']))) # now we want make guide for everything apart from psi 
+
+        # Can just worry about PSI for now... all we need for ALBF
+        
         # Append input_conc if it's intended to be inferred
-        #if input_conc_prior is None:
+        #if input_conc_prior is None: this would be automatic now if needed 
         #    guide.append(AutoDiagonalNormal(poutine.block(model, expose=['bb_conc'])))
 
         # Use the custom guide function
-        guide_fn = lambda y, total_counts, K, use_global_prior, input_conc_prior: guide(y, total_counts, K, use_global_prior, input_conc_prior)
+        #guide_fn = lambda y, total_counts, K, use_global_prior, input_conc_prior: structured_guide(y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Fit the model
         print("Fit the model")
-        losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide_fn, patience=10, min_delta=0.01, lr=0.01, num_epochs=num_epochs)
+        #losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide_fn, patience=10, min_delta=0.01, lr=0.01, num_epochs=num_epochs)
 
         # Austomatically set guide 
         #guide = AutoDiagonalNormal(model)
 
         # Fit the model
         # print("Fit the model")
-        # losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
+        losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
         if loss_plot:
             plt.plot(losses)
             plt.xlabel("Epoch")
