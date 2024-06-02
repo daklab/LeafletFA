@@ -533,7 +533,21 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # Use the new combined guide
         guide = AutoGuideList(model)
         guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi']))) # the only thing we want guide to look at is PSI 
-        guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi']))) # now we want make guide for everything apart from psi 
+        
+        # now expose just assign 
+        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['assign']))) # now we want make guide for everything apart from psi
+
+        guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) # now we want make guide for everything apart from psi 
+
+        # Expose and hide each of our latent variables
+        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['a'])))
+        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['a'])))
+
+        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['pi', 'dir_conc'])))
+        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['pi', 'dir_conc'])))
+
+        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['assign'])))
+        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['assign'])))
 
         # Can just worry about PSI for now... all we need for ALBF
         
