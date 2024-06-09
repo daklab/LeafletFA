@@ -1,4 +1,5 @@
 import numpy as np
+import torch 
 
 class DifferentialSplicingAnalyzer:
     def __init__(self, mu, v):
@@ -14,43 +15,65 @@ class DifferentialSplicingAnalyzer:
             v = np.random.uniform(0.1, 1, size=(10, 100))
             analyzer = DifferentialSplicingAnalyzer(mu, v)
         """
+        assert torch.is_tensor(mu), "mu must be a PyTorch tensor"
+        assert torch.is_tensor(v), "v must be a PyTorch tensor"
         self.mu = mu
         self.v = v
 
+    def ensure_positive_variance(self, variance):
+        min_variance = 1e-6  # Minimum variance threshold to avoid division by zero
+        return torch.clamp(variance, min=min_variance)
+
     def calculate_p_h0(self, j):
+    
         """
         Calculate the probability of the data under the null hypothesis for junction j,
         assuming a common mean and variance across all cell states (H0).
-
         Under H0, we hypothesize that all cell states for a given junction have the same
         splicing efficiency, which simplifies our model to a single Gaussian distribution
         across all states. The formula used here integrates the product of Gaussian PDFs
-        across cell states to compute a combined Gaussian PDF, representing the total 
+        across cell states to compute a combined Gaussian PDF, representing the total
         probability of observing the data under H0.
-
         Specifically, the method calculates:
             P_j(H_0) = 1 / N(0, mu, v) * prod_k N(0, mu_k, v_k)
         where N(0, mu, v) is the standard normal distribution PDF evaluated at the combined mean
         and variance calculated from all cell states. This is simplified further as:
             N(y; mu, v) is the Gaussian PDF for a combined distribution.
             mu and v are derived by combining individual mu_k and v_k values across cell states.
-
         Parameters:
             j (int): Index of the junction to analyze.
-
         Returns:
             float: The probability P(H_0) for the given junction, representing the likelihood
                    of observing the splicing data under the null hypothesis.
-
         Example:
             p_h0 = analyzer.calculate_p_h0(0)  # Calculate P(H_0) for the first junction
         """
-        v_combined = 1 / np.sum(1 / self.v[:, j])  # Combined variance from all states for junction j
-        mu_combined = v_combined * np.sum(self.mu[:, j] / self.v[:, j])  # Combined mean using weights
+        v_combined = 1 / torch.sum(1 / self.v[:, j])
+        # Ensure that the combined variance is positive
+        v_combined = self.ensure_positive_variance(v_combined)
+        mu_combined = v_combined * torch.sum(self.mu[:, j] / self.v[:, j])
+        
+        # Avoid large values for mu_combined squared over v_combined
+        exponent = -mu_combined.pow(2) / (2 * v_combined)
+        exponent = torch.clamp(exponent, max=0)  # Limit the exponent to zero or less to prevent overflow
 
-        # The standard normal PDF N(0, mu, v) simplified when evaluated at mu.
-        # It provides the scale of deviation from the mean in terms of the combined variance.
-        p_h0 = 1 / np.sqrt(2 * np.pi * v_combined) * np.exp(-mu_combined**2 / (2 * v_combined))
+        gaussian_at_zero_combined = 1 / torch.sqrt(2 * torch.pi * v_combined) * torch.exp(exponent)
+
+
+        # Evaluate the Gaussian PDF at zero for each cell state with clamping
+        exponent_individual = -self.mu[:, j].pow(2) / (2 * self.v[:, j])
+        exponent_individual = torch.clamp(exponent_individual, max=0)
+        gaussians_at_zero_individual = 1 / torch.sqrt(2 * torch.pi * self.v[:, j]) * torch.exp(exponent_individual)
+        
+        # Product of individual Gaussians evaluated at zero
+        product_gaussians = torch.prod(gaussians_at_zero_individual)
+        
+        # Prevent division by zero or very small values in gaussian_at_zero_combined
+        gaussian_at_zero_combined = max(gaussian_at_zero_combined, 1e-10)
+
+        # Normalize this product by the Gaussian PDF of the combined parameters evaluated at zero
+        p_h0 = product_gaussians / gaussian_at_zero_combined
+        
         return p_h0
 
     def calculate_albf(self, j):
@@ -67,40 +90,38 @@ class DifferentialSplicingAnalyzer:
             albf_j1 = analyzer.calculate_albf(0)  # Get ALBF for the first junction
             print(f"ALBF for junction 1: {albf_j1}")
         """
+        
         p_h0 = self.calculate_p_h0(j)
-        albf = -np.log(p_h0)
+        # Use a lower bound to avoid negative infinity in log
+        epsilon = 1e-10
+        p_h0 = torch.clamp(p_h0, min=epsilon)
+        albf = -torch.log(p_h0)
+
         return albf
 
     def albf_all_vs_1(self, j, factor_index):
-        """
-        Calculate ALBF for comparing one factor against all others combined.
-        
-        Parameters:
-            j (int): index of the junction
-            factor_index (int): index of the factor to compare against all others
-        
-        Returns:
-            float: ALBF for the given junction and factor
-        
-        Example:
-            albf_factor1_vs_others = analyzer.albf_all_vs_1(0, 0)
-            print(f"ALBF for factor 1 vs others at junction 1: {albf_factor1_vs_others}")
-        """
+        # Ensure factor_index is within bounds
+        assert 0 <= factor_index < self.mu.shape[0], "factor_index out of bounds"
+    
         other_indices = [k for k in range(self.mu.shape[0]) if k != factor_index]
-
+    
         # Combined parameters for all but the selected factor
-        v_other_combined = 1 / np.sum(1 / self.v[other_indices, j])
-        mu_other_combined = v_other_combined * np.sum(self.mu[other_indices, j] / self.v[other_indices, j])
-
+        v_other_combined = 1 / torch.sum(1 / self.v[other_indices, j])
+        mu_other_combined = v_other_combined * torch.sum(self.mu[other_indices, j] / self.v[other_indices, j])
+    
         # Parameters for the selected factor
         mu_1 = self.mu[factor_index, j]
         v_1 = self.v[factor_index, j]
-
-        # Calculate P(H_0) using the two groups: selected factor vs. all others
+    
+        # Calculate combined mu and v for the comparison
         mu_combined = v_other_combined * mu_other_combined + v_1 * mu_1 / (v_other_combined + v_1)
         v_combined = 1 / (1 / v_other_combined + 1 / v_1)
-
-        p_h0 = 1 / np.sqrt(2 * np.pi * v_combined) * np.exp(-mu_combined**2 / (2 * v_combined))
-        albf = -np.log(p_h0)
-
+    
+        # Ensure variance is not zero
+        v_combined = self.ensure_positive_variance(v_combined)
+    
+        # Calculate the Gaussian PDF and ALBF
+        p_h0 = 1 / torch.sqrt(2 * torch.pi * v_combined) * torch.exp(-mu_combined**2 / (2 * v_combined))
+        albf = -torch.log(p_h0)
+    
         return albf
