@@ -220,67 +220,6 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
 
-def structured_guide(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
-
-    print("++++++ GUIDE CALLED ++++++")
-
-
-    N, P = y.shape
-
-    if use_global_prior:    
-        # Learn individual a and b for each junction
-        a_loc = pyro.param("a_loc", torch.randn(P).abs() + 1.0, constraint=constraints.positive)
-        a_scale = pyro.param("a_scale", torch.ones(P).abs() + 0.1, constraint=constraints.positive)
-        b_loc = pyro.param("b_loc", torch.randn(P).abs() + 1.0, constraint=constraints.positive)
-        b_scale = pyro.param("b_scale", torch.ones(P).abs() + 0.1, constraint=constraints.positive)
-        a = pyro.sample("a", dist.LogNormal(a_loc, a_scale).to_event(1))
-        b = pyro.sample("b", dist.LogNormal(b_loc, b_scale).to_event(1))
-
-    else:
-        # Learn a single value for a and b for all junctions
-        a_loc = pyro.param("a_loc", torch.tensor(1.0), constraint=constraints.positive)
-        a_scale = pyro.param("a_scale", torch.tensor(0.1), constraint=constraints.positive)
-        b_loc = pyro.param("b_loc", torch.tensor(1.0), constraint=constraints.positive)
-        b_scale = pyro.param("b_scale", torch.tensor(0.1), constraint=constraints.positive)
-        a = pyro.sample("a", dist.LogNormal(a_loc, a_scale))
-        b = pyro.sample("b", dist.LogNormal(b_loc, b_scale))
-
-    # Logit-transformed psi variational parameters
-    y_loc = pyro.param("y_loc", torch.randn(K, P) * 0.1)
-    y_scale = pyro.param("y_scale", torch.ones(K, P) * 0.1 + 0.1, constraint=constraints.positive)
-    y = pyro.sample("y", dist.Normal(y_loc, y_scale).to_event(2)) #have to tell pyro that it's an auxillary variable (since it's not actually in the model)
-    psi = torch.sigmoid(y)  # Inverse logit to get psi also need to have a sample statement for psi... distribution for psi is a delta at sigmoid...jacoddian?? contribution of transform... needs to be included in ELBO
-    # can avoid doing this manually... transform distributions... 
-    # lognormal represetned as transform, starts with normal then log.. knows everything...
-
-    # Variational parameters for pi
-    pi_loc = pyro.param("pi_loc", torch.randn(K) * 0.1)
-    pi_scale = pyro.param("pi_scale", torch.ones(K) * 0.1 + 0.1, constraint=constraints.positive)
-    pi_raw = pyro.sample("pi", dist.Normal(pi_loc, pi_scale).to_event(1))
-    pi = torch.softmax(pi_raw, dim=-1)  # Ensure pi sums to 1
-
-    # Variational parameters for conc
-    conc_loc = pyro.param("conc_loc", torch.tensor(1.0), constraint=constraints.positive)
-    conc_scale = pyro.param("conc_scale", torch.tensor(0.1), constraint=constraints.positive)
-    conc = pyro.sample("dir_conc", dist.LogNormal(conc_loc, conc_scale))
-
-    # Variational parameters for assign
-    assign_loc = pyro.param("assign_loc", torch.randn(N, K) * 0.1)
-    assign_scale = pyro.param("assign_scale", torch.ones(N, K) * 0.1 + 0.1, constraint=constraints.positive)
-    assign_raw = pyro.sample("assign", dist.Normal(assign_loc, assign_scale).to_event(2))
-    assign = torch.softmax(assign_raw, dim=1)  # Ensure assign sums to 1 along rows
-
-    # Debug: Ensure no negative values in assign
-    assert torch.all(assign >= 0), "Assign has negative values!"
-
-    # Conditional variational parameters for bb_conc
-    if input_conc_prior is None:
-        bb_conc_loc = pyro.param("bb_conc_loc", torch.tensor(2.0), constraint=constraints.positive)
-        bb_conc_scale = pyro.param("bb_conc_scale", torch.tensor(0.1), constraint=constraints.positive)
-        bb_conc = pyro.sample("bb_conc", dist.LogNormal(bb_conc_loc, bb_conc_scale))
-
-    return {'a': a, 'b': b, 'psi': psi, 'pi': pi, 'dir_conc': conc, 'assign': assign, 'bb_conc': bb_conc}
-
 def check_for_nans():
     for name, value in pyro.get_param_store().items():
         if torch.isnan(value).any() or torch.isinf(value).any():
@@ -533,40 +472,14 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         # Use the new combined guide
         guide = AutoGuideList(model)
         guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi']))) # the only thing we want guide to look at is PSI 
-        
-        # now expose just assign 
+        # Now expose just assign 
         guide.append(AutoDiagonalNormal(poutine.block(model, expose=['assign']))) # now we want make guide for everything apart from psi
-
         guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) # now we want make guide for everything apart from psi 
-
-        # Expose and hide each of our latent variables
-        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['a'])))
-        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['a'])))
-
-        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['pi', 'dir_conc'])))
-        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['pi', 'dir_conc'])))
-
-        #guide.append(AutoDiagonalNormal(poutine.block(model, expose=['assign'])))
-        #guide.append(AutoDiagonalNormal(poutine.block(model, hide=['assign'])))
-
-        # Can just worry about PSI for now... all we need for ALBF
-        
-        # Append input_conc if it's intended to be inferred
-        #if input_conc_prior is None: this would be automatic now if needed 
-        #    guide.append(AutoDiagonalNormal(poutine.block(model, expose=['bb_conc'])))
-
-        # Use the custom guide function
-        #guide_fn = lambda y, total_counts, K, use_global_prior, input_conc_prior: structured_guide(y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Fit the model
         print("Fit the model")
-        #losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide_fn, patience=10, min_delta=0.01, lr=0.01, num_epochs=num_epochs)
-
-        # Austomatically set guide 
-        #guide = AutoDiagonalNormal(model)
 
         # Fit the model
-        # print("Fit the model")
         losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
         if loss_plot:
             plt.plot(losses)
@@ -596,9 +509,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
 
     # Get model variable sizes 
     variable_sizes = extract_variable_sizes(model, y, total_counts, K, use_global_prior, input_conc_prior)
-    # extract_params_and_verify_guide(guide, y, total_counts, K, use_global_prior, input_conc_prior)
 
-    #print("Guide variable sizes:", variable_sizes_guide)
     print("------------------------------------------------")
     print("Model variable sizes:", variable_sizes)
     print("------------------------------------------------")

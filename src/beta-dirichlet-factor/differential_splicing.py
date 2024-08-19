@@ -76,6 +76,31 @@ class DifferentialSplicingAnalyzer:
         
         return p_h0
 
+
+    def combined_mean_variance(self, means, variances):
+        inv_variances = 1 / variances
+        combined_variance = 1 / torch.sum(inv_variances)
+        combined_mean = combined_variance * torch.sum(means * inv_variances)
+        return combined_mean, combined_variance
+
+    def gaussian_pdf(self, x, mean, std):
+        var = std ** 2
+        denom = (2 * torch.pi * var) ** 0.5
+        num = torch.exp(- (x - mean) ** 2 / (2 * var))
+        return num / denom
+    
+    def likelihood_under_null(self, observed_data, combined_mean, combined_std, means, stds):
+        combined_pdf = self.gaussian_pdf(0, combined_mean, combined_std)
+
+        likelihood = combined_pdf
+        for mean, std in zip(means, stds):
+            likelihood *= self.gaussian_pdf(0, mean, std)
+
+        for data in observed_data:
+            likelihood *= self.gaussian_pdf(data, combined_mean, combined_std)
+
+        return likelihood
+        
     def calculate_albf(self, j):
         """
         Calculate the Approximate Log Bayes Factor (ALBF) for junction j.
