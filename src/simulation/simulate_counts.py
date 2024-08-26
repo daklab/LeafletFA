@@ -6,6 +6,12 @@ from tqdm import tqdm
 import torch 
 import seaborn as sns
 import matplotlib.pyplot as plt
+import sys
+import pdb
+import scipy.sparse as sp
+
+sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/clustering/')
+import load_cluster_data as llc 
 
 # write function that takes in Cluster name 
 def check_SS_cluster(final_data, junc_info, cluster_name):
@@ -41,6 +47,7 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
         cell_types: pandas Categorical series of pre-defined cell types to use for simulations 
         psi_prior_shape1: float.
         psi_prior_shape2: float.
+    
     Returns:
         sim_junc_counts: scipy coo_matrix. 
         cell_type_labels: numpy array of cell type labels. 
@@ -110,6 +117,7 @@ def simulate_junc_counts(cluster_counts, junc_info, cell_types=None, psi_prior_s
             cell_type_psi_df = pd.concat([cell_type_psi_df, probs_df])
 
     cell_type_psi_df = cell_type_psi_df.sort_values(by=['new_junction_id_index'])
+
     # keep just the first K columns of cell_type_psi_df
     # specify which columns to keep (K columns)
     cols_keep = cell_type_psi_df.columns[0:K]
@@ -205,3 +213,174 @@ def quick_clust_plot(clust, simple_data, num_cols=3, plot_states_arb=True):
     # put legend outside the plot
     plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=20)
     plt.show()
+
+def simulate_and_prepare_data(input_files_folder, K, float_type, max_intron_count=1000):
+    """Load, filter, and simulate data, returning tensors for the model."""
+    
+    # Load real data
+    print(f"Load real data from {input_files_folder}...")
+
+    final_data, coo_counts_sparse, coo_cluster_sparse, cell_ids_conversion, junction_ids_conversion = llc.load_cluster_data(
+        input_folder=input_files_folder, max_intron_count=max_intron_count, remove_singletons=True, has_genes="yes") 
+
+    print(final_data.columns)
+    
+    # add cluster to final_data 
+    # final_data = final_data.merge(junction_ids_conversion, on=["junction_id_index", "junction_id", "Cluster"], how="left")
+
+    # get indices (maybe don't need this actually)
+    indices = (final_data.cell_id_index, final_data.junction_id_index)
+    junc_counts = sp.coo_matrix((final_data.junc_count, indices))
+    cluster_counts = sp.coo_matrix((final_data.Cluster_Counts, indices))
+
+    # Sanity check that counts are saved in correct indices in sparse matrices
+    ind_random = np.random.randint(0, len(final_data))
+    print(final_data.iloc[ind_random])
+    print(junc_counts.toarray()[final_data.iloc[ind_random].cell_id_index, final_data.iloc[ind_random].junction_id_index])
+    print(cluster_counts.toarray()[final_data.iloc[ind_random].cell_id_index, final_data.iloc[ind_random].junction_id_index])
+
+    # SS are shared between end of J1 and start of J2 and end of J2 and start of J3
+    junc_info = junction_ids_conversion[["junction_id", "Cluster", "junction_id_index"]].drop_duplicates()
+
+    # get number of junctions in each cluster first 
+    cluster_junc_counts = junc_info.groupby(["Cluster"]).agg({"junction_id": "count"}).reset_index()
+    clusts_keep = cluster_junc_counts[cluster_junc_counts["junction_id"] == 3 ]
+    junc_info = junc_info[junc_info["Cluster"].isin(clusts_keep["Cluster"])]
+
+    # break up junction_id column in junc_info into chr, start and end 
+    junc_info["chr"] = junc_info["junction_id"].str.split("_").str[0]
+    junc_info["start"] = junc_info["junction_id"].str.split("_").str[1]
+    junc_info["end"] = junc_info["junction_id"].str.split("_").str[2]
+    print(len(junc_info["Cluster"].unique()))
+
+    # run function on all clusters to find simple exon skipping events 
+    clusters_SS = []
+
+    print(f"Annotating Clusters to find those with exon skipping events!")
+    for cluster in tqdm(junc_info["Cluster"].unique()): # this is very slow
+        clusters_SS.append(check_SS_cluster(final_data, junc_info, cluster))
+
+    # keep only entries in clusters_SS that are not None 
+    clusters_SS = [x for x in clusters_SS if x is not None]
+    print(len(clusters_SS))
+    
+    # get indices of junctions in clusters_SS (original indices before filtering)
+    junc_ind_keep = junction_ids_conversion[junction_ids_conversion["Cluster"].isin(clusters_SS)]["junction_id_index"]
+    final_data = final_data[final_data.junction_id_index.isin(junc_ind_keep)] #using original junction id index
+
+    print(f"Filter junction_ids file to only include junctions in exon skipping clusters")
+    junction_ids_conversion = junction_ids_conversion[junction_ids_conversion["junction_id_index"].isin(junc_ind_keep)]
+    # reset index of junction_ids_conversion and make a new column new_junction_id_index
+    junction_ids_conversion = junction_ids_conversion.reset_index(drop=True)
+    # re-order junction_ids_conversion junction_id_index
+    junction_ids_conversion = junction_ids_conversion.sort_values(by=['junction_id_index'])
+    junction_ids_conversion["new_junction_id_index"] = junction_ids_conversion.index
+
+    # re-order the remaining junctions and subset the counts matrices
+    final_data = final_data.merge(junction_ids_conversion, on=["junction_id_index", "Cluster", "junction_id"])
+
+    # where is new_junction_id_index coming from here? 
+    final_data.sort_values(by = ["new_junction_id_index"], inplace = True)
+    final_data.head()
+
+    to_keep = final_data["junction_id_index"].unique()   # use original junction indices to filter out the count matrices 
+    junc_counts_sub = junc_counts.tocsr()[:,to_keep].tocoo()
+    cluster_counts_sub = cluster_counts.tocsr()[:,to_keep].tocoo()
+
+    # Sanity check that counts are saved in correct indices in sparse matrices
+    ind_random = np.random.randint(0, len(final_data))
+    print(final_data.iloc[ind_random])
+    print(junc_counts_sub.toarray()[final_data.iloc[ind_random].cell_id_index, final_data.iloc[ind_random].new_junction_id_index])
+    print(cluster_counts_sub.toarray()[final_data.iloc[ind_random].cell_id_index, final_data.iloc[ind_random].new_junction_id_index])
+
+    print(f"Let's simulate some data!")
+    # update junc_info to only include junctions in clusters_SS
+    junc_info = junc_info[junc_info["Cluster"].isin(clusters_SS)]
+    junc_info = junc_info.reset_index(drop=True)
+    junc_info["new_junction_id_index"] = junc_info.index
+
+    print(f"The number of unique junctions and clusters included in the simulation data is: ")
+    print(len(junc_info.junction_id.unique()))
+    print(len(junc_info.Cluster.unique()))
+
+    # TO-DO change this step so can work with any number of "cell types"
+    cell_ids_conversion["cell_type"] = np.random.choice([1,2], size=len(cell_ids_conversion))
+
+    simulated_counts, cell_types, cell_type_psi, cluster_labels = simulate_junc_counts(cluster_counts_sub, junc_info, cell_types=cell_ids_conversion.cell_type.astype('category'))
+    
+    # Check outcome of cluster_labels
+    print(cluster_labels)
+
+    # save simulated counts, cell types and psi values
+    sim_juncs_counts = simulated_counts
+    cell_type_psi_df = cluster_labels
+
+    # Get variance in simulated psi values across all simulated cell types 
+    print(cell_type_psi_df.head())
+    cell_type_psi_df["difference"] = cell_type_psi_df[0] - cell_type_psi_df[1]
+    cell_type_psi_df["difference"] = np.abs(cell_type_psi_df["difference"])
+
+    # TO-DO: also fix this to work with any number of cell types, add if statement, if only two groups get difference otherwise get SD
+    # Figure out which clusters with positive labels have junctions in them with diff < 0.1 
+    relabel_clusts = cell_type_psi_df[(cell_type_psi_df["sample_label"] == "positive") & (cell_type_psi_df["difference"] < 0.1)].Cluster.unique()
+    # make new column named "true_label" which is the same as sample_label but for clusters that in relabel_clusts rename them to negative 
+    cell_type_psi_df["true_label"] = cell_type_psi_df["sample_label"]
+    cell_type_psi_df.loc[cell_type_psi_df["Cluster"].isin(relabel_clusts), "true_label"] = "negative"
+    cell_type_psi_df.sort_values(by = ["new_junction_id_index"], inplace = True)
+    print(cell_type_psi_df.true_label.value_counts(), cell_type_psi_df.sample_label.value_counts())
+
+    # make dataframe using the following columns 
+    sim_junc_counts_flat = pd.DataFrame({"cell_id_index": sim_juncs_counts.row, "new_junction_id_index": sim_juncs_counts.col, "new_junc_count": sim_juncs_counts.data})
+    # also add new cell type column 
+    sim_junc_counts_flat["new_cell_type"] = np.array(cell_types[sim_junc_counts_flat["cell_id_index"]])
+
+    # Update junction counts in final_data object to be the simulated counts 
+    final_data = final_data.merge(sim_junc_counts_flat, on = ["cell_id_index", "new_junction_id_index"])
+    final_data.head()
+
+    sim_data = final_data.copy() 
+    # drop the old junction counts and junction id index
+    sim_data.drop(columns = ["junc_count", "junction_id_index"], inplace = True)
+    # rename columns new_junction_id_index and new_junc_count to junction_id_index and junc_count
+    sim_data.rename(columns = {"new_junction_id_index": "junction_id_index", "new_junc_count": "junc_count"}, inplace = True)
+    
+    # update cluster_count to be the sum of junction_id_index in each Cluster for each cell
+    new_clust_counts = sim_data.groupby(["cell_id_index", "Cluster"]).agg({"junc_count": "sum"}).reset_index()
+    # update column to be cluster_count 
+    new_clust_counts.rename(columns = {"junc_count": "Cluster_Counts"}, inplace = True)
+    sim_data.drop(columns = ["Cluster_Counts"], inplace = True)
+    # merge new_clust_counts with sim_data
+    sim_data = sim_data.merge(new_clust_counts, on = ["cell_id_index", "Cluster"])
+
+    # update juncratio 
+    sim_data["clustminjunc"] = sim_data["Cluster_Counts"] - sim_data["junc_count"]
+    sim_data["junc_ratio"] = sim_data["junc_count"] / sim_data["Cluster_Counts"]
+
+    # juncs clusters labels
+    juncs_labels = cell_type_psi_df[["new_junction_id_index", "Cluster", "true_label"]]
+    juncs_labels = juncs_labels.drop_duplicates()
+
+    # rename new_junction_id_index to junction_id_index 
+    juncs_labels.rename(columns = {"new_junction_id_index": "junction_id_index"}, inplace = True)
+
+    # merge with sim_data
+    sim_data = sim_data.merge(juncs_labels, on = ["junction_id_index", "Cluster"])
+
+    # Prepare tensors for the model
+    cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_data(final_data, **float_type)
+
+    clust_labels_only = cluster_labels[["Cluster", "true_label"]].drop_duplicates()
+    simple_data = sim_data[["cell_id_index", "Cluster", "cell_type", "junction_id_index", "junc_ratio", "junc_count", "Cluster_Counts"]]
+    # merge with clust_labels_only 
+    simple_data = simple_data.merge(clust_labels_only, on = ["Cluster"])
+    
+    # update cell_type column in simple data to what it is in cell_ids_conversion using cell_id_index and make sure it's a category
+    simple_data.drop(columns = ["cell_type"], inplace = True)
+    simple_data = simple_data.merge(cell_ids_conversion, on = ["cell_id_index"])
+    simple_data["cell_type"] = simple_data["cell_type"].astype('category')
+    
+    print(f"Use simple_data object for visualization")
+    print(simple_data.head())
+    print("Data successfully simulated and prepared!")
+
+    return cell_index_tensor, junc_index_tensor, my_data, final_data, simple_data

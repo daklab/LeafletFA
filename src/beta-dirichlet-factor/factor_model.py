@@ -15,7 +15,7 @@ from pyro.infer.autoguide import AutoDiagonalNormal
 import torch
 print (torch.__version__)
 print (torch.version.cuda)
-#print (torch.cuda.get_device_name())
+# print (torch.cuda.get_device_name())
 
 import matplotlib.pyplot as plt
 import random
@@ -44,6 +44,36 @@ from pyro.infer.autoguide import AutoGuideList
 
 # Define functions for factor model 
 
+def convertr(hyperparam, name):
+    """
+    Convert a hyperparameter input into a Pyro sample or a fixed PyTorch tensor.
+
+    Parameters:
+    - hyperparam (torch.distributions.Distribution or float or None): The hyperparameter to convert.
+      This can be a PyTorch distribution, a float, or None.
+    - name (str): The name associated with the Pyro sample. This is used as the key in Pyro's
+      internal trace when `hyperparam` is a distribution. For fixed values, this parameter
+      is not directly used but is required for consistency with the sampling case.
+
+    Returns:
+    - torch.Tensor or pyro.Sample: If `hyperparam` is a distribution, returns a sample from
+      this distribution as part of a Pyro model's execution trace. If it is a fixed value or None,
+      returns a PyTorch tensor representing this value. The tensor's dtype is set to `torch.float32`,
+      ensuring compatibility with most PyTorch and Pyro operations.
+    """
+
+    if isinstance(hyperparam, torch.distributions.Distribution):
+        return pyro.sample(name, hyperparam)
+    elif hyperparam is None:
+        return pyro.sample(name, dist.Gamma(2.0, 2.0))
+    else:
+        # Ensure hyperparam is a tensor before checking if it's infinite
+        hyperparam_tensor = torch.as_tensor(hyperparam, dtype=torch.float32)
+        if torch.isinf(hyperparam_tensor).any():
+            return hyperparam_tensor
+        else:
+            return torch.tensor(hyperparam, dtype=torch.float32)
+        
 def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
    
     """
@@ -79,10 +109,6 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
                 between observed junction counts and total intron cluster counts.
     """
 
-
-    # Convert input_conc to a Pyro sample or a fixed value
-    # conc = convertr(input_conc, "bb_conc")
-
     # Extract non-zero elements and their indices from y (junction counts) and total_counts (intron cluster counts)
     y_indices = y_sparse._indices() #y_indices[0] is the row index, y_indices[1] is the column index
     y_values = y_sparse._values()
@@ -110,36 +136,6 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
 
     # Sum the log probabilities
     return log_probs.sum()
-
-def convertr(hyperparam, name):
-    """
-    Convert a hyperparameter input into a Pyro sample or a fixed PyTorch tensor.
-
-    Parameters:
-    - hyperparam (torch.distributions.Distribution or float or None): The hyperparameter to convert.
-      This can be a PyTorch distribution, a float, or None.
-    - name (str): The name associated with the Pyro sample. This is used as the key in Pyro's
-      internal trace when `hyperparam` is a distribution. For fixed values, this parameter
-      is not directly used but is required for consistency with the sampling case.
-
-    Returns:
-    - torch.Tensor or pyro.Sample: If `hyperparam` is a distribution, returns a sample from
-      this distribution as part of a Pyro model's execution trace. If it is a fixed value or None,
-      returns a PyTorch tensor representing this value. The tensor's dtype is set to `torch.float32`,
-      ensuring compatibility with most PyTorch and Pyro operations.
-    """
-
-    if isinstance(hyperparam, torch.distributions.Distribution):
-        return pyro.sample(name, hyperparam)
-    elif hyperparam is None:
-        return pyro.sample(name, dist.Gamma(2.0, 2.0))
-    else:
-        # Ensure hyperparam is a tensor before checking if it's infinite
-        hyperparam_tensor = torch.as_tensor(hyperparam, dtype=torch.float32)
-        if torch.isinf(hyperparam_tensor).any():
-            return hyperparam_tensor
-        else:
-            return torch.tensor(hyperparam, dtype=torch.float32)
 
 def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
@@ -188,27 +184,15 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
         psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
 
-    #print("a: ", a)
-    #print("b: ", b)
-    #print("psi: ", psi)
-
-    # sample priors for dirichlet distribution
+    # Sample priors for dirichlet distribution
     pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
-    #pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K)))
     conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
-
-    # Debug statements
-    #print(f"pi (before assert): {pi}")
-    #print(f"pi sum: {pi.sum()}")
-    #print(f"conc: {conc}")
 
     assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
     assign = assign.to(dtype=torch.float64)
 
     # Debug: Ensure no negative values in assign
     assert torch.all(assign >= 0), "Assign has negative values!"
-    # print(f"assign (before assert): {assign}")
-
     # Assert that values in pi sum up to 1 
     assert torch.allclose(pi.sum(), torch.tensor(1.0)), f"pi does not sum to 1: {pi.sum()}"
     # Assert that values in assign sum up to 1 for each cell (row)

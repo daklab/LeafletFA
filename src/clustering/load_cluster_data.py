@@ -64,8 +64,8 @@ def make_torch_data(final_data, **float_type):
 
 
 # load data 
-
-def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_cells_sample = None, max_intron_count=None, remove_singletons=True, has_genes="no"):
+def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_cells_sample = None, 
+                      max_intron_count=None, remove_singletons=True, has_genes="no"):
 
     """
     Load and preprocess cluster data from HDF5 files, either from a single file or a directory of files.
@@ -88,118 +88,76 @@ def load_cluster_data(input_file=None, input_folder=None, celltypes = None, num_
     - junction_ids_conversion (DataFrame): Mapping of junction_id_index to junction_id, and optionally gene_id.
     """
 
-   # read in hdf file 
+    # Load data
     if input_file:
         summarized_data = pd.read_hdf(input_file, 'df')
+    elif input_folder:
+        print("Reading in data from folder:", input_folder)
+        summarized_data = pd.concat(
+            [pd.read_hdf(os.path.join(input_folder, file), 'df') for file in os.listdir(input_folder) if file.endswith(".h5")],
+            ignore_index=True
+        )
+        print("Finished reading in data from folder.")
+    else:
+        raise ValueError("Either input_file or input_folder must be provided.")
 
-    print("Reading in data from folder ...")
-    
-    if input_folder:
-        print(input_folder)
-        # read each hdf file in folder and concatenate
-        files = os.listdir(input_folder)
-
-        df_list = []
-        for file in files:
-            if file.endswith(".h5"):
-                path_with_quotes = input_folder + file
-                fixed_path = path_with_quotes.replace("'", "")
-                df = pd.read_hdf(fixed_path, 'df')
-                df_list.append(df)
-            else:
-                pass
-
-        # concatenate all dataframes
-        summarized_data = pd.concat(df_list, ignore_index=True)
-    
-    print("Finished reading in data from folder ...")
-
-    #if want to look at only specific subset of cell types 
+    # Filter by cell types
     if celltypes:
-        print("Looking at only specific cell types ..." + str(celltypes))
+        print("Filtering by cell types:", celltypes)
         summarized_data = summarized_data[summarized_data["cell_type"].isin(celltypes)]
-        # redo cell id indexing in summarized data, assign cell id index to each cell id
-        summarized_data["cell_id_index"] = pd.factorize(summarized_data.cell_id)[0]
-        # same for junction id indexing
-        summarized_data["junction_id_index"] = pd.factorize(summarized_data.junction_id)[0]
-
+    
+    # Sample cells
     if num_cells_sample:
         summarized_data = summarized_data.sample(n=num_cells_sample)
-   
+
+    # Remove singleton clusters
     if remove_singletons:
-        print("Removing singletons ...")
-        # Get unique junction-clusters pairs remove clusters that only have one junction
-        junctions_per_cluster = summarized_data[["Cluster", "junction_id"]].drop_duplicates()
-        junctions_per_cluster = junctions_per_cluster.groupby("Cluster").size().reset_index(name='counts')
-        junctions_per_cluster = junctions_per_cluster[junctions_per_cluster["counts"] > 1]
-        print("Number of junctions before removing singletons: ", summarized_data.junction_id_index.max())
-        summarized_data = summarized_data[summarized_data["Cluster"].isin(junctions_per_cluster["Cluster"])]
-        # redo cell id indexing in summarized data, assign cell id index to each cell id
-        summarized_data["cell_id_index"] = pd.factorize(summarized_data.cell_id)[0]
-        # same for junction id indexing
-        summarized_data["junction_id_index"] = pd.factorize(summarized_data.junction_id)[0]
-        print("Number of junctions after removing singletons: ", summarized_data.junction_id_index.max())
-
-    print("The number of unique cell types in the data is: ", len(summarized_data["cell_type"].unique()))
-    print("The number of unique cells in the data is: ", len(summarized_data["cell_id"].unique()))
-    print("The number of unique junctions in the data is: ", len(summarized_data["junction_id"].unique()))
-
-    # assert no more intron clusters of size one
-    junctions_per_cluster = summarized_data[["Cluster", "junction_id"]].drop_duplicates()
-    junctions_per_cluster = junctions_per_cluster.groupby("Cluster").size().reset_index(name='counts')
-    junctions_per_cluster = junctions_per_cluster[junctions_per_cluster["counts"] == 1]
-    assert len(junctions_per_cluster) == 0
-
-    # remove outliers 
+        print("Removing singleton clusters...")
+        cluster_counts = summarized_data.groupby("Cluster")["junction_id"].nunique()
+        valid_clusters = cluster_counts[cluster_counts > 1].index
+        summarized_data = summarized_data[summarized_data["Cluster"].isin(valid_clusters)]
+   
+    # Remove outliers based on max intron count
     if max_intron_count:
-        print("The maximum junction count was initially: ", summarized_data["Cluster_Counts"].max())
-        clusts_remove = summarized_data[summarized_data["Cluster_Counts"] > max_intron_count].Cluster.unique()
-        # remove all clusters that these junctions belong to 
-        print(len(clusts_remove))
-        summarized_data = summarized_data[~summarized_data["Cluster"].isin(clusts_remove)]
-        print("The maximum junction count is now: ", summarized_data["Cluster_Counts"].max())
-        # renumber cell_id_index and junction_id_index
-        summarized_data["cell_id_index"] = pd.factorize(summarized_data.cell_id)[0]
-        summarized_data["junction_id_index"] = pd.factorize(summarized_data.junction_id)[0]
+        print("Filtering clusters with max intron count greater than", max_intron_count)
+        summarized_data = summarized_data[summarized_data["Cluster_Counts"] <= max_intron_count]
 
-    coo = summarized_data[["cell_id_index", "junction_id_index", "junc_count", "Cluster_Counts", "Cluster", "junc_ratio"]]
+    # Re-index cell_id and junction_id
+    summarized_data["cell_id_index"] = pd.factorize(summarized_data["cell_id"])[0]
+    summarized_data["junction_id_index"] = pd.factorize(summarized_data["junction_id"])[0]
 
-    # just some sanity checks to make sure indices are in order 
-    cell_ids_conversion = summarized_data[["cell_id_index", "cell_id", "cell_type"]].drop_duplicates()
-    cell_ids_conversion = cell_ids_conversion.sort_values("cell_id_index")
-
-    junction_ids_conversion = summarized_data[["junction_id_index", "junction_id", "Cluster"]].drop_duplicates()
-    junction_ids_conversion = junction_ids_conversion.sort_values("junction_id_index")
-
+    # Prepare conversion tables
+    cell_ids_conversion = summarized_data[["cell_id_index", "cell_id", "cell_type"]].drop_duplicates().sort_values("cell_id_index")
+    junction_columns = ["junction_id_index", "junction_id", "Cluster"]
     if has_genes == "yes":
-        junction_ids_conversion = summarized_data[["junction_id_index", "junction_id", "Cluster", "gene_id"]].drop_duplicates()
-        junction_ids_conversion = junction_ids_conversion.sort_values("junction_id_index")
- 
-    # make coo_matrix for junction counts
-    coo_counts_sparse = coo_matrix((coo.junc_count, (coo.cell_id_index, coo.junction_id_index)), shape=(len(coo.cell_id_index.unique()), len(coo.junction_id_index.unique())))
-    coo_counts_sparse = coo_counts_sparse.tocsr()
+        junction_columns.append("gene_id")
+    junction_ids_conversion = summarized_data[junction_columns].drop_duplicates().sort_values("junction_id_index")
     
-    juncs_nonzero = pd.DataFrame(np.transpose(coo_counts_sparse.nonzero()))
-    juncs_nonzero.columns = ["cell_id_index", "junction_id_index"]
-    juncs_nonzero["junc_count"] = coo_counts_sparse.data
+    # Create sparse matrices
+    coo = summarized_data[["cell_id_index", "junction_id_index", "junc_count", "Cluster_Counts", "Cluster", "junc_ratio"]]
+    coo_counts_sparse = coo_matrix((coo["junc_count"], (coo["cell_id_index"], coo["junction_id_index"])))
+    coo_cluster_sparse = coo_matrix((coo["Cluster_Counts"], (coo["cell_id_index"], coo["junction_id_index"])))
+    
+    # Construct final data
+    final_data = pd.DataFrame({
+        "cell_id_index": coo_counts_sparse.row,
+        "junction_id_index": coo_counts_sparse.col,
+        "junc_count": coo_counts_sparse.data,
+    })
 
-    # do the same for cluster counts 
-    cells_only = coo[["cell_id_index", "Cluster", "Cluster_Counts"]].drop_duplicates()
-    merged_df = pd.merge(cells_only, junction_ids_conversion)
-    coo_cluster_sparse = coo_matrix((merged_df.Cluster_Counts, (merged_df.cell_id_index, merged_df.junction_id_index)), shape=(len(merged_df.cell_id_index.unique()), len(merged_df.junction_id_index.unique())))
-    coo_cluster_sparse = coo_cluster_sparse.tocsr()
-
-    cluster_nonzero = pd.DataFrame(np.transpose(coo_cluster_sparse.nonzero()))
-    cluster_nonzero.columns = ["cell_id_index", "junction_id_index"]
-    cluster_nonzero["cluster_count"] = coo_cluster_sparse.data
-
-    final_data = pd.merge(juncs_nonzero, cluster_nonzero, how='outer').fillna(0)
-    final_data["clustminjunc"] = final_data["cluster_count"] - final_data["junc_count"]
-    final_data["juncratio"] = final_data["junc_count"] / final_data["cluster_count"] 
+    final_data = final_data.merge(
+        summarized_data[["cell_id_index", "junction_id_index", "junction_id", "Cluster", "Cluster_Counts"]], 
+        on=["cell_id_index", "junction_id_index"], 
+        how="left"
+    )
+    
+    final_data["clustminjunc"] = final_data["Cluster_Counts"] - final_data["junc_count"]
+    final_data["juncratio"] = final_data["junc_count"] / final_data["Cluster_Counts"]
     final_data = final_data.merge(cell_ids_conversion, on="cell_id_index", how="left")
-
-    print("The number of junctions in the data is: ", len(final_data.junction_id_index.unique()))
-    print("The number of cells in the data is: ", len(final_data.cell_id_index.unique()))
-    print("The number of cell types in the data is: ", len(final_data.cell_type.unique()))
     
+    print("Final data prepared with {} junctions and {} cells.".format(
+        len(final_data["junction_id_index"].unique()), 
+        len(final_data["cell_id_index"].unique())
+    ))
+
     return(final_data, coo_counts_sparse, coo_cluster_sparse, cell_ids_conversion, junction_ids_conversion)
