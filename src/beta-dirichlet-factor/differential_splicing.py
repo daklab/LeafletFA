@@ -76,7 +76,6 @@ class DifferentialSplicingAnalyzer:
         
         return p_h0
 
-
     def combined_mean_variance(self, means, variances):
         inv_variances = 1 / variances
         combined_variance = 1 / torch.sum(inv_variances)

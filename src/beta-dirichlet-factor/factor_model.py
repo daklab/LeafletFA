@@ -122,10 +122,8 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
 
     if torch.isinf(input_conc).any():
         # Use binomial distribution
-        # print("Using Binomial distribution")
         log_probs = dist.Binomial(total_counts_values, probs=pred[y_indices[0], y_indices[1]]).log_prob(y_values)
     else:
-        # print("Using Beta-Binomial distribution")
         # Extract the success probabilities for the relevant indices
         success_probs = pred[y_indices[0], y_indices[1]]
         # Derive alpha and beta from success_probs and input_conc
@@ -200,6 +198,10 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     pred = torch.mm(assign, psi)
 
+    # Move pred to CUDA if available
+    if torch.cuda.is_available():
+        pred = pred.cuda()
+
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     pyro.factor("obs", log_prob) 
@@ -240,7 +242,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # Define the number of samples used to estimate the Evidence Lower Bound (ELBO). This is a measure
     # of the difference between the variational approximation of the posterior and the true posterior.
     # More samples can provide a more accurate estimate but will increase computation time.
-    ELBO_SAMPLES = 1
+    ELBO_SAMPLES = 10
     
     # Initialize the loss function as Trace_ELBO, which estimates the ELBO (using?).
     # We use 'num_particles=ELBO_SAMPLES' to set the number of samples used in the ELBO estimation.
@@ -254,8 +256,6 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # minimize the ELBO.
     svi = SVI(model, guide, adam, loss)
 
-    # svi = SVI(model, guide, adam, Trace_ELBO())
-
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
     # runs do not interfere with the current optimization, providing a clean slate - do we ened this?
     pyro.clear_param_store()
@@ -264,13 +264,26 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     best_loss = float('inf')
     epochs_since_improvement = 0
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(device)
+
+    # Move tensors to the appropriate device
+    y, total_counts = y.to(device), total_counts.to(device)
+    
+    # Convert input_conc_prior to tensor if it's a float and move it to the device
+    if isinstance(input_conc_prior, float):
+        input_conc_prior = torch.tensor(input_conc_prior, device=device)
+    elif isinstance(input_conc_prior, torch.Tensor):
+        input_conc_prior = input_conc_prior.to(device)
+
+    print(f"Training in progress for {num_epochs} epochs!")
+
     for epoch in range(num_epochs):
 
         # Call SVI step passing the input_conc_prior dynamically
         loss = svi.step(y, total_counts, K, use_global_prior, input_conc_prior)
-        losses.append(loss)
 
-        check_for_nans()
+        losses.append(loss)
 
         # Check for improvement based on min_delta and update best loss and epochs_since_improvement.
         if best_loss - loss > min_delta:
@@ -285,7 +298,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 25 == 0:
+        if epoch % 20 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
@@ -465,6 +478,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
 
         # Fit the model
         losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
+        
         if loss_plot:
             plt.plot(losses)
             plt.xlabel("Epoch")
@@ -507,6 +521,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         print("------------------------------------------------")
 
     return all_results, variable_sizes
+
 
 if __name__ == "__main__":
     main()
