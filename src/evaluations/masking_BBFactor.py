@@ -6,288 +6,180 @@ import scipy.sparse as sp
 import scipy 
 import scipy.stats
 from scipy.stats import binom
+import scipy.stats
+import numpy as np
+import torch
+import scipy.sparse as sp
+import scipy.stats
+import anndata
+import sys
+
+sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/clustering/')
+import load_cluster_data as llc 
+
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+
+float_type = {"device": device, "dtype": torch.float}
+if device == torch.device('cuda'):
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 # Cluster + junction counts set to zero for those predefined indices 
 # From model fit, get estimate of what those values should be given learned PSI values 
 # Use Likelihood for test elements where might put more weight on juntion with higher counts 
 # L1 mean absolute error can be used to evaluate imputed vs observed PSI values for J-C pairs
 
-def generate_mask(intron_clusts, mask_percentage=0.1, seed=42, randomize_seed=False):
+def generate_mask(adata, layer_key="Cluster_Counts", mask_percentage=0.1, seed=42, randomize_seed=False):
+    '''Generate a mask for the specified layer of an AnnData object.'''
 
-    '''
-    Generate a mask for a given intron cluster matrix.
+    # Set seed for reproducibility
+    seed = np.random.randint(0, 1000000) if randomize_seed else seed
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
-    Parameters
-    ----------
-    intron_clusts : scipy.sparse.spmatrix
-        A C x J sparse matrix of type '<class 'numpy.int64'>'
-        with stored elements in COOrdinate format (intron cluster counts).
+    # Extract the intron cluster layer (must be sparse)
+    intron_clusts = adata.layers[layer_key]
+    if not sp.issparse(intron_clusts):
+        raise ValueError(f"{layer_key} must be a sparse matrix.")
 
-    mask_percentage : float
-        The percentage of entries to mask. Default is 0.1.
-
-    Returns
-    -------
-    mask : torch.Tensor
-        A C x J matrix of 0s and 1s where 1s indicate masked entries.
-    '''
-
-    # Set seed
-    if randomize_seed:
-        seed = np.random.randint(0, 1000000)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-    else:
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-
-    print("The seed is: ", seed)
-
-     # Get number of cells and junctions
+    # Get number of cells and junctions
     num_cells, num_junctions = intron_clusts.shape
 
-    # Get number of non-zero entries
-    num_nonzero = intron_clusts.nnz
-
-    # Calculate the number of entries to mask
+    # Get the number of non-zero entries and calculate how many to mask
+    num_nonzero = intron_clusts.count_nonzero()
     num_masked = int(num_nonzero * mask_percentage)
 
-    # Make sure this number is less than total number of non-zero entries in intron_clusts
-    assert num_masked < num_nonzero, "mask_percentage is too high, leading to more masked entries than non-zero entries."
+    # Ensure that mask_percentage is not too high
+    assert num_masked < num_nonzero, "mask_percentage is too high."
 
-    # Get the non-zero indices from the sparse matrix
+    # Get non-zero indices (rows, cols) where values are >=1 in intron_clusts
     rows, cols = intron_clusts.nonzero()
 
-    # Sample indices to mask
+    # Sample a subset of non-zero indices to mask
     mask_indices = np.random.choice(len(rows), size=num_masked, replace=False)
-    
-    # Create the mask as a sparse matrix
-    mask = sp.coo_matrix((np.ones(num_masked), (rows[mask_indices], cols[mask_indices])),
-                         shape=(num_cells, num_junctions))
 
-    # Convert the sparse mask to a dense numpy array, then to a torch tensor
-    mask_tensor = torch.tensor(mask.toarray(), dtype=torch.float32)
+    # Create a mask with the same shape as the original matrix
+    mask = np.zeros((num_cells, num_junctions), dtype=np.float32)
+    mask[rows[mask_indices], cols[mask_indices]] = 1  # Mask selected indices
 
+    # Convert the mask to a torch tensor
+    mask_tensor = torch.tensor(mask, dtype=torch.float32)
 
-    # Check that all masked entries in intron_clusts are >=1
-    assert np.all(intron_clusts.toarray()[rows[mask_indices], cols[mask_indices]] >= 1), \
-        "Some masked entries have values less than 1."
-
-    print("Number of entries (junction-cell pairs) masked: ", mask_tensor.sum().item())
+    print(f"Total masked entries: {np.sum(mask)}")
     return mask_tensor, seed
 
-
-# Second function to apply mask to intron cluster matrix and junction count matrix
-def apply_mask(junction_counts, intron_clusts, mask):
-    
-        '''
-        Apply a mask to an intron cluster matrix and junction count matrix.
-    
-        Parameters
-        ----------
-        intron_clusts : 
-        A C x J sparse matrix of type '<class 'numpy.int64'>'
-	    with stored elements in COOrdinate format> [intron cluster counts]
-    
-        intron_clusts : 
-        A C x J sparse matrix of type '<class 'numpy.int64'>'
-	    with stored elements in COOrdinate format> [intron cluster counts]
-    
-        mask : torch.Tensor
-            A C x J matrix of 0s and 1s where 1s indicate masked entries.
-    
-        Returns
-        -------
-        masked_intron_clusts : torch.Tensor
-            A C x J matrix of intron clusters with masked entries set to 0.
-    
-        masked_junction_counts : torch.Tensor
-            A C x J matrix of junction counts with masked entries set to 0.
-        '''
-        
-        masked_intron_clusts = intron_clusts.toarray() * (1 - mask)
-    
-        # Mask junction counts
-        masked_junction_counts = junction_counts.toarray() * (1 - mask)
-    
-        return masked_junction_counts, masked_intron_clusts
-
-def prep_model_input(masked_junction_counts, masked_intron_clusts):
-   
+def apply_mask_to_anndata(adata, mask, cluster_layer="Cluster_Counts", junction_layer="Junction_Counts"):
     '''
-    Prepare input for factor model.
+    Apply a mask to the intron cluster matrix and junction count matrix, 
+    and return a new AnnData object with masked entries.
+    '''
 
-    Parameters
-    ----------
-    masked_junction_counts : torch.Tensor
-        A C x J matrix of junction counts with masked entries set to 0.
+    # Ensure the mask is a NumPy array for element-wise operations
+    mask = mask.cpu().numpy()
 
-    masked_intron_clusts : torch.Tensor
-        A C x J matrix of intron clusters with masked entries set to 0.
-    
-    Returns
-    -------
-    masked_junction_counts_tensor : torch.sparse_coo_tensor
-        A sparse tensor of masked junction counts.
-    
-    masked_intron_clusts_tensor : torch.sparse_coo_tensor
-        A sparse tensor of masked intron clusters.
-    ''' 
+    # Extract the intron cluster and junction counts layers
+    intron_clusts = adata.layers[cluster_layer].toarray() if sp.issparse(adata.layers[cluster_layer]) else adata.layers[cluster_layer]
+    junction_counts = adata.layers[junction_layer].toarray() if sp.issparse(adata.layers[junction_layer]) else adata.layers[junction_layer]
 
-    # First make intron cluster sparse tensor 
+    # Apply the mask (1 means masked, 0 means untouched)
+    masked_intron_clusts = intron_clusts * (1 - mask)
+    masked_junction_counts = junction_counts * (1 - mask)
 
-    #1. intron clusts 
-    indices = torch.tensor(np.nonzero(masked_intron_clusts), dtype=torch.long)
-    values = torch.tensor(masked_intron_clusts[np.nonzero(masked_intron_clusts)], dtype=torch.float)
-    # Determine the size of the tensor
-    num_cells = masked_intron_clusts.shape[0]
-    num_junctions = masked_intron_clusts.shape[1]
-    size = (num_cells, num_junctions)
-    # Create a sparse tensor
+    # Get the non-zero indices from the masked intron clusters
+    nonzero_indices = np.nonzero(masked_intron_clusts)
+
+    # Convert intron clusters to sparse tensor
+    indices = torch.tensor(nonzero_indices, dtype=torch.long)
+    values = torch.tensor(masked_intron_clusts[nonzero_indices], dtype=torch.float)
+    size = masked_intron_clusts.shape
     masked_intron_clusts_tensor = torch.sparse_coo_tensor(indices, values, size)
-    masked_intron_clusts_tensor
-
-    #2. use the same indices to make a sparse tensor from masked_junction_counts
-    values_j = torch.tensor(masked_junction_counts[np.nonzero(masked_intron_clusts)], dtype=torch.float)
-    # Keep same size tensor as introns 
+    
+    # Use the same non-zero indices for the junction counts
+    values_j = torch.tensor(masked_junction_counts[nonzero_indices], dtype=torch.float)
     masked_junction_counts_tensor = torch.sparse_coo_tensor(indices, values_j, size)
 
+    # Ensure that the masked intron clusters are greater than or equal to the masked junction counts
     assert torch.all(masked_intron_clusts_tensor.to_dense() >= masked_junction_counts_tensor.to_dense())
 
-    return masked_junction_counts_tensor, masked_intron_clusts_tensor
+    # Convert the masked matrices back to sparse CSR format for storage
+    masked_intron_clusts_sparse = sp.csr_matrix(masked_intron_clusts)
+    masked_junction_counts_sparse = sp.csr_matrix(masked_junction_counts)
 
+    # Print the number of non-zero elements for validation
+    print(f"Masked_Cluster_Counts nnz: {masked_intron_clusts_sparse.nnz}")
+    print(f"Masked_Junction_Counts nnz: {masked_junction_counts_sparse.nnz}")
 
-# need a slightly different function for evaluating mixture model 
+    # Create a new AnnData object with masked data
+    new_adata = anndata.AnnData(X=adata.X, obs=adata.obs, var=adata.var)
+    new_adata.layers["Masked_Cluster_Counts"] = masked_intron_clusts_sparse.tocoo()
+    new_adata.layers["Masked_Junction_Counts"] = masked_junction_counts_sparse.tocoo()
 
-def evaluate_mixture_model(true_juncs, true_clusts, model_res, masked_matrix):
-    '''
-    Evaluate trained mixture model on masked data.
+    # Convert back to sparse tensors for model input
+    cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(
+        new_adata, 
+        cluster_layer="Masked_Cluster_Counts", 
+        junction_layer="Masked_Junction_Counts", 
+        **float_type
+    )
 
-    Parameters:
-    - true_juncs (torch.Tensor): True junction counts.
-    - true_clusts (torch.Tensor): True cluster counts.
-    - model_res (tuple): Tuple containing the results of the trained mixture model, 
-                         including ALPHA_f, PI_f, GAMMA_f, PHI_f, and elbos_all.
-    - masked_matrix (numpy.ndarray): Masked matrix indicating the entries to evaluate.
-
-    Returns:
-    - l1_error (torch.Tensor): L1 error (mean absolute difference) between predicted and true PSI values.
-    - l2_error (torch.Tensor): L2 error (root mean squared error) between predicted and true PSI values.
-    - correlation_coefficient (float): Pearson correlation coefficient between predicted and true PSI values.
-    - r_squared (torch.Tensor): R-squared (coefficient of determination) between predicted and true PSI values.
-    - log_likelihood (float): Log-likelihood score for how well the data fits using the predicted PSI values.
-    '''
-
-    # Extract latent variables from trained model 
-    ALPHA_f, PI_f, GAMMA_f, PHI_f, elbos_all = model_res
-    psi = ALPHA_f / (ALPHA_f+PI_f)   
-
-    # Calculate predicted PSI values for each cell and junction
-    pred = PHI_f @ psi.T 
-
-    # Let's look at only the masked entries
-    masked_pred = pred[np.nonzero(masked_matrix)]
-    true_psi = true_juncs / true_clusts
-
-    true_clusts_dense = true_clusts.toarray()
-    junc_counts_dense = true_juncs.toarray()
-
-    # Get true_psi values for masked indices 
-    masked_true_psi = true_psi[np.nonzero(masked_matrix)]
-
-    # Calculate L1 error
-    l1_error = torch.mean(torch.abs(masked_pred - masked_true_psi))
-
-    # Calculate L2 error (Root Mean Squared Error)
-    l2_error = torch.sqrt(torch.mean((masked_pred - masked_true_psi) ** 2))
-
-    # Calculate correlation coefficient
-    correlation_coefficient = np.corrcoef(masked_pred, masked_true_psi)[0, 1]
-
-    # Calculate log-likelihood
-    n_trials = true_clusts_dense[np.nonzero(masked_matrix)]
-    successes = junc_counts_dense[np.nonzero(masked_matrix)]
-    log_likelihood = np.sum(binom.logpmf(successes, n_trials, masked_pred))
-
-    return l1_error, l2_error, correlation_coefficient, log_likelihood
-
-
-# next function shoould evaluate model fit on masked data
+    return new_adata, my_data
 
 def evaluate_model(true_juncs, true_clusts, model_psi, model_assign, mask):
-    
     '''
-    Evaluate the factor model on masked data.
+    Evaluate the factor model on masked data by comparing true and predicted PSI values.
 
     Parameters
     ----------
     true_juncs : torch.Tensor
-        A C x J matrix of true unmasked junction counts.
-
-    true_clusts : torch.Tensor          
-        A C x J matrix of true unmasked intron clusters. 
-
+        True unmasked junction counts.
+    true_clusts : torch.Tensor
+        True unmasked intron clusters.
     model_psi : torch.Tensor
-        A J x K matrix of cell-specific factor loadings.
-
+        Cell-specific factor loadings (J x K matrix).
     model_assign : torch.Tensor
-        A C x K matrix of cell-specific factor assignments.
-
+        Cell-specific factor assignments (C x K matrix).
     mask : numpy.ndarray
-        A binary mask indicating the entries to evaluate.
+        Binary mask indicating the entries to evaluate.
 
     Returns
     -------
     l1_error : float
-        The mean absolute difference between masked predicted and true PSI values.
-
+        Mean absolute error between masked predicted and true PSI values.
     spearman_cor : float
-        The Spearman correlation coefficient between masked predicted and true PSI values.
-
+        Spearman correlation between masked predicted and true PSI values.
     l2_error : float
-        The mean squared error between masked predicted and true PSI values.
-
+        Mean squared error between masked predicted and true PSI values.
     rmse : float
-        The root mean squared error between masked predicted and true PSI values.
-
+        Root mean squared error.
     log_likelihood : float
-        The log-likelihood of the observed data given the predicted PSI values, assuming a Beta-Binomial distribution.
+        Log-likelihood under a Beta-Binomial distribution.
     '''
+    # Predicted PSI values: model_assign @ model_psi
+    pred_psi = model_assign @ model_psi
 
-    # get predicted PSI values for each cell and junction
-    pred = model_assign @ model_psi # predicted PSI values for each cell and junction
-
-    # let's look at only the masked entries
-    masked_pred = pred[np.nonzero(mask)]
+    # Masked entries
+    masked_pred = pred_psi[mask]
     true_psi = true_juncs / true_clusts
+    masked_true_psi = true_psi[mask]
 
-    # assert that true cluster counts at masked indices were at least 1 
-    assert true_clusts[np.nonzero(mask)].min() >=1 
+    # Ensure all true_clusts at masked indices are >= 1
+    assert true_clusts[mask].min() >= 1
 
-    # get true_psi values for masked indices 
-    masked_true_psi = true_psi[np.nonzero(mask)]
-
-    # get L1 absolute mean error between masked predicted and true PSI values
+    # Compute errors
     l1_error = np.mean(np.abs(masked_pred - masked_true_psi))
-
-    # get another measure of error between predicted and true PSI values
-    l2_error = np.mean((masked_pred - masked_true_psi)**2)
-
-    # report root mean square error instead of l2 (more like std dev which would be more intuitive)
+    l2_error = np.mean((masked_pred - masked_true_psi) ** 2)
     rmse = np.sqrt(l2_error)
 
-    # get spearman correlation between masked predicted and true PSI values
-    spearman_cor = scipy.stats.spearmanr(masked_pred, masked_true_psi)[0]
+    # Spearman correlation
+    spearman_cor, _ = scipy.stats.spearmanr(masked_pred, masked_true_psi)
 
-    # Calculate log-likelihood for Beta-Binomial distribution
-    n_trials = true_clusts[np.nonzero(mask)]
-    successes = true_juncs[np.nonzero(mask)]
+    # Log-likelihood (using Binomial distribution)
+    n_trials = true_clusts[mask]
+    successes = true_juncs[mask]
     log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
 
-    print("L1 error: ", l1_error)
-    print("Spearman correlation: ", spearman_cor)
-    print("L2 error: ", l2_error)
-    print("RMSE: ", rmse)
-    print("Log-likelihood: ", log_likelihood)
+    # Print results
+    print(f"L1 error: {l1_error}\nSpearman correlation: {spearman_cor}\nL2 error: {l2_error}\nRMSE: {rmse}\nLog-likelihood: {log_likelihood}")
 
     return l1_error, spearman_cor, l2_error, rmse, log_likelihood

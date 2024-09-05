@@ -182,12 +182,22 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
         psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
 
-    # Sample priors for dirichlet distribution
-    pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) / K))
-    conc = pyro.sample("dir_conc", dist.Gamma(2, 2)) # value scales the pi vector (higher conc makes the sampled probs more uniform, a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
+    # Sample priors for Dirichlet distribution
+    alpha = 5.0  # A reasonable value to avoid extreme imbalance
+    pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha / K))
+
+    # conc value scales the pi vector (higher conc makes the sampled probs more uniform, 
+    #a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
+    conc = pyro.sample("dir_conc", dist.Gamma(2, 2))
+    conc = torch.clamp(conc, min=1e-6, max=1e6)
 
     assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
     assign = assign.to(dtype=torch.float64)
+    
+    # Ensure no negative values in assign
+    if torch.any(assign < 0):
+        assign = torch.clamp(assign, min=0.0)
+        assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
 
     # Debug: Ensure no negative values in assign
     assert torch.all(assign >= 0), "Assign has negative values!"

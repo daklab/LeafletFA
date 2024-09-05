@@ -14,7 +14,7 @@ sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/clustering/')
 import load_cluster_data as llc 
 
 # write function that takes in Cluster name 
-def check_SS_cluster(juncs_c, adata_input, cell_type_column):
+def check_SS_cluster(juncs_c):
         
     # keep only rows where either start or end appear twice
     start_dup = juncs_c[juncs_c.duplicated(subset=['start'], keep=False)]
@@ -31,25 +31,44 @@ def check_SS_cluster(juncs_c, adata_input, cell_type_column):
 def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5, proportion_negative=0.5):
     
     """
-    Simulate junc counts while keeping the cluster counts of observed data. 
-
+    Simulate junction counts while keeping the cluster counts of observed data.
+    Ensure that simulated junction counts have the same nnz as cluster counts.
+    
+    Parameters
+    ----------
+    adata_input : AnnData
+        The input AnnData object.
+    proportion_negative : float
+        Proportion of negative ASEs to simulate.
+    psi_prior_shape1 : float
+        Shape parameter for the Beta distribution for sampling PSI.
+    psi_prior_shape2 : float
+        Shape parameter for the Beta distribution for sampling PSI.
+    
+    Returns
+    -------
+    sim_junc_counts : sparse matrix
+        Simulated junction counts matrix that matches nnz of cluster counts.
+    cell_type_psi_df : pd.DataFrame
+        DataFrame containing cell-type-specific PSI values for each junction.
     """
     
     # Get the categorical values and convert to numpy array of codes
     cell_type_labels = adata_input.obs["cell_type"].cat.codes.to_numpy()
-
-    # Number of cell types
     K = len(adata_input.obs["cell_type"].cat.categories)
-
     print(f"The proportion of negative ASEs to set is: {proportion_negative}")
 
     # Get the cluster counts matrix
     cluster_counts = adata_input.layers["Cluster_Counts"]
     N, P = cluster_counts.shape  # number of cells, number of junctions
+    
     print("The number of cell types is:", K)
     print("The number of cells is:", N)
     print("The number of junctions is:", P)
 
+    # Ensure cluster counts are in COO format
+    cluster_counts_coo = coo_matrix(cluster_counts)
+    
     # Number of intron clusters 
     num_clusters = len(adata_input.var.Cluster.unique())
 
@@ -128,13 +147,9 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     cols_keep = cell_type_psi_df.columns[:K]
     cell_type_psi = torch.tensor(cell_type_psi_df[cols_keep].to_numpy())
     print("Done simulating PSI!")
-
-    # Use real Cluster counts to simulate junc counts with binomial distribution, 
-    # Convert the csr_matrix to a coo_matrix to get row and column indices
-    cluster_counts_coo = coo_matrix(cluster_counts)
     
     # Simulate junction counts using a binomial distribution
-    sim_junc_counts = cluster_counts.copy() 
+    sim_junc_counts = cluster_counts_coo.copy() 
     # Simulate junction counts using a binomial distribution
     sim_junc_counts.data = torch.distributions.binomial.Binomial(
         total_count=torch.tensor(cluster_counts_coo.data), 
@@ -144,8 +159,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
         ]
     ).sample().cpu().numpy()  # Ensure compatibility with numpy
 
-    print("Done simulating junction counts!")
-    
+    print("Done simulating junction counts!")       
     return sim_junc_counts, cell_type_psi_df
 
 def quick_clust_plot(clust, adata_input):
@@ -178,7 +192,7 @@ def quick_clust_plot(clust, adata_input):
     sns.violinplot(data=junc_df, x="junc_ratio", y="cell_type", hue="junction_id_index")
     plt.title(f"{junc_df.true_label[0]}")
 
-def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.5, cell_type_column=None):
+def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.5, cell_type_column=None, gen_model_input=False):
     
     """Load, filter, and simulate data, returning tensors for the model.
     
@@ -200,6 +214,10 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     adata_input.var.loc[:, "start"] = adata_input.var["junction_id"].str.split("_").str[1]
     adata_input.var.loc[:, "end"] = adata_input.var["junction_id"].str.split("_").str[2]
 
+    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+
+   # Reset the junction_id_index column to maintain consistency
     print(f"The number of unique junctions included in the simulation data is: {len(adata_input.var.junction_id.unique())}")
     print(f"The number of unique clusters included in the simulation data is: {len(adata_input.var.Cluster.unique())}")
 
@@ -210,13 +228,20 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     clusters_SS = []
 
     for cluster, juncs_c in tqdm( adata_input.var.groupby("Cluster")):
-        result = check_SS_cluster(juncs_c, adata_input, cell_type_column)
+        result = check_SS_cluster(juncs_c)
         if result:
             clusters_SS.append(result)
 
     # Subset the data to just clusters that contain exon skipping events 
     adata_input = adata_input[:, adata_input.var["Cluster"].isin(clusters_SS)].copy()
-        
+    
+    # Reset the junction_id_index column after subsetting
+    adata_input.var["junction_id_index"] = range(len(adata_input.var))
+    adata_input.var.reset_index(drop=True, inplace=True)
+
+    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+
     # Check if the cell_type_column exists in adata_input
     if cell_type_column in adata_input.obs.columns:
         # Use the existing cell type column to assign dummy variables
@@ -266,6 +291,9 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     adata_input.layers["junc_ratio"] = adata_input.layers["Junction_Counts"] / adata_input.layers["Cluster_Counts"]
     cell_type_psi_df.reset_index(inplace=True)
 
+    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+
     # Add junction and cluster info to adata.var 
     common_columns = adata_input.var.columns.intersection(cell_type_psi_df.columns)
     adata_input.var = pd.merge(
@@ -273,9 +301,13 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
         cell_type_psi_df,
         on=common_columns.tolist())    
 
-    # Prepare tensors for the model
-    cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(adata_input, **float_type)
-
     print("Data successfully simulated and prepared!")
 
-    return cell_index_tensor, junc_index_tensor, my_data, adata_input
+    # Prepare tensors for the model
+    if gen_model_input:
+        cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(adata_input, **float_type)
+        return my_data, adata_input
+
+    else:
+        return adata_input
+    
