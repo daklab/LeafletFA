@@ -35,7 +35,6 @@ def make_torch_adata(adata, cluster_layer="Cluster_Counts", junction_layer="Junc
     junc_index_tensor = torch.tensor(junc_index_array, dtype=torch.int64, device=device)
     
     print(f"Unique cell indices: {len(cell_index_tensor.unique())}")
-    print(len(cell_index_array))
 
     # Convert the data of the sparse matrix directly to a numpy array, then to a tensor
     ycount_array = np.array(adata.layers[junction_layer].data)  # Non-zero junction counts
@@ -55,9 +54,6 @@ def make_torch_adata(adata, cluster_layer="Cluster_Counts", junction_layer="Junc
 
     # Subset coo2's data, rows, and cols based on the mask
     subset_data = coo2.data[mask]
-    print(len(subset_data))
-    subset_row = coo2.row[mask]
-    subset_col = coo2.col[mask]
 
     # Ensure that subset_data aligns with the indices in ycount
     tcount = torch.tensor(subset_data, **float_type)

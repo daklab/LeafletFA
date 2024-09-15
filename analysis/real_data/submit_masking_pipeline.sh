@@ -1,17 +1,17 @@
 #!/bin/bash
 
 # Define possible values for each parameter
-PROPORTION_NEGATIVE_VALUES=(0.5 0.9)
-K_USE_VALUES=(2 20)
-USE_GLOBAL_PRIOR_VALUES=(True False)
+K_USE_VALUES=(20 100)
+USE_GLOBAL_PRIOR_VALUES=(False True)
 INPUT_CONC_PRIOR_VALUES=("None" "inf")  # Include "inf" as a string
-CELL_TYPE_COLUMN_VALUES=("None" "cell_type")  # Add None as an option
-max_count=100
-num_epochs=600
-lr=0.2
+CELL_TYPE_COLUMN_VALUES=("cell_type")
+MASKS=(0.01 0.5 0.9999)
+max_count=2
+num_epochs=40
+lr=0.01
 
 # Script path 
-analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
+analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/evaluations/masking_BBFactor.py
 
 # Anndata file input file path 
 input_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leafletall_ages_brain_intron_clusters_adata.h5ad
@@ -20,7 +20,7 @@ input_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSeni
 count=0
 
 # Iterate through combinations
-for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
+for mask_perc in "${MASKS[@]}"; do
   for K_use in "${K_USE_VALUES[@]}"; do
     for use_global_prior in "${USE_GLOBAL_PRIOR_VALUES[@]}"; do
       for input_conc_prior in "${INPUT_CONC_PRIOR_VALUES[@]}"; do
@@ -37,21 +37,21 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
           # Define the SLURM job script
           sbatch <<EOT
 #!/bin/bash
-#SBATCH --job-name=sim_data_${count}
-#SBATCH --output=sim_data_${count}.txt
+#SBATCH --job-name=job_${count}
+#SBATCH --output=output_${count}.txt
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --time=02:00:00
 #SBATCH --mem=32G
 
 # Load necessary modules or activate your environment
-conda activate LeafletSC  # If using a virtual environment
+conda activate LeafletSC 
 
 python $analysis_script --input_path $input_file \
-  --proportion_negative ${proportion_negative} \
+  --mask_perc ${mask_perc} \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 10 \
+  --num_inits 3 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   $( [[ $use_global_prior == "True" ]] && echo "--use_global_prior" ) \

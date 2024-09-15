@@ -99,6 +99,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     for clust in tqdm(adata_input.var.Cluster.unique()):
         
         clust_label = cluster_labels_dict[clust]
+
         # Get junctions in cluster and order them by start and end 
         juncs_c = adata_input.var[adata_input.var["Cluster"] == clust].sort_values(by=['start', 'end'])
 
@@ -109,12 +110,12 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
         # Assign J1, J2, and J3 to junctions where J1+J2 correspond to exon inclusion and J3 corresponds to exon skipping
         juncs_c["junction"] = ["J1", "J3", "J2"] 
 
-        # Sample PSI values
+        # Sample PSI values (by default shape parameters are set to the same values for all junctions regardless of cell state...)
         probs = torch.distributions.beta.Beta(psi_prior_shape1, psi_prior_shape2).sample([3, K])
     
         if clust_label == 0: 
             # Make PSI values similar across cell types for negative control
-            J3_prob = probs[1,].mean().item()  # Use the mean probability across cell types for J3
+            J3_prob = probs[1,0] # Just take sampled J3 probability from the first cell state 
             probs[1,] = J3_prob  # Same value across all cell types
             probs[0,] = (1 - J3_prob) / 2
             probs[2,] = (1 - J3_prob) / 2

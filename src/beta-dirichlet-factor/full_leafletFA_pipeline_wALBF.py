@@ -5,7 +5,6 @@ import pickle
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Run differential splicing analysis.')
     parser.add_argument('--input_path', type=str, required=True, help='Path to the input .h5ad file.')
-    parser.add_argument('--proportion_negative', type=float, default=0.5, help='Proportion of negatively spliced junctions.')
     parser.add_argument('--cell_type_column', type=str, default=None, help='Column name for cell types in the AnnData object.')
     parser.add_argument('--K_use', type=int, default=3, help='Number of clusters to use if cell_type_column is None.')
     parser.add_argument('--use_global_prior', action='store_true', help='Whether to use global prior in the factor model.')
@@ -35,6 +34,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score
 import scipy.sparse
+from scipy.sparse import csr_matrix
 
 # Import custom modules
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/beta-dirichlet-factor')
@@ -89,51 +89,12 @@ def median_pairwise_correlation(corrs):
 def min_pairwise_correlation(corrs):
     i, j = np.tril_indices_from(corrs, k=-1)
     return np.min(corrs[i, j])
-
-def preprocess_adata(adata, cell_type_column, cluster_layer="Cluster_Counts"):
-    """
-    Preprocesses the AnnData object by filtering unevenly distributed splicing events (ATSEs).
     
-    If a cell type column is specified, the function filters out junctions that have
-    low expression across the cell types.
-    """
-    if cell_type_column is not None:
-        
-        print(f"Filtering ATSEs to remove those very unevenly distributed across cell types!")
-        cluster_counts = adata.layers[cluster_layer]
-        cell_types = adata.obs[cell_type_column].values
-        unique_cell_types = np.unique(cell_types)
-        unique_clusters = adata.var_names
-
-        expression_counts = pd.DataFrame(0, index=unique_cell_types, columns=unique_clusters)
-        for cell_type in tqdm(unique_cell_types):
-            cells_in_type = (cell_types == cell_type)
-            counts_in_type = cluster_counts.toarray()[cells_in_type, :].sum(axis=0)
-            expression_counts.loc[cell_type] = counts_in_type
-
-        non_zero_counts = (expression_counts >= 5).sum(axis=0)
-        threshold = len(expression_counts) * 0.2
-        filtered_clusters = non_zero_counts[non_zero_counts > threshold].index
-
-        filtered_expression_counts = expression_counts[filtered_clusters]
-        juncs_keep = list(filtered_expression_counts)
-        adata_filtered = adata[:, juncs_keep].copy()
-        adata_filtered.var['junction_id_index'] = np.arange(adata_filtered.n_vars)
-        adata_filtered.var_names = adata_filtered.var['junction_id_index'].astype(str)
-        return adata_filtered
-    else:
-        return adata.copy()
-    
-def simulate_and_prepare(adata, K, float_type, proportion_negative, cell_type_column):
-    """Simulates and prepares the data for factor model input."""
-    return sim.simulate_and_prepare_data(adata, K, float_type, proportion_negative, cell_type_column, gen_model_input=True)
-
 def save_results_dataframe(output_dir, results):
     """Saves a DataFrame with main results of the analysis."""
     results_df = pd.DataFrame(results)
     results_df.to_csv(os.path.join(output_dir, 'analysis_results.csv'), index=False)
     print(f"Results saved to {output_dir}/analysis_results.csv")
-
 
 def run_factor_model(my_data, K, device, use_global_prior, input_conc, num_inits=3, num_epochs=100, lr=0.1):
     """Runs the factor model with specified parameters, including the learning rate."""
@@ -246,7 +207,7 @@ def plot_umap(latent_space, adata_input, output_dir, plot_name='umap.png', silho
     plt.savefig(os.path.join(output_dir, plot_name), bbox_inches='tight')
     plt.close()
 
-    return silhouette 
+    return silhouette
 
 def plot_clustermap(embedding, adata_input, output_dir, plot_name='clustermap.png'):
     """Plots clustermap with cell type coloring."""
@@ -301,95 +262,8 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     
     psis_df = pd.DataFrame(psis.T)
     psis_df["junction_id_index"] = psis_df.index
-    psis_df = psis_df.merge(albf_df, on=["junction_id_index"])
-    
-    juncs_clusts_labs = adata_input.var[["junction_id_index", "difference", "true_label", "Cluster"]]
-    psis_df = psis_df.merge(juncs_clusts_labs)
-    
-    # Convert "true_label" to binary format: 1 for "positive", 0 for "negative"
-    psis_df['true_label_binary'] = psis_df['true_label'].apply(lambda x: 1 if x == 'positive' else 0)
-    true_labels = psis_df['true_label_binary']
-    albf_scores = psis_df['ALBF']
-
-    # Step 1: Calculate ROC-AUC score
-    auc_score = roc_auc_score(true_labels, albf_scores)
-    print(f"ROC-AUC Score: {auc_score:.4f}")
-
-    # Step 2: Plot ROC curve
-    fpr, tpr, thresholds = roc_curve(true_labels, albf_scores)
-    
-    plt.figure(figsize=(6, 6))
-    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc_score:.2f})')
-    plt.plot([0, 1], [0, 1], 'k--', label="Random Classifier")
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
-    plt.legend(loc='best')
-    plt.savefig(os.path.join(output_dir, 'roc_curve.png'))
-    plt.close()
-
-    # Step 3: Set threshold for ALBF classification (e.g., You can use the threshold where TPR ≈ 0.5 for balanced classification)
-    optimal_idx = np.argmax(tpr - fpr)  # Maximize TPR - FPR to find the best threshold
-    optimal_threshold = thresholds[optimal_idx]
-    print(f"Optimal threshold for ALBF classification: {optimal_threshold}")
-
-    # Step 4: Classify based on optimal threshold and calculate confusion matrix
-    psis_df['predicted_label'] = psis_df['ALBF'].apply(lambda x: 1 if x >= optimal_threshold else 0)
-    
-    cm = confusion_matrix(true_labels, psis_df['predicted_label'])
-    tn, fp, fn, tp = cm.ravel()
-
-    # Metrics
-    accuracy = accuracy_score(true_labels, psis_df['predicted_label'])
-    precision = precision_score(true_labels, psis_df['predicted_label'])
-    recall = recall_score(true_labels, psis_df['predicted_label'])
-
-    # Step 5: Plot ALBF score distribution
-    plt.figure(figsize=(10, 6))
-    sns.histplot(data=psis_df, x='ALBF', hue='true_label', kde=True, bins=30, alpha=0.5)
-    plt.title('Distribution of ALBF Scores by True Label')
-    plt.xlabel('ALBF Score')
-    plt.ylabel('Density')
-    plt.savefig(os.path.join(output_dir, 'ALBF_score_distribution.png'))
-    plt.close()
-
-    # Step 6: Plot ALBF vs difference
-    plt.figure(figsize=(5, 5))
-    sns.scatterplot(data=psis_df, x="difference", y="ALBF")
-    correlation_diff = psis_df["ALBF"].corr(psis_df["difference"], method="spearman")
-    plt.title(f'Spearman correlation: {correlation_diff:.2f}')
-    plt.savefig(os.path.join(output_dir, 'albf_vs_difference.png'))
-    plt.close()
-
-    # Step 7: Print and report the classification performance
-    print(f"Spearman correlation between ALBF and difference: {correlation_diff}")
-    print(f"ROC-AUC Score: {auc_score:.4f}")
-    print(f"Optimal Threshold: {optimal_threshold:.4f}")
-    print(f"Confusion Matrix: \n{cm}")
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall (Sensitivity): {recall:.4f}")
-    print(f"Misidentified as positive (False Positives): {fp}")
-    print(f"Misidentified as negative (False Negatives): {fn}")
-    
-    # Prepare the report
-    report = (
-        f"ALBF Score Evaluation:\n"
-        f"Spearman correlation between ALBF and difference: {correlation_diff:.4f}\n"
-        f"ROC-AUC Score: {auc_score:.4f}\n"
-        f"Optimal Threshold: {optimal_threshold:.4f}\n"
-        f"Confusion Matrix: \n{cm}\n"
-        f"Accuracy: {accuracy:.4f}\n"
-        f"Precision: {precision:.4f}\n"
-        f"Recall (Sensitivity): {recall:.4f}\n"
-        f"Misidentified as positive (False Positives): {fp}\n"
-        f"Misidentified as negative (False Negatives): {fn}\n"
-    )
-
-    with open(os.path.join(output_dir, 'ALBF_report.txt'), 'w') as f:
-        f.write(report)
-
-    return correlation_diff, auc_score, optimal_threshold, accuracy, precision, recall, fp, fn
+    psis_df = psis_df.merge(albf_df, on=["junction_id_index"])    
+    return psis_df
 
 def plot_pi_barplot(pi, output_dir):
     pi_df = pd.DataFrame(pi, columns=["pi"])
@@ -422,7 +296,7 @@ def handle_input_conc_prior(input_conc_prior):
     else:
         raise ValueError("Unsupported type for input_conc_prior")
 
-def prepare_output_directory(proportion_negative, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column):
+def prepare_output_directory(K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column):
     """Prepares the output directory with timestamp and relevant parameters."""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     cell_type_str = f"CellType_{cell_type_column}" if cell_type_column else "NoCellType"
@@ -431,7 +305,7 @@ def prepare_output_directory(proportion_negative, K_use, use_global_prior, input
     # Handle input_conc for directory naming
     input_conc_prior_str = "LearnedConc" if input_conc is None else f"ConcPrior_{input_conc}"
     
-    output_dir = (f"./analysis_{timestamp}_PropNeg_{proportion_negative}_K_{K_use}_"
+    output_dir = (f"./analysis_{timestamp}_K_{K_use}_"
                   f"Prior_{use_global_prior_str}_NumEpochs_{num_epochs}_"
                   f"{input_conc_prior_str}_Inits_{num_inits}_"
                   f"{cell_type_str}")
@@ -441,7 +315,6 @@ def prepare_output_directory(proportion_negative, K_use, use_global_prior, input
 def save_parameters(output_dir, args, K, input_conc):
     """Saves run parameters as a JSON file."""
     parameters = {
-        "proportion_negative": args.proportion_negative,
         "cell_type_column": args.cell_type_column,
         "K_use": K,
         "input_path": args.input_path,
@@ -469,7 +342,6 @@ def main():
     cell_type_column = args.cell_type_column if args.cell_type_column != "None" else None
 
     # Extract parameters from arguments
-    proportion_negative = args.proportion_negative
     K_use = args.K_use
     input_path = args.input_path
     use_global_prior = args.use_global_prior
@@ -478,23 +350,37 @@ def main():
     lr = args.lr  # Learning rate
 
     # Prepare the output directory with timestamp
-    output_dir = prepare_output_directory(proportion_negative, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column)
+    output_dir = prepare_output_directory(K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column)
     report_file = create_report_file(output_dir)
 
     # Load data and set K
     log_to_report(report_file, f"Loading anndata file from {input_path}")
     adata = load_adata(input_path)
-    K = adata.obs[cell_type_column].nunique() if cell_type_column else K_use
+    adata.var["junction_id_index"] = adata.var.index.astype(int)
+    adata.var.reset_index(drop="junction_id_index", inplace=True)
+
+    K = K_use
 
     # Save run parameters as JSON
     save_parameters(output_dir, args, K, input_conc)
 
     # Preprocess the data
-    adata_filtered = preprocess_adata(adata, cell_type_column)
+    adata_filtered = adata.copy()
 
-    # Simulate data
-    log_to_report(report_file, f"Simulating splice junction counts with {proportion_negative} proportion negative!")
-    my_data, adata_input = simulate_and_prepare(adata_filtered, K, float_type, proportion_negative, cell_type_column)
+    # Check if layers are in correct format
+    if isinstance(adata_filtered.layers.get("Junction_Counts"), csr_matrix):
+        adata_filtered.layers["Junction_Counts"] = adata_filtered.layers["Junction_Counts"].tocoo()
+
+    if isinstance(adata_filtered.layers.get("Cluster_Counts"), csr_matrix):
+        adata_filtered.layers["Cluster_Counts"] = adata_filtered.layers["Cluster_Counts"].tocoo()
+
+    # Convert back to sparse tensors for model input
+    cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(
+        adata_filtered, 
+        cluster_layer="Cluster_Counts", 
+        junction_layer="Junction_Counts", 
+        **float_type
+    )
 
     # Run the factor model
     log_to_report(report_file, f"Running factor model with K = {K}!")
@@ -524,22 +410,25 @@ def main():
         input_conc = "infinity"
 
     # Get metrics from ALBF
-    correlation_diff, auc_score, optimal_threshold, accuracy, precision, recall, fp, fn = compute_and_plot_albf(adata_input, psis_mus, psis_loc, latent_vars["psi"]["mean"], pi, output_dir, K, report_file)
+    psis_df = compute_and_plot_albf(adata, psis_mus, psis_loc, latent_vars["psi"]["mean"], pi, output_dir, K, report_file)
     
+    # Add psis_df to Anndata object 
+    psis_df.rename(columns={i: f"cell_state_{i}" for i in range(K)}, inplace=True)
+    adata.var = pd.concat([adata.var, psis_df.set_index('junction_id_index')], axis=1)
+
     # Calculate silhouette score
-    silhouette_avg = plot_umap(assign_post, adata_input, output_dir)
+    silhouette_avg = plot_umap(assign_post, adata, output_dir)
     plot_pi_barplot(pi, output_dir)
-    plot_clustermap(assign_post, adata_input, output_dir)
+    plot_clustermap(assign_post, adata, output_dir)
 
     # Get silhouette score from NMF 
-    silhouette_NMF = get_NMF(adata_input, K=K, output_dir=output_dir)
+    silhouette_NMF = get_NMF(adata, K=K, output_dir=output_dir)
 
     # Step 1: Define the columns for the DataFrame
     columns = [
-        "proportion_negative", "K", "use_global_prior", "input_conc", "learning_rate", 
-        "avg_corr", "median_corr", "min_corr", "correlation_diff", "auc_score", 
-        "optimal_threshold", "accuracy", "precision", "recall", 
-        "false_positives", "false_negatives", "silhouette_avg", "cell_type_column", "silhouette_NMF", "input_conc"
+        "K", "use_global_prior", "input_conc", "learning_rate", 
+        "avg_corr", "median_corr", "min_corr", 
+        "silhouette_avg", "cell_type_column", "silhouette_NMF", "input_conc"
     ]
 
     if cell_type_column == None:
@@ -547,10 +436,9 @@ def main():
 
     # Step 2: Create a DataFrame with a single row
     results_df = pd.DataFrame([[
-        proportion_negative, K, use_global_prior, input_conc, lr, 
-        avg_corr, median_corr, min_corr, correlation_diff, auc_score, 
-        optimal_threshold, accuracy, precision, recall, 
-        fp, fn, silhouette_avg, cell_type_column, silhouette_NMF, input_conc
+        K, use_global_prior, input_conc, lr, 
+        avg_corr, median_corr, min_corr, 
+        silhouette_avg, cell_type_column, silhouette_NMF, input_conc
     ]], columns=columns)
 
     # Step 3: Save the DataFrame to a CSV file in the output directory
@@ -559,19 +447,15 @@ def main():
 
     # Save the `adata_input` AnnData object to the output directory
     adata_output_path = os.path.join(output_dir, "adata_input.h5ad")
-    adata_input.var.columns = adata_input.var.columns.astype(str)
+    adata.var.columns = adata.var.columns.astype(str)
 
     # Check and convert both 'Cluster_Counts' and 'Junction_Counts' layers from COO to CSR (or CSC)
     for layer in ['Cluster_Counts', 'Junction_Counts']:
-        if isinstance(adata_input.layers[layer], scipy.sparse.coo_matrix):
-            adata_input.layers[layer] = adata_input.layers[layer].tocsr()  # Convert to CSR or use .tocsc() if you prefer
-
-    # Convert 'junc_ratio' from numpy.matrix to numpy.ndarray if it exists in layers
-    if isinstance(adata_input.layers["junc_ratio"], np.matrix):
-        adata_input.layers["junc_ratio"] = np.asarray(adata_input.layers["junc_ratio"])
+        if isinstance(adata.layers[layer], scipy.sparse.coo_matrix):
+            adata.layers[layer] = adata.layers[layer].tocsr()  # Convert to CSR or use .tocsc() if you prefer
 
     # Save the AnnData object for this particular analysis 
-    adata_input.write(adata_output_path)
+    adata.write(adata_output_path)
 
     log_to_report(report_file, f"AnnData saved to {adata_output_path}")
 

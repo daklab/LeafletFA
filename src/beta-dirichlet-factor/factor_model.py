@@ -16,6 +16,8 @@ import torch
 print (torch.__version__)
 print (torch.version.cuda)
 # print (torch.cuda.get_device_name())
+from torch.optim import Adam
+from pyro.optim import MultiStepLR
 
 import matplotlib.pyplot as plt
 import random
@@ -171,20 +173,44 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
     # This can be useful when want to ensure that the generative process defined in the model is not affected by gradient computations or other inference mechanics.
     # Why/how is this done automatically when auto guide is used?
 
+    # Assert that y and total_counts are not NaN or Inf
+    #assert torch.isfinite(y).all(), "y contains NaN or infinite values!"
+    #assert torch.isfinite(total_counts).all(), "total_counts contains NaN or infinite values!"
+
     if use_global_prior:
-        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1)) # every junction has its own a and b
+        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1))  # every junction has its own a and b
         b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
+    
+        # Add a small epsilon to avoid extremely small values
+        epsilon = 1e-4
+        a = torch.clamp(a + epsilon, min=1e-2, max=1e1)  # tighter clamping range
+        b = torch.clamp(b + epsilon, min=1e-2, max=1e1)
+        
         psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
     else:
-        a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
+        a = pyro.sample("a", dist.Gamma(2., 2.))  # single value for all junctions
         b = pyro.sample("b", dist.Gamma(2., 2.))
-        psi = pyro.sample("psi", dist.Beta(a,b).expand([K,P]).to_event(2))
+    
+        # Add epsilon and tighter clamping in the global case as well
+        epsilon = 1e-4
+        a = torch.clamp(a + epsilon, min=1e-2, max=1e1)
+        b = torch.clamp(b + epsilon, min=1e-2, max=1e1)
+    
+        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
         psi = psi.to(dtype=torch.float64)
+
+    # Assert that 'psi' has no NaN or negative values
+    assert torch.isfinite(psi).all(), "psi contains NaN or infinite values!"
+    assert torch.all(psi >= 0), "psi contains negative values!"
 
     # Sample priors for Dirichlet distribution
     alpha = 5.0  # A reasonable value to avoid extreme imbalance
     pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha / K))
+
+    # Assert that pi sums to 1 and contains no NaN/inf values
+    assert torch.isfinite(pi).all(), "pi contains NaN or infinite values!"
+    assert torch.allclose(pi.sum(), torch.tensor(1.0, dtype=torch.float)), f"pi does not sum to 1: {pi.sum()}"
 
     # conc value scales the pi vector (higher conc makes the sampled probs more uniform, 
     #a lower conc allows more variability, leading to probability vectors that might be skewed towards certain factors).
@@ -199,14 +225,15 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
         assign = torch.clamp(assign, min=0.0)
         assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
 
-    # Debug: Ensure no negative values in assign
+    # Assert that assign has no NaN, Inf, or negative values
+    assert torch.isfinite(assign).all(), "assign contains NaN or infinite values!"
     assert torch.all(assign >= 0), "Assign has negative values!"
-    # Assert that values in pi sum up to 1 
-    assert torch.allclose(pi.sum(), torch.tensor(1.0)), f"pi does not sum to 1: {pi.sum()}"
-    # Assert that values in assign sum up to 1 for each cell (row)
     assert torch.allclose(assign.sum(dim=1), torch.tensor(1.0, dtype=torch.float64)), f"assign rows do not sum to 1: {assign.sum(dim=1)}"
 
     pred = torch.mm(assign, psi)
+    
+    # Assert pred contains no NaN/Inf values
+    assert torch.isfinite(pred).all(), "pred contains NaN or infinite values!"
 
     # Move pred to CUDA if available
     if torch.cuda.is_available():
@@ -214,6 +241,8 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
+    assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
+
     pyro.factor("obs", log_prob) 
 
 def check_for_nans():
@@ -247,12 +276,16 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # Set up the optimizer for the SVI. Here, we use the Adam optimizer from Pyro's optim module,
     # setting the learning rate to the provided value 'lr'. This optimizer will update the variational
     # parameters during the optimization process to minimize the loss function.
-    adam = pyro.optim.Adam({"lr": lr})
 
+    scheduler = MultiStepLR({'optimizer': Adam,
+                             'optim_args': {'lr': lr},
+                             'milestones': [10],
+                             'gamma': 0.2})
+    
     # Define the number of samples used to estimate the Evidence Lower Bound (ELBO). This is a measure
     # of the difference between the variational approximation of the posterior and the true posterior.
     # More samples can provide a more accurate estimate but will increase computation time.
-    ELBO_SAMPLES = 10
+    ELBO_SAMPLES = 3
     
     # Initialize the loss function as Trace_ELBO, which estimates the ELBO (using?).
     # We use 'num_particles=ELBO_SAMPLES' to set the number of samples used in the ELBO estimation.
@@ -264,7 +297,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # apply the defined guides), the chosen optimizer, and the loss function. This object will
     # handle the process of variational inference by optimizing the parameters of the guide to
     # minimize the ELBO.
-    svi = SVI(model, guide, adam, loss)
+    svi = SVI(model, guide, scheduler, loss)
 
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
     # runs do not interfere with the current optimization, providing a clean slate - do we ened this?
@@ -308,7 +341,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 20 == 0:
+        if epoch % 10 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
@@ -350,7 +383,8 @@ def plot_losses(losses, i):
         plt.title(f"Loss Plot for Initialization {i+1}")
         plt.show()
 
-def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=100):
+def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=500):
+    
     samples = {}  # Dictionary to hold samples for each latent variable
 
     for _ in range(num_samples):
@@ -399,7 +433,6 @@ def extract_variable_sizes(model, *args, **kwargs):
     for name, node in trace.nodes.items():
         if node["type"] == "sample" and not node["is_observed"]:
             sizes[name] = node["value"].shape
-            # print(f"Variable {name} has shape {sizes[name]}")
     return sizes
 
 def extract_params_and_verify_guide(guide, *args, **kwargs):
