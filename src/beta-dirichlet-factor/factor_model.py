@@ -11,7 +11,6 @@
 import pyro
 import pyro.distributions as dist
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDiagonalNormal
 import torch
 print (torch.__version__)
 print (torch.version.cuda)
@@ -36,13 +35,12 @@ import pyro
 import random
 import datetime
 import numpy as np
-from pyro.infer.autoguide import AutoDiagonalNormal
 from pyro import poutine
 from pyro.poutine import trace as p_trace
 import pyro.distributions as dist
 from torch.distributions import constraints
 # import the AutoGuideList class from the pyro.infer.autoguide module
-from pyro.infer.autoguide import AutoGuideList
+from pyro.infer.autoguide import AutoGuideList, AutoDelta, AutoDiagonalNormal
 
 # Define functions for factor model 
 
@@ -137,7 +135,7 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
     # Sum the log probabilities
     return log_probs.sum()
 
-def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
+def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None, psi=None):
 
     """
     Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
@@ -165,40 +163,25 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     # print("++++++ MODEL CALLED ++++++")
     N, P = y.shape
-    
+
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
 
-    # poutine.block: wrap parts of the model to effectively tell Pyro to ignore those parts during certain operations. 
-    # This can be useful when want to ensure that the generative process defined in the model is not affected by gradient computations or other inference mechanics.
-    # Why/how is this done automatically when auto guide is used?
-
-    # Assert that y and total_counts are not NaN or Inf
-    #assert torch.isfinite(y).all(), "y contains NaN or infinite values!"
-    #assert torch.isfinite(total_counts).all(), "total_counts contains NaN or infinite values!"
-
     if use_global_prior:
-        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1))  # every junction has its own a and b
+        # Only sample 'a' and 'b' for use in the guide if not passed externally
+        a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1))
         b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
-    
-        # Add a small epsilon to avoid extremely small values
-        epsilon = 1e-4
-        a = torch.clamp(a + epsilon, min=1e-2, max=1e1)  # tighter clamping range
-        b = torch.clamp(b + epsilon, min=1e-2, max=1e1)
-        
-        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
-        psi = psi.to(dtype=torch.float64)
     else:
-        a = pyro.sample("a", dist.Gamma(2., 2.))  # single value for all junctions
+        a = pyro.sample("a", dist.Gamma(2., 2.))
         b = pyro.sample("b", dist.Gamma(2., 2.))
-    
-        # Add epsilon and tighter clamping in the global case as well
-        epsilon = 1e-4
-        a = torch.clamp(a + epsilon, min=1e-2, max=1e1)
-        b = torch.clamp(b + epsilon, min=1e-2, max=1e1)
-    
+
+    # If psi is None, sample it from Beta(a, b)
+    if psi is None:
         psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
-        psi = psi.to(dtype=torch.float64)
+    else:
+        print("Using pre-initialized psi from the guide.")
+        
+    psi = psi.to(dtype=torch.float64)
 
     # Assert that 'psi' has no NaN or negative values
     assert torch.isfinite(psi).all(), "psi contains NaN or infinite values!"
@@ -245,6 +228,16 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior = None):
 
     pyro.factor("obs", log_prob) 
 
+def my_init_fn(site, psi_init=None, phi_init=None):
+    """
+    Custom initialization function for psi and assign (phi).
+    Falls back to default behavior if no pre-initialized values are provided.
+    """
+    if psi_init is not None and site["name"] == "psi":
+        return psi_init  # Use pre-initialized psi
+    elif phi_init is not None and site["name"] == "assign":
+        return phi_init  # Use pre-initialized assign (phi)
+
 def check_for_nans():
     for name, value in pyro.get_param_store().items():
         if torch.isnan(value).any() or torch.isinf(value).any():
@@ -279,8 +272,8 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
 
     scheduler = MultiStepLR({'optimizer': Adam,
                              'optim_args': {'lr': lr},
-                             'milestones': [10],
-                             'gamma': 0.2})
+                             'milestones': [10, 50, 100],
+                             'gamma': 0.1})
     
     # Define the number of samples used to estimate the Evidence Lower Bound (ELBO). This is a measure
     # of the difference between the variational approximation of the posterior and the true posterior.
@@ -297,6 +290,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # apply the defined guides), the chosen optimizer, and the loss function. This object will
     # handle the process of variational inference by optimizing the parameters of the guide to
     # minimize the ELBO.
+    
     svi = SVI(model, guide, scheduler, loss)
 
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
@@ -435,37 +429,7 @@ def extract_variable_sizes(model, *args, **kwargs):
             sizes[name] = node["value"].shape
     return sizes
 
-def extract_params_and_verify_guide(guide, *args, **kwargs):
-    # Initializing dictionary to hold the total size of params
-    param_sizes = {}
-
-    # Retrieving and printing parameters from Pyro's parameter store
-    for name, value in pyro.get_param_store().items():
-        print(f"Name: {name}, Shape: {value.shape}, Values: {value[:5]}")  # Print first 5 values for brevity
-        param_sizes[name] = value.numel()  # Store the number of elements in each parameter
-
-    # Generating a trace from the guide and examining the sample sites
-    guide_trace = p_trace(guide).get_trace(*args, **kwargs)
-    model_variable_sizes = {}
-    for name, site in guide_trace.nodes.items():
-        if site["type"] == "sample":
-            print(f"Guide variable Name: {name}, Shape: {site['value'].shape}")
-            model_variable_sizes[name] = site['value'].numel()
-
-    # Comparing total number of elements in loc and scale params with the model variables
-    total_loc_scale = sum(param_sizes.get(name, 0) for name in param_sizes if 'loc' in name or 'scale' in name)
-    total_model_vars = sum(model_variable_sizes.values())
-    
-    print(f"Total elements in loc/scale parameters: {total_loc_scale}")
-    print(f"Total elements in model variables: {total_model_vars}")
-    
-    # Checking if the totals match
-    if total_loc_scale == total_model_vars:
-        print("Total number of elements in guide parameters matches the model variables.")
-    else:
-        print("Mismatch in total number of elements between guide parameters and model variables.")
-
-def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100):
+def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_init=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100):
 
     """
     Main function to fit our Leaflet Bayesian beta-dirichlet factor model.
@@ -477,6 +441,9 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
     num_initializations (int, optional): Number of random initializations. Default is 5.
     seeds (list, optional): List of seeds for random initializations. Default is None, which will generate random seeds.
     input_conc_prior: The prior or fixed value for the concentration parameter. If None, it will be learned.
+
+    - psi_init (torch.Tensor, optional): Pre-initialized values for psi.
+    - phi_init (torch.Tensor, optional): Pre-initialized values for assign (phi).
     """
 
     # If seeds are not provided, create a list of random seeds and print them
@@ -511,10 +478,21 @@ def main(y, total_counts, num_initializations=5, seeds=None, file_prefix=None, u
         
         # Use the new combined guide
         guide = AutoGuideList(model)
-        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['psi']))) # the only thing we want guide to look at is PSI 
-        # Now expose just assign 
-        guide.append(AutoDiagonalNormal(poutine.block(model, expose=['assign']))) # now we want make guide for everything apart from psi
-        guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) # now we want make guide for everything apart from psi 
+
+        # Guide for 'psi' with AutoDelta and custom init function
+        guide.append(AutoDelta(
+            poutine.block(model, expose=['psi']), 
+            init_loc_fn=lambda site: my_init_fn(site, psi_init=psi_init, phi_init=phi_init)
+        ))
+
+        # Guide for 'assign' with AutoDelta and custom init function
+        guide.append(AutoDelta(
+            poutine.block(model, expose=['assign']), 
+            init_loc_fn=lambda site: my_init_fn(site, psi_init=psi_init, phi_init=phi_init)
+        ))
+
+        # Guide for everything else (excluding 'psi' and 'assign')
+        guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) 
 
         # Fit the model
         print("Fit the model")

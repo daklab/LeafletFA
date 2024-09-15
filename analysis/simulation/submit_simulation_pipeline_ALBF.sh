@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Define possible values for each parameter
-PROPORTION_NEGATIVE_VALUES=(0.5 0.9)
+PROPORTION_NEGATIVE_VALUES=(0.1 0.5 0.9)
 K_USE_VALUES=(2 20)
 USE_GLOBAL_PRIOR_VALUES=(True False)
 INPUT_CONC_PRIOR_VALUES=("None" "inf")  # Include "inf" as a string
 CELL_TYPE_COLUMN_VALUES=("None" "cell_type")  # Add None as an option
-max_count=100
-num_epochs=600
-lr=0.2
+max_count=200
+num_epochs=500
+lr=0.1
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
