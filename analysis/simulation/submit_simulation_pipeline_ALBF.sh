@@ -2,13 +2,13 @@
 
 # Define possible values for each parameter
 PROPORTION_NEGATIVE_VALUES=(0.1 0.5 0.9)
-K_USE_VALUES=(2 20)
+K_USE_VALUES=(2)
 USE_GLOBAL_PRIOR_VALUES=(True False)
 INPUT_CONC_PRIOR_VALUES=("None" "inf")  # Include "inf" as a string
 CELL_TYPE_COLUMN_VALUES=("None" "cell_type")  # Add None as an option
-max_count=200
-num_epochs=500
-lr=0.1
+max_count=300
+num_epochs=600
+lr=0.05
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
@@ -25,20 +25,23 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
     for use_global_prior in "${USE_GLOBAL_PRIOR_VALUES[@]}"; do
       for input_conc_prior in "${INPUT_CONC_PRIOR_VALUES[@]}"; do
         for cell_type_column in "${CELL_TYPE_COLUMN_VALUES[@]}"; do
+          
+          # Run each combination three times
+          for repeat in {1..3}; do
+          
+            # Increment the counter
+            ((count++))
 
-          # Increment the counter
-          ((count++))
+            # Check if the counter exceeds the maximum number of combinations
+            if [ $count -gt $max_count ]; then
+              break
+            fi
 
-          # Check if the counter exceeds the maximum number of combinations
-          if [ $count -gt $max_count ]; then
-            break
-          fi
-
-          # Define the SLURM job script
-          sbatch <<EOT
+            # Define the SLURM job script
+            sbatch <<EOT
 #!/bin/bash
-#SBATCH --job-name=sim_data_${count}
-#SBATCH --output=sim_data_${count}.txt
+#SBATCH --job-name=sim_data_${count}_rep${repeat}
+#SBATCH --output=sim_data_${count}_rep${repeat}.txt
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --time=02:00:00
@@ -51,7 +54,7 @@ python $analysis_script --input_path $input_file \
   --proportion_negative ${proportion_negative} \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 10 \
+  --num_inits 3 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   $( [[ $use_global_prior == "True" ]] && echo "--use_global_prior" ) \
@@ -59,8 +62,13 @@ python $analysis_script --input_path $input_file \
 
 EOT
 
+          done
+          
+          # Break out of the loops if max_count combinations have been submitted
+          if [ $count -gt $max_count ]; then
+            break
+          fi
         done
-        # Break out of the loops if 10 combinations have been submitted
         if [ $count -gt $max_count ]; then
           break
         fi

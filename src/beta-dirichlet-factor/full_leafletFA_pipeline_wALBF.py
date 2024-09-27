@@ -207,7 +207,7 @@ def plot_umap(latent_space, adata_input, output_dir, plot_name='umap.png', silho
     plt.savefig(os.path.join(output_dir, plot_name), bbox_inches='tight')
     plt.close()
 
-    return silhouette
+    return silhouette, embedding
 
 def plot_clustermap(embedding, adata_input, output_dir, plot_name='clustermap.png'):
     """Plots clustermap with cell type coloring."""
@@ -249,7 +249,7 @@ def get_NMF(adata_input, K, output_dir, true_juncs_layer="Junction_Counts", true
     # Return the silhouette score for evaluation
     return NMF_silhouette
 
-def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir, K, report_file):
+def compute_and_plot_albf(psis_mus, psis_loc, psis, pi):
     
     # Compute ALBF
     albf, l0 = differential_splicing.compute_albf(psis_mus, psis_loc + 1e-9, torch.tensor(pi))
@@ -410,7 +410,7 @@ def main():
         input_conc = "infinity"
 
     # Get metrics from ALBF
-    psis_df = compute_and_plot_albf(adata, psis_mus, psis_loc, latent_vars["psi"]["mean"], pi, output_dir, K, report_file)
+    psis_df = compute_and_plot_albf(psis_mus, psis_loc, latent_vars["psi"]["mean"], pi)
     
     # Add psis_df to Anndata object 
     psis_df.rename(columns={i: f"cell_state_{i}" for i in range(K)}, inplace=True)

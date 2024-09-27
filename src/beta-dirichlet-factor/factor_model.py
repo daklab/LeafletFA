@@ -14,9 +14,9 @@ from pyro.infer import SVI, Trace_ELBO
 import torch
 print (torch.__version__)
 print (torch.version.cuda)
-# print (torch.cuda.get_device_name())
 from torch.optim import Adam
 from pyro.optim import MultiStepLR
+from pyro.optim import ClippedAdam
 
 import matplotlib.pyplot as plt
 import random
@@ -41,8 +41,8 @@ import pyro.distributions as dist
 from torch.distributions import constraints
 # import the AutoGuideList class from the pyro.infer.autoguide module
 from pyro.infer.autoguide import AutoGuideList, AutoDelta, AutoDiagonalNormal
-
-# Define functions for factor model 
+from pyro.infer.autoguide.initialization import init_to_value
+from pyro.infer.autoguide.initialization import init_to_uniform
 
 def convertr(hyperparam, name):
     """
@@ -126,16 +126,19 @@ def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
     else:
         # Extract the success probabilities for the relevant indices
         success_probs = pred[y_indices[0], y_indices[1]]
+        success_probs = torch.clamp(pred[y_indices[0], y_indices[1]], min=1e-6, max=1-1e-6) # Newly added! ensure this makes sense to keep... 
+
         # Derive alpha and beta from success_probs and input_conc
         alpha = success_probs * input_conc
         beta = (1 - success_probs) * input_conc
+
         # Calculate the log probabilities for the beta-binomial distribution
         log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
     # Sum the log probabilities
     return log_probs.sum()
 
-def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None, psi=None):
+def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
 
     """
     Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
@@ -166,22 +169,20 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None, psi=
 
     # Sample input_conc from its prior
     input_conc = convertr(input_conc_prior, "bb_conc")
+    eps = 1e-4
 
     if use_global_prior:
         # Only sample 'a' and 'b' for use in the guide if not passed externally
         a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1))
         b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
-    else:
-        a = pyro.sample("a", dist.Gamma(2., 2.))
-        b = pyro.sample("b", dist.Gamma(2., 2.))
+        psi = pyro.sample("psi", dist.Beta(a+eps, b+eps).expand([K, P]).to_event(2)) 
+        psi = psi.to(dtype=torch.float64)
 
-    # If psi is None, sample it from Beta(a, b)
-    if psi is None:
-        psi = pyro.sample("psi", dist.Beta(a, b).expand([K, P]).to_event(2))
     else:
-        print("Using pre-initialized psi from the guide.")
-        
-    psi = psi.to(dtype=torch.float64)
+        a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
+        b = pyro.sample("b", dist.Gamma(2., 2.))
+        psi = pyro.sample("psi", dist.Beta(a+eps, b+eps).expand([K, P]).to_event(2))
+        psi = psi.to(dtype=torch.float64)
 
     # Assert that 'psi' has no NaN or negative values
     assert torch.isfinite(psi).all(), "psi contains NaN or infinite values!"
@@ -204,8 +205,8 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None, psi=
     assign = assign.to(dtype=torch.float64)
     
     # Ensure no negative values in assign
-    if torch.any(assign < 0):
-        assign = torch.clamp(assign, min=0.0)
+    if torch.any(assign < 1e-8):
+        assign = torch.clamp(assign, min=1e-8)
         assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
 
     # Assert that assign has no NaN, Inf, or negative values
@@ -225,72 +226,41 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None, psi=
     # calculate the log probability of observed data under either a binomial or beta-binomial distribution
     log_prob = my_log_prob(y, total_counts, pred, input_conc) 
     assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
-
     pyro.factor("obs", log_prob) 
 
-def my_init_fn(site, psi_init=None, phi_init=None):
-    """
-    Custom initialization function for psi and assign (phi).
-    Falls back to default behavior if no pre-initialized values are provided.
-    """
-    if psi_init is not None and site["name"] == "psi":
-        return psi_init  # Use pre-initialized psi
-    elif phi_init is not None and site["name"] == "assign":
-        return phi_init  # Use pre-initialized assign (phi)
 
-def check_for_nans():
-    for name, value in pyro.get_param_store().items():
-        if torch.isnan(value).any() or torch.isinf(value).any():
-            print(f"Parameter {name} contains NaNs or Infs")
-            print(value)
-
-def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=5, min_delta=0.01, lr=0.05, num_epochs=500):
+def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=5, min_delta=0.01, lr=0.01, num_epochs=500):
     
     """
     Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
     to ensure numerical stability and early stopping to prevent overfitting.
-
-    Parameters:
-    - y (torch.Tensor): A tensor representing observed junction counts.
-    - total_counts (torch.Tensor): A tensor representing the observed intron cluster counts.
-    - K (int): The number of components in the mixture model.
-    - use_global_prior (bool): Flag to use a global prior in the model.
-    - input_conc_prior: The prior or fixed value for the concentration parameter of the Beta-Binomial distribution.
-    - guide (function): A guide function for the SVI (variational distribution).
-    - patience (int): The number of epochs to wait without improvement before stopping. Default is 5.
-    - min_delta (float): Minimum change in the loss to qualify as an improvement. Default is 0.01.
-    - lr (float): Learning rate for the Adam optimizer. Default is 0.05.
-    - num_epochs (int): Maximum number of epochs for training. Default is 500.
-
-    Returns:
-    - list: A list of loss values for each epoch during the optimization process.
     """
-    
-    # Set up the optimizer for the SVI. Here, we use the Adam optimizer from Pyro's optim module,
-    # setting the learning rate to the provided value 'lr'. This optimizer will update the variational
-    # parameters during the optimization process to minimize the loss function.
 
-    scheduler = MultiStepLR({'optimizer': Adam,
-                             'optim_args': {'lr': lr},
-                             'milestones': [10, 50, 100],
-                             'gamma': 0.1})
-    
-    # Define the number of samples used to estimate the Evidence Lower Bound (ELBO). This is a measure
-    # of the difference between the variational approximation of the posterior and the true posterior.
+    # scheduler = MultiStepLR({'optimizer': Adam,
+    #                         'optim_args': {'lr': lr},
+    #                         'milestones': [20, 50, 80, 100, 120, 150, 200, 250],
+    #                         'gamma': 0.1})
+
+    # Initialize learning rate and decay factor
+    initial_lr = lr
+    num_steps = num_epochs
+    gamma = 0.05 
+
+    # Calculate the learning rate decay factor per step
+    lrd = gamma ** (1 / num_steps)
+
+    # Use ClippedAdam optimizer with continuous learning rate decay
+    scheduler = ClippedAdam({'lr': initial_lr, 'lrd': lrd})
+
+    # Define the number of samples used to estimate the Evidence Lower Bound (ELBO).
     # More samples can provide a more accurate estimate but will increase computation time.
     ELBO_SAMPLES = 3
     
-    # Initialize the loss function as Trace_ELBO, which estimates the ELBO (using?).
-    # We use 'num_particles=ELBO_SAMPLES' to set the number of samples used in the ELBO estimation.
-    # This class will be used to calculate the loss between the model's predictions and the guide
-    # (approximate posterior) during training.
+    # Initialize the loss function as Trace_ELBO, which estimates the ELBO.
     loss = Trace_ELBO(num_particles=ELBO_SAMPLES) 
 
-    # Set up the SVI object with the model, the guide (which is a function that should
-    # apply the defined guides), the chosen optimizer, and the loss function. This object will
-    # handle the process of variational inference by optimizing the parameters of the guide to
-    # minimize the ELBO.
-    
+    # Set up the SVI object with the model, the guide will handle the process of variational 
+    # inference by optimizing the parameters of the guide to minimize the ELBO.
     svi = SVI(model, guide, scheduler, loss)
 
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
@@ -335,7 +305,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 10 == 0:
+        if epoch % 20 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
@@ -348,6 +318,12 @@ def print_global_prior(use_global_prior):
         logging.info("Using prior for a and b per junction to model average behaviour!")
     else:
         logging.info("Not using priors on a and b, running simpler non-hierarchical version!")
+
+def print_inits(psi_init=None, phi_init=None):
+    if psi_init is None and phi_init is None:
+        logging.info("No initialization matrices provided for PSI and PHI, doing random initialization for variational parameters!")
+    else:
+        logging.info("Using waypoint-based PSI and PHI matrices for initializing these variational parameters!")
 
 def print_concentration(input_conc_prior):
     """
@@ -363,19 +339,6 @@ def print_concentration(input_conc_prior):
         logging.info("No input concentration parameter provided. Using default Gamma(2.0, 2.0) to initialize and learn bb concentration.")
     else:
         logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc_prior}.")
-
-def initialize_seeds(num_initializations, seeds):
-    if seeds is None:
-        seeds = [random.randint(1, 10000) for _ in range(num_initializations)]
-    return seeds
-
-def plot_losses(losses, i):
-    if plt.isinteractive():
-        plt.plot(losses)
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title(f"Loss Plot for Initialization {i+1}")
-        plt.show()
 
 def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=500):
     
@@ -454,6 +417,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
     all_results = []
     print_concentration(input_conc_prior)  # Log the concentration setting
     print_global_prior(use_global_prior)  # Log the global prior setting
+    print_inits(psi_init, phi_init) # Log whether initializaiton is based on waypoints or not  
 
     # Run the model for each seed
     for i, seed in enumerate(seeds):
@@ -475,22 +439,31 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
         # Variational Parameters: It automatically introduces variational parameters (means and variances) 
         # for each latent variable in the model. These parameters are optimized during inference to 
         # make the guide's distribution as close as possible to the true posterior.
-        
-        # Use the new combined guide
+
         guide = AutoGuideList(model)
 
-        # Guide for 'psi' with AutoDelta and custom init function
-        guide.append(AutoDelta(
-            poutine.block(model, expose=['psi']), 
-            init_loc_fn=lambda site: my_init_fn(site, psi_init=psi_init, phi_init=phi_init)
-        ))
+        # Guide for 'psi' with conditional initialization
+        if psi_init is not None:
+            guide.append(AutoDiagonalNormal(
+                poutine.block(model, expose=['psi']),
+                init_loc_fn=init_to_value(values={'psi': psi_init})
+            ))
+        else:
+            guide.append(AutoDiagonalNormal(
+                poutine.block(model, expose=['psi'])
+            ))
 
-        # Guide for 'assign' with AutoDelta and custom init function
-        guide.append(AutoDelta(
-            poutine.block(model, expose=['assign']), 
-            init_loc_fn=lambda site: my_init_fn(site, psi_init=psi_init, phi_init=phi_init)
-        ))
-
+        # Guide for 'assign' with conditional initialization
+        if phi_init is not None:
+            guide.append(AutoDiagonalNormal(
+                poutine.block(model, expose=['assign']),
+                init_loc_fn=init_to_value(values={'assign': phi_init})
+            ))
+        else:
+            guide.append(AutoDiagonalNormal(
+                poutine.block(model, expose=['assign'])
+            ))
+            
         # Guide for everything else (excluding 'psi' and 'assign')
         guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) 
 
