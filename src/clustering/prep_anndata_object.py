@@ -11,6 +11,7 @@ import random
 import datetime
 from concurrent.futures import ProcessPoolExecutor
 import concurrent.futures
+import os
 
 def merge_dictionaries(dict1, dict2):
     """
@@ -25,14 +26,15 @@ def merge_dictionaries(dict1, dict2):
                 dict1[key][subkey] = 0  # Initialize count if it doesn't exist
             dict1[key][subkey] += value
 
-def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_type="single_cell"):
+def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_type="smart_seq", junc_idx=None):
     """
     Read a single junction file and return a dictionary of junctions that match the relevant junction IDs.
 
     Parameters:
     - junc_file: Path to the junction file.
     - relevant_junction_ids: Set of relevant junction IDs to filter.
-    - sequencing_type: Type of sequencing data ('single_cell' or 'bulk').
+    - sequencing_type: Type of sequencing data ('smart_seq' or 'bulk').
+    - junc_idx: Dictionary mapping junction IDs to their indices.
 
     Returns:
     - junc_dict: Dictionary containing cell counts and total read scores for relevant junctions.
@@ -46,7 +48,7 @@ def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_
     # Add column names here:
     col_names = ["chrom", "chromStart", "chromEnd", "name", "score", "strand", 
          "thickStart", "thickEnd", "itemRgb", "blockCount", "blockSizes", "blockStarts"]
-    if sequencing_type == "single_cell":
+    if sequencing_type in ["smart_seq", "10x"]:
         col_names += ["num_cells_wjunc", "cell_readcounts"]
     juncs.columns = col_names 
 
@@ -67,54 +69,81 @@ def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_
     # Process each junction record
     for _, row in juncs.iterrows():
         junction_id = row['junction_id']
-        
-        if sequencing_type == "single_cell":
+        junction_index = junc_idx[junction_id]
+
+        if sequencing_type == "smart_seq":
             # For Smart-seq2, there's only one cell per file
             cell_id = row['cell_readcounts'].split(":")[0]  # Get cell ID
             read_count = row['score']
-            cell_junction_counts[cell_id][junction_id] += read_count
+            cell_junction_counts[cell_id][junction_index] += read_count
+
         elif sequencing_type == "10x":
             # For 10x, multiple cells and their read counts may be in the 'cell_readcounts' column
             for cell_info in row['cell_readcounts'].split(','):
                 cell_id, read_count = cell_info.split(":")
                 read_count = int(read_count)
-                cell_junction_counts[cell_id][junction_id] += read_count
+                cell_junction_counts[cell_id][junction_index] += read_count
 
     return cell_junction_counts
 
-def read_and_process_file(junc_file, relevant_junction_ids, intron_clusts, sequencing_type="single_cell"):
+def read_and_process_file(junc_file, relevant_junction_ids, sequencing_type="smart_seq", junc_idx=None, cluster_idx=None, cluster_idx_flip=None):
     """
     Read and process a single junction file, returning junction and cluster counts for relevant junctions.
     """
-    file_junction_counts = read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_type)
-    
-    # Prepare to store the results in regular dictionaries
-    cell_junction_counts = {}
-    cell_cluster_counts = {}
 
-    # Precompute junction-to-cluster mapping
-    junction_to_cluster = dict(zip(intron_clusts['junction_id'], intron_clusts['Cluster']))
+    # First ensure junc_file exists before reading it
+    if os.path.exists(junc_file):
+        
+        file_junction_counts = read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_type, junc_idx)
+        
+        # Prepare to store the results in regular dictionaries
+        cell_junction_counts = {}
+        cell_cluster_counts = {}
 
-    # Accumulate junction and cluster counts
-    for cell_id, junctions in file_junction_counts.items():
-        if cell_id not in cell_junction_counts:
-            cell_junction_counts[cell_id] = {}
-            cell_cluster_counts[cell_id] = {}
-        for junction_id, count in junctions.items():
-            if junction_id not in cell_junction_counts[cell_id]:
-                cell_junction_counts[cell_id][junction_id] = 0
-            cell_junction_counts[cell_id][junction_id] += count
-            
-            # Get the corresponding cluster for the junction
-            if junction_id in junction_to_cluster:
-                cluster = junction_to_cluster[junction_id]
-                if cluster not in cell_cluster_counts[cell_id]:
-                    cell_cluster_counts[cell_id][cluster] = 0
-                cell_cluster_counts[cell_id][cluster] += count
+        # Accumulate junction counts as usual
+        for cell_id, junctions in file_junction_counts.items():
+            if cell_id not in cell_junction_counts:
+                cell_junction_counts[cell_id] = {}
+                cell_cluster_counts[cell_id] = {}
 
-    return cell_junction_counts, cell_cluster_counts
+            # Keep track of cluster counts for the current cell
+            cluster_totals = {}
 
-def process_files_and_build_matrices_parallel(junction_files, relevant_junction_ids, intron_clusts, sequencing_type="single_cell", max_workers=8):
+            for junction_index, count in junctions.items():
+
+                # Update cell_junction_counts using the junction index
+                if junction_index not in cell_junction_counts[cell_id]:
+                    cell_junction_counts[cell_id][junction_index] = 0
+                cell_junction_counts[cell_id][junction_index] += count
+
+                # Get the corresponding cluster index for this junction
+                cluster_name = cluster_idx[junction_index]
+
+                # Accumulate counts for clusters, but don't add them directly yet
+                if cluster_name not in cluster_totals:
+                    cluster_totals[cluster_name] = 0
+                cluster_totals[cluster_name] += count
+
+            # Second pass: loop through all cluster_totals (observed clusters) and add zero counts for unobserved junctions in that cluster
+            for cluster_name in cluster_totals.keys():
+                # Find all junctions in this cluster
+                junctions_in_cluster = cluster_idx_flip[cluster_name]
+                for junction_index in junctions_in_cluster:
+                    # Add a zero count for junctions not observed in this cell
+                    if junction_index not in cell_junction_counts[cell_id]:
+                        cell_junction_counts[cell_id][junction_index] = 0
+
+                    # Add the total cluster count for this junction
+                    if junction_index not in cell_cluster_counts[cell_id]:
+                        cell_cluster_counts[cell_id][junction_index] = 0
+                    cell_cluster_counts[cell_id][junction_index] += cluster_totals[cluster_name]  # Use cluster_name here
+
+        return cell_junction_counts, cell_cluster_counts
+    else:
+        print(f"Warning: The file {junc_file} does not exist. Skipping.")
+        return {}, {}  # Return empty dictionaries if file does not exist
+
+def process_files_and_build_matrices_parallel(junction_files, relevant_junction_ids, intron_clusts, sequencing_type="smart_seq", max_workers=8):
     """
     Process junction files in parallel and build sparse matrices for cell-by-junction and cell-by-cluster data.
     """
@@ -127,6 +156,17 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     else:
         junction_files = [junction_files]
 
+    junctions = sorted(relevant_junction_ids)
+    junction_to_cluster = dict(zip(intron_clusts['junction_id'], intron_clusts['Cluster']))
+    ordered_clusters = [junction_to_cluster[junc] for junc in junctions if junc in junction_to_cluster]
+
+    junc_idx = {junction: i for i, junction in enumerate(junctions)}
+    junc_idx_flip = {i: junction for i, junction in enumerate(junctions)}
+    cluster_idx = {i: cluster for i, cluster in enumerate(ordered_clusters)}
+    cluster_idx_flip = defaultdict(list)
+    for i, cluster in enumerate(ordered_clusters):
+        cluster_idx_flip[cluster].append(i)  # Append the index to the cluster's list
+    
     # Initialize regular dictionaries
     cell_junction_counts = {}
     cell_cluster_counts = {}
@@ -135,7 +175,7 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for junc_file in junction_files:
-            futures.append(executor.submit(read_and_process_file, junc_file, relevant_junction_ids, intron_clusts, sequencing_type))
+            futures.append(executor.submit(read_and_process_file, junc_file, relevant_junction_ids, sequencing_type, junc_idx, cluster_idx, cluster_idx_flip))
         
         # Aggregate the results as they are completed
         for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Merging results"):
@@ -143,45 +183,58 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
             merge_dictionaries(cell_junction_counts, junc_counts)
             merge_dictionaries(cell_cluster_counts, clust_counts)
 
-    print(f"Building the sparse cell-by-junction counts matrix!")
+    # Remove any null entries from dictionary if there are any 
+    cell_junction_counts = {cell: junctions for cell, junctions in cell_junction_counts.items() if junctions is not None}
+    cell_cluster_counts = {cell: clusters for cell, clusters in cell_cluster_counts.items() if clusters is not None}
+    
     # Build the sparse matrix for cell-by-junction
     cells = sorted(cell_junction_counts.keys())
-    junctions = sorted(relevant_junction_ids)
-    cell_idx = {cell: i for i, cell in enumerate(cells)}
-    junc_idx = {junc: i for i, junc in enumerate(junctions)}
+    cell_idx = {i: cell for i, cell in enumerate(cells)}
 
-    rows, cols, data = [], [], []
-    for cell, juncs in cell_junction_counts.items():
-        for junc, count in juncs.items():
-            rows.append(cell_idx[cell])
-            cols.append(junc_idx[junc])
-            data.append(count)
+    # Replace keys to be cell_indices 
+    cell_id_to_index = {v: k for k, v in cell_idx.items()}
 
-    # Create the cell-by-junction sparse matrix
-    cell_by_junction_matrix = coo_matrix((data, (rows, cols)), shape=(len(cells), len(junctions)))
+    # Step 2: Replace the cell id keys with the corresponding indices
+    indexed_cell_junction_counts = {
+        cell_id_to_index[cell]: junctions for cell, junctions in cell_junction_counts.items() if cell in cell_id_to_index
+    }
 
-    print(f"Building the sparse cell-by-junction cluster counts matrix!")
-    # Now create the sparse matrix for cell-by-cluster
-    rows, cols, data = [], [], []
-    for cell, clusts in cell_cluster_counts.items():
-        for cluster, clust_count in clusts.items():
-            # Get the junctions corresponding to this cluster
-            junctions_in_cluster = intron_clusts[intron_clusts['Cluster'] == cluster]['junction_id'].values
-            
-            # For each junction in this cluster, assign the cluster count to the corresponding junction index
-            for junction_id in junctions_in_cluster:
-                if junction_id in junc_idx:  # Only add if the junction is relevant
-                    rows.append(cell_idx[cell])  # Consistent cell index
-                    cols.append(junc_idx[junction_id])  # Use junction index for this cluster
-                    data.append(clust_count)  # Add the cluster count, not the junction count
+    indexed_cell_cluster_counts = {
+        cell_id_to_index[cell]: clusters for cell, clusters in cell_cluster_counts.items() if cell in cell_id_to_index
+    }
 
-    # Create the cell-by-cluster sparse matrix, same shape as cell_by_junction_matrix
-    cell_by_cluster_matrix = coo_matrix((data, (rows, cols)), shape=(len(cells), len(junctions)))
-    print(f"Returning sparse matrices and orders of cells and junctions!")
+    # Flatten dictionaries for cell-by-junction
+    flat_cells_junc = np.array([cell for cell in indexed_cell_junction_counts for junc in indexed_cell_junction_counts[cell]])
+    flat_junctions = np.array([junc for cell in indexed_cell_junction_counts for junc in indexed_cell_junction_counts[cell]])
+    flat_counts_junc = np.array([indexed_cell_junction_counts[cell][junc] for cell in indexed_cell_junction_counts for junc in indexed_cell_junction_counts[cell]])
     
-    return cell_by_junction_matrix, cell_by_cluster_matrix, cells, junctions
+    # Build sparse matrix for cell-by-junction
+    cell_by_junction_matrix = coo_matrix((flat_counts_junc, (flat_cells_junc, flat_junctions)), shape=(len(cells), len(junc_idx)))
 
-def sanity_check(cell_by_junction_matrix, cell_by_cluster_matrix, cell_junction_counts, cell_cluster_counts, intron_clusts, cells, junctions):
+    # Step 4: Flatten dictionaries for cell-by-cluster
+    flat_cells_clust = np.array([cell for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
+    flat_clusters = np.array([clust for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
+    flat_counts_clust = np.array([indexed_cell_cluster_counts[cell][clust] for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
+
+    # Build sparse matrix for cell-by-cluster
+    cell_by_cluster_matrix = coo_matrix((flat_counts_clust, (flat_cells_clust, flat_clusters)), shape=(len(cells), len(cluster_idx)))
+
+    return cell_by_junction_matrix, cell_by_cluster_matrix, cells, junctions, cell_idx, junc_idx, cluster_idx, cluster_idx_flip
+
+def sanity_check(cell_by_junction_matrix, cell_by_cluster_matrix, cell_junction_counts, cell_cluster_counts, intron_clusts, cells, junctions, cluster_idx_flip):
+    """
+    Perform a sanity check for the given sparse matrices and the original counts.
+    
+    Parameters:
+    - cell_by_junction_matrix: The sparse matrix for cell-by-junction counts.
+    - cell_by_cluster_matrix: The sparse matrix for cell-by-cluster counts.
+    - cell_junction_counts: Dictionary with original junction counts.
+    - cell_cluster_counts: Dictionary with original cluster counts.
+    - intron_clusts: DataFrame with junction-to-cluster mappings.
+    - cells: List of cell names.
+    - junctions: List of junction indices.
+    - cluster_idx_flip: Precomputed mapping from clusters to junction indices.
+    """
     # Pick a random cell
     random_cell = random.choice(cells)
 
@@ -191,36 +244,35 @@ def sanity_check(cell_by_junction_matrix, cell_by_cluster_matrix, cell_junction_
         return
 
     # Pick a random junction from that cell
-    random_junction = random.choice(list(cell_junction_counts[random_cell].keys()))
+    random_junction_index = random.choice(list(cell_junction_counts[random_cell].keys()))
 
     # Get the row and column indices
-    cell_idx = cells.index(random_cell)
-    junc_idx = junctions.index(random_junction)
+    cell_idx_value = cells.index(random_cell)
+    junc_idx_value = random_junction_index
 
     # Extract the values from the sparse matrices
-    junction_count_matrix_value = cell_by_junction_matrix.toarray()[cell_idx, junc_idx]
-    cluster_count_matrix_value = cell_by_cluster_matrix.toarray()[cell_idx, junc_idx]
+    junction_count_matrix_value = cell_by_junction_matrix.toarray()[cell_idx_value, junc_idx_value]
+    cluster_count_matrix_value = cell_by_cluster_matrix.toarray()[cell_idx_value, junc_idx_value]
 
     # Extract the expected values from cell_junction_counts and cell_cluster_counts
-    expected_junction_count = cell_junction_counts[random_cell][random_junction]
+    expected_junction_count = cell_junction_counts[random_cell][random_junction_index]
 
     # Find the cluster corresponding to the random_junction
-    cluster = intron_clusts[intron_clusts['junction_id'] == random_junction]['Cluster'].values[0]
-    expected_cluster_count = cell_cluster_counts[random_cell][cluster]
+    cluster_name = cluster_idx_flip[random_junction_index]  # Get the cluster name using cluster_idx_flip
+    expected_cluster_count = cell_cluster_counts[random_cell][random_junction_index]  # Get the expected count
 
     # Print comparison results
-    print(f"Sanity Check for Cell: {random_cell}, Junction: {random_junction}")
+    print(f"Sanity Check for Cell: {random_cell}, Junction Index: {random_junction_index}, Cluster: {cluster_name}")
     print(f"Junction Count - Sparse Matrix: {junction_count_matrix_value}, Expected: {expected_junction_count}")
     print(f"Cluster Count  - Sparse Matrix: {cluster_count_matrix_value}, Expected: {expected_cluster_count}")
 
     # Add assert statements to ensure the values are correct
-    assert junction_count_matrix_value == expected_junction_count, "Junction counts mismatch!"
-    assert cluster_count_matrix_value == expected_cluster_count, "Cluster counts mismatch!"
+    assert junction_count_matrix_value == expected_junction_count, f"Junction counts mismatch! Got {junction_count_matrix_value}, expected {expected_junction_count}"
+    assert cluster_count_matrix_value == expected_cluster_count, f"Cluster counts mismatch! Got {cluster_count_matrix_value}, expected {expected_cluster_count}"
 
     print("Sanity check passed!")
 
-
-def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cells, junctions, metadata_subset, intron_clusts, save_file=False, prefix="ATSE_Anndata_Object"):
+def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_idx, junc_idx, metadata_subset, intron_clusts, save_file=False, prefix="ATSE_Anndata_Object"):
     """
     Create an AnnData object using the cell-by-junction and cell-by-cluster matrices,
     combined with the metadata for cells.
@@ -229,28 +281,41 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cells
     -----------
     - cell_by_junction_matrix: Sparse matrix of cells by junctions.
     - cell_by_cluster_matrix: Sparse matrix of cells by clusters.
-    - cells: List of cell IDs.
+    - cell_idx: Dictionary mapping cell indices to cell names.
+    - junc_idx: Dictionary mapping junction IDs to indices.
+    - cluster_idx_flip: Dictionary mapping cluster names to lists of junction indices.
     - metadata_subset: DataFrame with metadata for the cells.
+    - intron_clusts: DataFrame with intron cluster information.
+    - save_file: Boolean flag indicating whether to save the AnnData object.
+    - prefix: Prefix for the filename when saving the AnnData object.
     
     Returns:
     --------
     adata: AnnData object containing the junction and cluster matrices, along with cell metadata.
     """
 
-    # Convert cells to a DataFrame for joining with metadata
-    cell_df = pd.DataFrame({'cell_id': cells})
+    # Prepare cell metadata (obs)
+    cells = list(cell_idx.values())  # Get the list of cells
+    metadata_matched = metadata_subset.set_index('cell_id').reindex(cells)
 
-    # Merge cell_df with metadata to get the corresponding metadata for cells in the matrix
-    metadata_matched = pd.merge(cell_df, metadata_subset, on='cell_id', how='inner')
-    metadata_matched = metadata_matched.set_index('cell_id').reindex(cells)
+    # Add cell_id_index to metadata_matched
+    metadata_matched['cell_id_index'] = metadata_matched.index.map({v: k for k, v in cell_idx.items()})
 
-   # Prepare junction metadata (var) from intron_clusts
+    # Reset the index to make 'cell_id' a regular column
+    metadata_matched = metadata_matched.reset_index()
+
+    # Prepare junction metadata (var) from intron_clusts
     junction_var = intron_clusts[['junction_id', 'gene_id', 'num_cells_with_junc', 'total_read_counts', 
                                   'Cluster', 'Count']].copy()
     junction_var.rename(columns={'Count': 'CountJuncs'}, inplace=True)
 
     # Reorder the junction metadata to match the order of relevant_junction_ids in cell_by_junction_matrix
+    junctions = list(junc_idx.keys())  # Use the junction IDs in order
     junction_var = junction_var.set_index('junction_id').reindex(junctions)
+
+    # Add junction_id_index to junction_var
+    junction_var = junction_var.reset_index()
+    junction_var['junction_id_index'] = junction_var['junction_id'].map(junc_idx)
 
     # Create the AnnData object
     adata = ad.AnnData(X=cell_by_junction_matrix, 
@@ -259,9 +324,13 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cells
 
     # Add cell-by-cluster matrix as a layer in the AnnData object
     adata.layers["cell_by_junction_matrix"] = cell_by_junction_matrix.tocsr()  
-    adata.layers["cell_by_cluster"] = cell_by_cluster_matrix.tocsr()  
+    adata.layers["cell_by_cluster_matrix"] = cell_by_cluster_matrix.tocsr()  
     
-    # Convert the COO matrix to CSR format since COO can't be used when saving Anndata file 
+    # Ensure cell_id and junction_id are of type string
+    metadata_matched.index = metadata_matched.index.astype(str)
+    junction_var['junction_id'] = junction_var['junction_id'].astype(str)
+
+    # Convert the COO matrix to CSR format since COO can't be used when saving AnnData file 
     adata.X = adata.X.tocsr()  
 
     if save_file:
@@ -269,8 +338,9 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cells
         adata_path = f"{prefix}_{current_time}.h5ad"
         # Save the AnnData object to the h5ad file with gzip compression
         adata.write_h5ad(adata_path, compression='gzip')
+        print(f"AnnData object saved as {adata_path}")
     
     else: 
         return adata
     
-    print(f"Done generating splicing Anndata Object!")
+    print(f"Done generating splicing AnnData Object!")

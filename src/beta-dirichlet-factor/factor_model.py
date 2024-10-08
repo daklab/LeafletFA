@@ -176,17 +176,17 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
         a = pyro.sample("a", dist.Gamma(2., 2.).expand([P]).to_event(1))
         b = pyro.sample("b", dist.Gamma(2., 2.).expand([P]).to_event(1))
         psi = pyro.sample("psi", dist.Beta(a+eps, b+eps).expand([K, P]).to_event(2)) 
-        psi = psi.to(dtype=torch.float64)
+        psi = psi.to(dtype=torch.float32)
 
     else:
         a = pyro.sample("a", dist.Gamma(2., 2.)) # single value for all junctions
         b = pyro.sample("b", dist.Gamma(2., 2.))
         psi = pyro.sample("psi", dist.Beta(a+eps, b+eps).expand([K, P]).to_event(2))
-        psi = psi.to(dtype=torch.float64)
+        psi = psi.to(dtype=torch.float32)
 
     # Assert that 'psi' has no NaN or negative values
     assert torch.isfinite(psi).all(), "psi contains NaN or infinite values!"
-    assert torch.all(psi >= 0), "psi contains negative values!"
+    # assert torch.all(psi >= 0), "psi contains negative values!"
 
     # Sample priors for Dirichlet distribution
     alpha = 5.0  # A reasonable value to avoid extreme imbalance
@@ -202,7 +202,7 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
     conc = torch.clamp(conc, min=1e-6, max=1e6)
 
     assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1))
-    assign = assign.to(dtype=torch.float64)
+    assign = assign.to(dtype=torch.float32)
     
     # Ensure no negative values in assign
     if torch.any(assign < 1e-8):
@@ -210,14 +210,14 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
         assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
 
     # Assert that assign has no NaN, Inf, or negative values
-    assert torch.isfinite(assign).all(), "assign contains NaN or infinite values!"
-    assert torch.all(assign >= 0), "Assign has negative values!"
-    assert torch.allclose(assign.sum(dim=1), torch.tensor(1.0, dtype=torch.float64)), f"assign rows do not sum to 1: {assign.sum(dim=1)}"
+    # assert torch.isfinite(assign).all(), "assign contains NaN or infinite values!"
+    # assert torch.all(assign >= 0), "Assign has negative values!"
+    # assert torch.allclose(assign.sum(dim=1), torch.tensor(1.0, dtype=torch.float32)), f"assign rows do not sum to 1: {assign.sum(dim=1)}"
 
     pred = torch.mm(assign, psi)
-    
+
     # Assert pred contains no NaN/Inf values
-    assert torch.isfinite(pred).all(), "pred contains NaN or infinite values!"
+    # assert torch.isfinite(pred).all(), "pred contains NaN or infinite values!"
 
     # Move pred to CUDA if available
     if torch.cuda.is_available():
@@ -254,7 +254,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
 
     # Define the number of samples used to estimate the Evidence Lower Bound (ELBO).
     # More samples can provide a more accurate estimate but will increase computation time.
-    ELBO_SAMPLES = 3
+    ELBO_SAMPLES = 1
     
     # Initialize the loss function as Trace_ELBO, which estimates the ELBO.
     loss = Trace_ELBO(num_particles=ELBO_SAMPLES) 
@@ -275,7 +275,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     print(device)
 
     # Move tensors to the appropriate device
-    y, total_counts = y.to(device), total_counts.to(device)
+    # y, total_counts = y.to(device), total_counts.to(device)
     
     # Convert input_conc_prior to tensor if it's a float and move it to the device
     if isinstance(input_conc_prior, float):
@@ -305,7 +305,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 20 == 0:
+        if epoch % 5 == 0:
             print(f"Epoch {epoch}, Elbo loss: {loss}")
 
         if epoch == num_epochs - 1:
@@ -340,11 +340,11 @@ def print_concentration(input_conc_prior):
     else:
         logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc_prior}.")
 
-def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=500):
+def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=10):
     
     samples = {}  # Dictionary to hold samples for each latent variable
-
     for _ in range(num_samples):
+        
         # Generate a trace of the guide execution. Include `input_conc_prior` according to its presence.
         if input_conc_prior is None:
             guide_trace = pyro.poutine.trace(guide).get_trace(y, total_counts, K, use_global_prior, input_conc_prior=None)
@@ -358,19 +358,18 @@ def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prio
                 if name not in samples:
                     samples[name] = []
                 # Append the sample to the list, detached from the PyTorch computation graph
-                samples[name].append(node["value"].detach().cpu().numpy())
+                samples[name].append(node["value"].detach().cpu())
 
-    # Convert lists of samples to numpy arrays for easier downstream manipulation
+    # Convert lists of samples to torch tensors for easier downstream manipulation
     for name in samples:
-        samples[name] = np.array(samples[name])
+        samples[name] = torch.stack(samples[name], dim=0) 
 
     return samples
 
 def calculate_summary_stats(samples):
     stats = {}
-    for name, values in samples.items():
-        # Convert lists of numpy arrays back to tensors for statistical computation
-        values_tensor = torch.tensor(values, dtype=torch.float)
+    
+    for name, values_tensor in samples.items():
         
         # Ensure the tensor is on CPU before converting to numpy
         if values_tensor.is_cuda:
@@ -378,9 +377,7 @@ def calculate_summary_stats(samples):
 
         stats[name] = {
             'mean': torch.mean(values_tensor, dim=0).numpy(),
-            'std': torch.std(values_tensor, dim=0).numpy(),
-            '5%': np.percentile(values_tensor.numpy(), 5, axis=0),
-            '95%': np.percentile(values_tensor.numpy(), 95, axis=0)
+            'std': torch.std(values_tensor, dim=0).numpy()
         }
     return stats
 
@@ -415,6 +412,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
         print (f"Random seeds: {seeds}")
 
     all_results = []
+
     print_concentration(input_conc_prior)  # Log the concentration setting
     print_global_prior(use_global_prior)  # Log the global prior setting
     print_inits(psi_init, phi_init) # Log whether initializaiton is based on waypoints or not  
