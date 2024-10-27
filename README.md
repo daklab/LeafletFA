@@ -1,4 +1,4 @@
-# Leaflet-FA
+# LeafletFA
 A probabilistic factor model for learning RNA splicing driven cell states in single cell RNA-seq data 
 
 ### An overview of the input and model is shown below:
