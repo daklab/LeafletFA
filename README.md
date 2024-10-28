@@ -27,4 +27,4 @@ The parameters of this model are:
 - **$\pi$**: Defines how much each factor contributes to the entire population of cells.
 
 ### Contact
-If you have any questions please submit an issue or email me at kisaev[@]nygc.org. 
+If you have any questions, please feel free to [submit an issue](https://github.com/daklab/LeafletFA/issues) or email me at `kisaev[@]nygc.org`.
