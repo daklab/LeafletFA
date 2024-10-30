@@ -98,13 +98,13 @@ def convert_junction_ids(df):
     return splice_junctions
 
 # Function to plot exons, CDS, and splice junctions with dynamic figure sizing
-def plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start, region_end, base_width=8, show_junc_lines=True, junc_color="grey", filename="plot.pdf"):
+def plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start, region_end, base_width=8, trans_height=0.5, show_junc_lines=True, junc_color="grey", filename="plot.pdf"):
 
     # Calculate height based on the number of transcripts and junctions
     num_transcripts = sum(len(transcripts) for transcripts in transcript_data.values())
     num_junctions = len(splice_junctions)
     base_height = 1  # Minimum height to start with
-    height_per_transcript = 0.05
+    height_per_transcript = trans_height
     height_per_junction = 0.05
 
     # Calculate dynamic height with some buffer space
