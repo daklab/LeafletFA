@@ -10,9 +10,6 @@ import sys
 import pdb
 import scipy.sparse as sp
 
-sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/clustering/')
-import load_cluster_data as llc 
-
 # write function that takes in Cluster name 
 def check_SS_cluster(juncs_c):
         
@@ -59,7 +56,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     print(f"The proportion of negative ASEs to set is: {proportion_negative}")
 
     # Get the cluster counts matrix
-    cluster_counts = adata_input.layers["Cluster_Counts"]
+    cluster_counts = adata_input.layers["cell_by_cluster_matrix"]
     N, P = cluster_counts.shape  # number of cells, number of junctions
     
     print("The number of cell types is:", K)
@@ -151,6 +148,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     
     # Simulate junction counts using a binomial distribution
     sim_junc_counts = cluster_counts_coo.copy() 
+    
     # Simulate junction counts using a binomial distribution
     sim_junc_counts.data = torch.distributions.binomial.Binomial(
         total_count=torch.tensor(cluster_counts_coo.data), 
@@ -160,8 +158,33 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
         ]
     ).sample().cpu().numpy()  # Ensure compatibility with numpy
 
+    # Group by cluster and normalize junction counts within each cell-cluster pair
+    cluster_info = adata_input.var[["Cluster", "junction_id_index"]]
+
+    for cluster_id in tqdm(cluster_info["Cluster"].unique(), desc="Processing clusters"):
+        # Get the junction indices for this cluster
+        junction_indices = cluster_info[cluster_info["Cluster"] == cluster_id]["junction_id_index"].values
+
+        # Create a mask for the current cluster based on the junction indices
+        cluster_mask = np.isin(cluster_counts_coo.col, junction_indices)
+
+        # Get the rows (cells) and columns (junctions) for this cluster
+        relevant_rows = cluster_counts_coo.row[cluster_mask]
+        relevant_cols = cluster_counts_coo.col[cluster_mask]
+    
+        # Get the simulated junction counts for these cell-cluster combinations
+        junction_counts = sim_junc_counts.data[cluster_mask]
+
+        # Compute the new cluster counts by summing the simulated junction counts for each cell
+        new_cluster_counts = np.bincount(relevant_rows, weights=junction_counts, minlength=cluster_counts_coo.shape[0])
+
+        # Update the cluster counts (in the sparse matrix) to the new sums
+        cluster_counts_coo.data[cluster_mask] = new_cluster_counts[relevant_rows]
+
+    print("Done normalizing junction counts by cluster!")
     print("Done simulating junction counts!")       
-    return sim_junc_counts, cell_type_psi_df
+        
+    return sim_junc_counts, cluster_counts_coo, cell_type_psi_df
 
 def quick_clust_plot(clust, adata_input):
 
@@ -215,16 +238,16 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     adata_input.var.loc[:, "start"] = adata_input.var["junction_id"].str.split("_").str[1]
     adata_input.var.loc[:, "end"] = adata_input.var["junction_id"].str.split("_").str[2]
 
-    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
-    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+    print(f"Cluster_Counts nnz: {adata_input.layers['cell_by_cluster_matrix'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['cell_by_junction_matrix'].count_nonzero()}")
 
    # Reset the junction_id_index column to maintain consistency
     print(f"The number of unique junctions included in the simulation data is: {len(adata_input.var.junction_id.unique())}")
     print(f"The number of unique clusters included in the simulation data is: {len(adata_input.var.Cluster.unique())}")
 
     # Reset the junction_id_index column to match new reset index order 
-    adata_input.var["junction_id_index"] = range(len(adata_input.var))
     adata_input.var.reset_index(drop=True, inplace=True)
+    adata_input.var["junction_id_index"] = range(len(adata_input.var))
 
     clusters_SS = []
 
@@ -240,8 +263,8 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     adata_input.var["junction_id_index"] = range(len(adata_input.var))
     adata_input.var.reset_index(drop=True, inplace=True)
 
-    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
-    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+    print(f"Cluster_Counts nnz: {adata_input.layers['cell_by_cluster_matrix'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['cell_by_junction_matrix'].count_nonzero()}")
 
     # Check if the cell_type_column exists in adata_input
     if cell_type_column in adata_input.obs.columns:
@@ -256,7 +279,7 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
         adata_input.obs["cell_type"] = adata_input.obs["cell_type"].astype("category")
 
     # Simulate junction counts!!! 
-    sim_junc_counts, cell_type_psi_df = simulate_junc_counts(adata_input, proportion_negative = proportion_negative)
+    sim_junc_counts, sim_cluster_counts, cell_type_psi_df = simulate_junc_counts(adata_input, proportion_negative = proportion_negative)
     
     if K == 2:
         # Calculate the absolute difference between two cell types
@@ -283,32 +306,67 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     print("True label counts:\n", cell_type_psi_df["true_label"].value_counts())
     print("Sample label counts:\n", cell_type_psi_df["sample_label"].value_counts())
 
-    adata_input.layers["Cluster_Counts"] = coo_matrix(adata_input.layers["Cluster_Counts"])
-
     # Remove Junction_Counts and remake it using simulated junction counts
-    del adata_input.layers["Junction_Counts"]
+    del adata_input.layers["cell_by_junction_matrix"]
+    del adata_input.layers["cell_by_cluster_matrix"]
 
-    adata_input.layers["Junction_Counts"]  = coo_matrix(sim_junc_counts)
-    adata_input.layers["junc_ratio"] = adata_input.layers["Junction_Counts"] / adata_input.layers["Cluster_Counts"]
+    adata_input.layers["cell_by_junction_matrix"]  = coo_matrix(sim_junc_counts)
+    adata_input.layers["cell_by_cluster_matrix"]  = coo_matrix(sim_cluster_counts)
+
+    adata_input.layers["junc_ratio"] = adata_input.layers["cell_by_junction_matrix"] / adata_input.layers["cell_by_cluster_matrix"]
+    
     cell_type_psi_df.reset_index(inplace=True)
 
-    print(f"Cluster_Counts nnz: {adata_input.layers['Cluster_Counts'].count_nonzero()}")
-    print(f"Junction_Counts nnz: {adata_input.layers['Junction_Counts'].count_nonzero()}")
+    print(f"Cluster_Counts nnz: {adata_input.layers['cell_by_cluster_matrix'].count_nonzero()}")
+    print(f"Junction_Counts nnz: {adata_input.layers['cell_by_junction_matrix'].count_nonzero()}")
 
     # Add junction and cluster info to adata.var 
     common_columns = adata_input.var.columns.intersection(cell_type_psi_df.columns)
+    
     adata_input.var = pd.merge(
         adata_input.var,
         cell_type_psi_df,
         on=common_columns.tolist())    
 
+    # Make input for model 
+    device = float_type["device"]
+
+    # Extract cell indices and junction indices from the sparse junction layer
+    cell_index_array = np.array(adata_input.layers["cell_by_junction_matrix"].row)
+    junc_index_array = np.array(adata_input.layers["cell_by_junction_matrix"].col)
+
+    # Convert the row and col of the sparse matrix to torch tensors
+    cell_index_tensor = torch.tensor(cell_index_array, dtype=torch.int32, device=device)
+    junc_index_tensor = torch.tensor(junc_index_array, dtype=torch.int32, device=device)
+
+    # Convert the data of the sparse matrix to torch tensor
+    ycount_array = np.array(adata_input.layers["cell_by_junction_matrix"].data)
+    ycount = torch.tensor(ycount_array, **float_type)
+
+    # Create the ycount sparse matrix (Junction counts)
+    ycount_lookup = torch.sparse_coo_tensor(
+            indices=torch.stack([cell_index_tensor, junc_index_tensor]), 
+            values=ycount,
+            size=(len(adata_input.obs), len(adata_input.var))
+            ).to_sparse_csr()
+
+    # Extract the cluster layer (total counts)
+    coo2 = adata_input.layers["cell_by_cluster_matrix"]
+    total_counts_tensor = torch.tensor(coo2.data, **float_type)
+
+    # Create the tcount sparse matrix (Total counts)
+    tcount_lookup = torch.sparse_coo_tensor(
+            indices=torch.stack([cell_index_tensor, junc_index_tensor]), 
+            values=total_counts_tensor,
+            size=(len(adata_input.obs), len(adata_input.var))
+        ).to_sparse_csr()
+
+    # Convert sparse matrices to COO format, ensure they are on the GPU, and follow the specified float type
+    full_y_tensor = ycount_lookup.to_sparse_coo()
+    full_total_counts_tensor = tcount_lookup.to_sparse_coo()
+
     print("Data successfully simulated and prepared!")
+    return full_y_tensor, full_total_counts_tensor, adata_input 
 
-    # Prepare tensors for the model
-    if gen_model_input:
-        cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(adata_input, **float_type)
-        return my_data, adata_input
 
-    else:
-        return adata_input
     

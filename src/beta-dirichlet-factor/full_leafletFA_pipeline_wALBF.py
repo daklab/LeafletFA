@@ -1,21 +1,29 @@
 import argparse
 import pickle
 
-# Argument parser
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Run differential splicing analysis.')
+
+    # Required arguments
     parser.add_argument('--input_path', type=str, required=True, help='Path to the input .h5ad file.')
+    parser.add_argument('--ATSE_file', type=str, help='File containing ATSE annotations from the previous Leaflet processing step.')
+
+    # Optional arguments with default values
     parser.add_argument('--cell_type_column', type=str, default=None, help='Column name for cell types in the AnnData object.')
     parser.add_argument('--K_use', type=int, default=3, help='Number of clusters to use if cell_type_column is None.')
-    parser.add_argument('--use_global_prior', action='store_true', help='Whether to use global prior in the factor model.')
     parser.add_argument('--input_conc_prior', type=str, default="inf", help='Input concentration prior value for the factor model.')
     parser.add_argument('--num_inits', type=int, default=3, help='Number of times to randomly initialize our factor model.')
     parser.add_argument('--num_epochs', type=int, default=100, help='Number of epochs to run model training.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate for the model training.')
-    parser.add_argument('--ATSE_file', type=str, help='File containing ATSE annotations from the previous Leaflet processing step.')
-    parser.add_argument('--run_NMF', action='store_false', help='Indicate whether NMF should *not* be run as a baseline.')
-    parser.add_argument('--waypoints_use', action='store_true', help="Indicate whether the factor model should be initialized with predefined matrices.")
+
+    # Boolean flags (default False, set to True when provided)
+    parser.add_argument('--use_global_prior', action='store_true', help='Whether to use junctin specific priors in the factor model (default: False).')
+    parser.add_argument('--waypoints_use', action='store_true', help="Indicate whether the factor model should be initialized with predefined matrices (default: False).")
+    parser.add_argument('--brain_only', action='store_true', help="Indicate whether the model will be run only on brain data (default: False).")
+    parser.add_argument('--run_NMF', action='store_true', help='Indicate whether NMF should be run as a baseline (default: False).')
+
     return parser.parse_args()
+
 
 import sys
 import os
@@ -94,7 +102,7 @@ def save_results_dataframe(output_dir, results):
     results_df.to_csv(os.path.join(output_dir, 'analysis_results.csv'), index=False)
     print(f"Results saved to {output_dir}/analysis_results.csv")
 
-def run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, num_inits=3, num_epochs=100, lr=0.1):
+def run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits=3, num_epochs=100, lr=0.1):
     """Runs the factor model with specified parameters, including the learning rate."""
     
     print(f"Running on device: {device}")
@@ -145,7 +153,8 @@ def run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, de
             input_conc_prior=input_conc, 
             loss_plot=True, 
             num_epochs=num_epochs, 
-            save_to_file=False
+            save_to_file=False, 
+            output_dir=output_dir
         )
 
         all_results.append(result)
@@ -486,7 +495,7 @@ def plot_umap_by_category(umap_coords, adata, category, output_dir, title, filen
     plt.close()
     print(f"Saved UMAP plot colored by {category} to {plot_path}")
 
-def prune_factors(pi, assign_post, psis_mus, psis_loc, psi_learned, threshold=0.01):
+def prune_factors(pi, assign_post, psis_mus, psis_loc, psi_learned, threshold=0.005):
     """
     Prunes the latent variables based on the threshold for pi and renormalizes assign_post.
     """
@@ -531,21 +540,18 @@ def multinomial_logistic_regression(adata_input, assign_post, K, output_dir, fea
     # Combine latent factors with adata.obs
     data_combined = pd.concat([adata_input.obs.reset_index(drop=True), latent_df], axis=1)
 
-    # Select relevant features for regression (modify as needed)
-    features = ['age', 'cell_ontology_class', 'mouse.id', 'sex', 'subtissue', 'tissue', 'cell_type_grouped']
+    # Set up data for regression model
     latent_factors = [f'Factor_{i}' for i in range(0, K)]
-
-    # Set up data for regression model 
     X = data_combined[latent_factors]
 
-    # Encode the target variable (e.g., 'age')
+    # Encode the target variable (e.g., 'sex', 'age')
     label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(data_combined[feature])  # Encode target feature to integers
+    y_encoded = label_encoder.fit_transform(data_combined[feature])
 
     # Split the data into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
 
-    # Train a multinomial logistic regression model
+    # Train a multinomial (or binary) logistic regression model
     logreg = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)
     logreg.fit(X_train, y_train)
 
@@ -557,18 +563,22 @@ def multinomial_logistic_regression(adata_input, assign_post, K, output_dir, fea
     # Train the model on the full dataset for coefficient analysis
     logreg.fit(X, y_encoded)
 
-    # Extract the coefficients for the latent factors
-    coefficients = pd.DataFrame(logreg.coef_, columns=latent_factors, index=label_encoder.classes_)
+    # Handle binary classification (e.g., 'sex') with special case
+    if len(label_encoder.classes_) == 2:
+        # Binary classification: Logistic regression gives one set of coefficients
+        coefficients = pd.DataFrame(logreg.coef_, columns=latent_factors)
+        coefficients.index = [f'Class: {label_encoder.classes_[1]} vs {label_encoder.classes_[0]}']
+    else:
+        # Multiclass case: One set of coefficients for each class
+        coefficients = pd.DataFrame(logreg.coef_, columns=latent_factors, index=label_encoder.classes_)
+        # Create a clustermap of the coefficients and save it as a figure
+        sns.clustermap(coefficients, cmap="viridis", annot=False, fmt=".2f", figsize=(12, 10))
 
-    # Create a clustermap of the coefficients and save it as a figure
-    plt.figure(figsize=(10, 8))
-    sns.clustermap(coefficients, cmap="viridis", annot=False, fmt=".2f", figsize=(12, 10))
-    
-    # Save the figure to the output directory
-    plot_filename = os.path.join(output_dir, f'multinomial_logreg_{feature}_coefficients.png')
-    plt.savefig(plot_filename)
-    plt.close()
-    print(f"Clustermap saved to {plot_filename}")
+        # Save the figure to the output directory
+        plot_filename = os.path.join(output_dir, f'multinomial_logreg_{feature}_coefficients.png')
+        plt.savefig(plot_filename)
+        plt.close()
+        print(f"Clustermap saved to {plot_filename}")
 
     # Return accuracy score for logging or saving
     return accuracy
@@ -595,11 +605,24 @@ def main():
     ATSE_file = args.ATSE_file 
     run_NMF = args.run_NMF
     waypoints_use = args.waypoints_use
+    brain_only = args.brain_only
 
     # Read in the intron cluster file 
     print("Reading in obtained intron cluster (ATSE file!)")
     intron_clusts = pd.read_csv(ATSE_file, sep="}")
-    genes = intron_clusts[["gene_id", "gene_name"]].drop_duplicates()
+
+    # Ensure columns are present before proceeding
+    if "gene_id" in intron_clusts.columns and "gene_name" in intron_clusts.columns:
+        # Drop duplicates to create a unique list of genes
+        genes = intron_clusts[["gene_id", "gene_name"]].drop_duplicates()
+    else:
+        print("Error: 'gene_id' or 'gene_name' column not found in ATSE file.")
+        genes = pd.DataFrame()  # Empty DataFrame as fallback
+
+    if brain_only:
+        print(f"Running model only on brain cells!")
+    else:
+        print(f"Running on all tissues!")
 
     # Prepare the output directory with timestamp
     output_dir = prepare_output_directory(K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column, waypoints_use)
@@ -608,16 +631,27 @@ def main():
     # Load data and set K
     log_to_report(report_file, f"Loading anndata file from {input_path}")
     adata = load_adata(input_path)
-    adata.var = pd.merge(adata.var, genes[['gene_id', 'gene_name']], how='left', on='gene_id')
+
+    if "gene_id" in intron_clusts.columns and "gene_name" in intron_clusts.columns:
+        adata.var = pd.merge(adata.var, genes[['gene_id', 'gene_name']], how='left', on='gene_id')
 
     # Load sparse tensor model input files (need to improve this input processing)
-    # Define the paths to the saved tensor files
     log_to_report(report_file, f"Loading sparse torch tensors as inputs to the model!")
-    path_tosaveto = '/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/'
-    full_y_tensor_filename = 'full_y_tensor.pt'
-    full_total_counts_tensor_filename = 'full_total_counts_tensor.pt'
 
-    # Full paths to tensor files
+    # Define the path to save/load tensor files
+    path_tosaveto = '/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/'
+
+    # Determine which file names to use based on brain_only flag
+    if brain_only:
+        full_y_tensor_filename = 'full_y_tensor_brain_only.pt'
+        full_total_counts_tensor_filename = 'full_total_counts_tensor_brain_only.pt'
+    else:
+        full_y_tensor_filename = 'full_y_tensor.pt'
+        full_total_counts_tensor_filename = 'full_total_counts_tensor.pt'
+
+    print(f"Using {full_y_tensor_filename} and {full_total_counts_tensor_filename} !")
+
+    # Full paths to the tensor files
     full_y_tensor_path = os.path.join(path_tosaveto, full_y_tensor_filename)
     full_total_counts_tensor_path = os.path.join(path_tosaveto, full_total_counts_tensor_filename)
 
@@ -636,7 +670,7 @@ def main():
 
     # Run the factor model
     log_to_report(report_file, f"Running factor model with K = {K}!")
-    all_results, all_params = run_factor_model(adata, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, num_inits, num_epochs, lr)
+    all_results, all_params = run_factor_model(adata, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits, num_epochs, lr)
     save_plots(output_dir, all_results, report_file)
 
     # Calculate and plot correlations of assignment matrices
@@ -657,14 +691,16 @@ def main():
     a=latent_vars["a"]["mean"]
     b=latent_vars["b"]["mean"]
 
+    input_conc_provided = input_conc
+
     # If input_conc was None extract it from latent variables 
-    if input_conc == None:
+    if input_conc is None:
         input_conc = latent_vars["bb_conc"]["mean"]
     else:
         input_conc = "infinity"
 
     log_to_report(report_file, f"Prunning factors!")
-    pruned_pi, pruned_assign_post, pruned_psis_mus, pruned_psis_loc, pruned_psi_learned = prune_factors(pi, assign_post, psis_mus, psis_loc, psi_learned, threshold=0.01)
+    pruned_pi, pruned_assign_post, pruned_psis_mus, pruned_psis_loc, pruned_psi_learned = prune_factors(pi, assign_post, psis_mus, psis_loc, psi_learned, threshold=0.005)
     new_K = len(pruned_pi)
 
     # Look at cell-level entropies based on latent assignments 
@@ -693,19 +729,32 @@ def main():
     print(silhouette_avg, dbi)
 
     plot_umap_by_category(embedding, adata, "cell_type_grouped", output_dir, "UMAP colored by cell_type_grouped", "umap_cell_type_grouped.png")
-    plot_umap_by_category(embedding, adata, "subtissue", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
+    plot_umap_by_category(embedding, adata, "subtissue_clean", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
     plot_umap_by_category(embedding, adata, "age", output_dir, "UMAP colored by Age", "umap_age.png")
+    plot_umap_by_category(embedding, adata, "mouse.id", output_dir, "UMAP colored by Mouse ID", "umap_mouse.png")
+    plot_umap_by_category(embedding, adata, "sex", output_dir, "UMAP colored by sex", "sex_mouse.png")
 
     log_to_report(report_file, "Running multinomial logistic regression using learned PHI and known cell annotations.")
     age_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'age')
+    
     # Log accuracy or save it to a file
     print(f"Multinomial Logistic Regression Accuracy: {age_accuracy}")
-    subtissue_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'subtissue')
+    subtissue_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'subtissue_clean')
+    
     # Log accuracy or save it to a file
     print(f"Multinomial Logistic Regression Accuracy: {subtissue_accuracy}")
     cell_type_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'cell_ontology_class')
+    
     # Log accuracy or save it to a file
     print(f"Multinomial Logistic Regression Accuracy: {cell_type_accuracy}")
+    
+    # Perform logistic regression for mouse.id
+    mouse_id_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'mouse.id')
+    print(f"Multinomial Logistic Regression Accuracy for Mouse ID: {mouse_id_accuracy}")
+
+    # Perform logistic regression for sex
+    sex_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'sex')
+    print(f"Multinomial Logistic Regression Accuracy for Sex: {sex_accuracy}")
 
     # Get silhouette score from NMF 
     # silhouette_NMF = get_NMF(adata, K=K, output_dir=output_dir)
@@ -720,8 +769,8 @@ def main():
     columns = [
         "K", "new_K", "use_global_prior", "learning_rate", 
         "avg_corr", "median_corr", "min_corr", 
-        "silhouette_avg", "dbi", "cell_type_column", "silhouette_NMF", "input_conc", 
-        "best_elbo", "cell_type_accuracy", "subtissue_accuracy", "age_accuracy", "wayp", 
+        "silhouette_avg", "dbi", "cell_type_column", "silhouette_NMF", "learned_conc", "input_conc_provided", 
+        "best_elbo", "cell_type_accuracy", "subtissue_accuracy", "age_accuracy", "mouse_id_accuracy", "sex_accuracy", "wayp", 
         "mean_cell_entropy", "overall_cell_total_entropy"]
 
     if cell_type_column == None:
@@ -731,8 +780,8 @@ def main():
     results_df = pd.DataFrame([[
         K, new_K, use_global_prior, lr, 
         avg_corr, median_corr, min_corr, 
-        silhouette_avg, dbi, cell_type_column, silhouette_NMF, input_conc, best_elbo, 
-        cell_type_accuracy, subtissue_accuracy, age_accuracy, wayp, 
+        silhouette_avg, dbi, cell_type_column, silhouette_NMF, input_conc, input_conc_provided, best_elbo, 
+        cell_type_accuracy, subtissue_accuracy, age_accuracy, mouse_id_accuracy, sex_accuracy, wayp, 
         mean_entropy, overall_total_entropy
     ]], columns=columns)
 
@@ -745,6 +794,21 @@ def main():
     with open(latent_vars_output_path, "wb") as f:
         pickle.dump(latent_vars, f)
     log_to_report(report_file, f"Latent variables saved to {latent_vars_output_path}")
+    
+    # Save pruned latent variables 
+    pruned_latent_variables = {
+        "pruned_pi": pruned_pi,
+        "pruned_assign_post": pruned_assign_post,
+        "pruned_psis_mus": pruned_psis_mus,
+        "pruned_psis_loc": pruned_psis_loc,
+        "pruned_psi_learned": pruned_psi_learned,
+        "new_K": new_K}
+    
+    latent_vars_output_path = os.path.join(output_dir, "pruned_latent_vars.pkl")
+    with open(latent_vars_output_path, "wb") as f:
+        pickle.dump(pruned_latent_variables, f)
+    log_to_report(report_file, f"Pruned latent variables saved to {latent_vars_output_path}")
+
     print(f"Results saved to {results_path}")
 
     report_file.close()

@@ -1,24 +1,57 @@
-# Core libraries
-import os
-import sys
-import json
-from datetime import datetime
-import anndata as ad
+import argparse
+import pickle
 
-# Scientific computing libraries
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Run differential splicing analysis.')
+
+    # Required arguments
+    parser.add_argument('--input_path', type=str, required=True, help='Path to the input .h5ad file.')
+    parser.add_argument('--ATSE_file', type=str, help='File containing ATSE annotations from the previous Leaflet processing step.')
+
+    # Optional arguments with default values
+    parser.add_argument('--cell_type_column', type=str, default=None, help='Column name for cell types in the AnnData object.')
+    parser.add_argument('--K_use', type=int, default=3, help='Number of clusters to use if cell_type_column is None.')
+    parser.add_argument('--input_conc_prior', type=str, default="inf", help='Input concentration prior value for the factor model.')
+    parser.add_argument('--num_inits', type=int, default=3, help='Number of times to randomly initialize our factor model.')
+    parser.add_argument('--num_epochs', type=int, default=100, help='Number of epochs to run model training.')
+    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate for the model training.')
+
+    # Boolean flags (default False, set to True when provided)
+    parser.add_argument('--use_global_prior', action='store_true', help='Whether to use junctin specific priors in the factor model (default: False).')
+    parser.add_argument('--waypoints_use', action='store_true', help="Indicate whether the factor model should be initialized with predefined matrices (default: False).")
+    parser.add_argument('--brain_only', action='store_true', help="Indicate whether the model will be run only on brain data (default: False).")
+    parser.add_argument('--run_NMF', action='store_true', help='Indicate whether NMF should be run as a baseline (default: False).')
+    parser.add_argument('--mask_perc', type=float, default=0.1, help='Percentage of data (nonzero cluster counts) to mask.')
+
+    return parser.parse_args()
+
+
+import sys
+import os
+import json
 import numpy as np
 import torch
-import scipy.sparse as sp
-import scipy.stats
-from scipy.stats import binom
-
-# Single-cell data manipulation
-import anndata
-
-# Pyro for probabilistic modeling
-import pyro
-import pyro.distributions as dist
-
+import anndata as ad
+from importlib import reload
+from datetime import datetime
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import pandas as pd
+from sklearn.metrics import roc_auc_score, accuracy_score
+import pyro 
+import umap.umap_ as umap
+import matplotlib.patches as mpatches
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score
+import scipy.sparse
+from scipy.sparse import csr_matrix
+from scipy.sparse import coo_matrix
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import silhouette_score, davies_bouldin_score
+from scipy.stats import entropy
 # Machine learning libraries
 from sklearn.decomposition import NMF, MiniBatchNMF
 from sklearn.metrics import (
@@ -26,53 +59,17 @@ from sklearn.metrics import (
     confusion_matrix, silhouette_score, roc_curve
 )
 
-# Visualization libraries
-import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import umap.umap_ as umap
-
-# Progress bar utility
-from tqdm import tqdm
-
-# Data handling
-import pandas as pd
-
-# Argument parsing
-import argparse
-
 # Import custom modules
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/beta-dirichlet-factor')
 import factor_model
-
-sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/clustering/')
-import load_cluster_data as llc 
-
-sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/")
-import simulate_counts as sim 
-
-sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/visualization/")
-import vis as vis
+reload(factor_model)
 
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/evaluations/')
 import cost_correlation_assign
 import differential_splicing
 import masking_BBFactor as mask 
-from scipy.sparse import csr_matrix
 
-# Argument parser
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Run differential splicing analysis.')
-    parser.add_argument('--input_path', type=str, required=True, help='Path to the input .h5ad file.')
-    parser.add_argument('--cell_type_column', type=str, default=None, help='Column name for cell types in the AnnData object.')
-    parser.add_argument('--K_use', type=int, default=3, help='Number of clusters to use if cell_type_column is None.')
-    parser.add_argument('--use_global_prior', action='store_true', help='Whether to use global prior in the factor model.')
-    parser.add_argument('--input_conc_prior', type=str, default="inf", help='Input concentration prior value for the factor model.')
-    parser.add_argument('--num_inits', type=int, default=3, help='Number of times to randomly initialize our factor model.')
-    parser.add_argument('--num_epochs', type=int, default=100, help='Number of epochs to run model training.')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate for the model training.')
-    parser.add_argument('--mask_perc', type=float, default=0.1, help='Percentage of data (nonzero cluster counts) to mask.')
-    return parser.parse_args()
+import scipy.sparse as sp 
 
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -88,7 +85,9 @@ def generate_mask(adata, layer_key="Cluster_Counts", mask_percentage=0.1, seed=4
 
     # Set seed for reproducibility
     seed = np.random.randint(0, 1000000) if randomize_seed else seed
-    np.random.seed(seed)
+    
+    #np.random.seed(seed)
+    
     torch.manual_seed(seed)
 
     # Extract the intron cluster layer (must be sparse)
@@ -149,7 +148,7 @@ def apply_mask_to_anndata(adata, mask, cluster_layer="Cluster_Counts", junction_
     masked_junction_counts_sparse = sp.csr_matrix(masked_junction_counts)
 
     # Create a new AnnData object with masked data
-    new_adata = anndata.AnnData(X=adata.X, obs=adata.obs, var=adata.var)
+    new_adata = ad.AnnData(X=adata.X, obs=adata.obs, var=adata.var)
 
     # Save original unmasked values as well in the new AnnData object
     new_adata.layers["Original_Junction_Counts"] = sp.csr_matrix(junction_counts)
@@ -157,36 +156,17 @@ def apply_mask_to_anndata(adata, mask, cluster_layer="Cluster_Counts", junction_
     new_adata.layers["Masked_Cluster_Counts"] = masked_intron_clusts_sparse.tocoo()
     new_adata.layers["Masked_Junction_Counts"] = masked_junction_counts_sparse.tocoo()
 
-    # Convert back to sparse tensors for model input
-    cell_index_tensor, junc_index_tensor, my_data = llc.make_torch_adata(
-        new_adata, 
-        cluster_layer="Masked_Cluster_Counts", 
-        junction_layer="Masked_Junction_Counts", 
-        **float_type
-    )
+    # Convert sparse matrices to COO format
+    full_y_tensor = masked_junction_counts_tensor
+    full_total_counts_tensor = masked_intron_clusts_tensor
 
-    return new_adata, my_data
+    return new_adata, full_y_tensor, full_total_counts_tensor
 
-def evaluate_model(adata, mask, model_psi, model_assign, bb_conc=None, true_juncs_layer="Original_Junction_Counts", true_clusts_layer="Original_Cluster_Counts"):
+# adata_input.layers["cell_by_cluster_matrix"].toarray()[0, 186:189]
+
+def evaluate_model(adata, mask, model_psi, model_assign, bb_conc=None, NMF=False, true_juncs_layer="Original_Junction_Counts", true_clusts_layer="Original_Cluster_Counts"):
     '''
     Evaluate the factor model on masked data by comparing true and predicted PSI values.
-
-    Parameters
-    ----------
-    adata : AnnData
-        Annotated data object with true junction and cluster counts.
-    mask : torch.Tensor or np.ndarray
-        Mask indicating the positions to evaluate (True for masked, False for unmasked).
-    model_psi : np.ndarray
-        The predicted PSI values from the model (latent variable `psis`).
-    model_assign : np.ndarray
-        The assignment probabilities for cells (latent variable `assign_post`).
-    bb_conc : float, optional
-        Concentration parameter for the Beta-Binomial distribution. If provided, log-likelihood will be calculated using Beta-Binomial.
-    true_juncs_layer : str, optional
-        Name of the layer in `adata` containing true junction counts.
-    true_clusts_layer : str, optional
-        Name of the layer in `adata` containing true cluster counts.
 
     Returns
     -------
@@ -235,27 +215,66 @@ def evaluate_model(adata, mask, model_psi, model_assign, bb_conc=None, true_junc
     if isinstance(masked_pred, torch.Tensor):
         masked_pred = masked_pred.cpu().numpy()  # Convert to numpy if it's a torch tensor
 
-    if bb_conc is not None:
-        if torch.isinf(bb_conc).any():
-            # If bb_conc is infinity, revert to Binomial distribution
-            log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
+    if not NMF: 
+        if bb_conc is not None:
+            if torch.isinf(bb_conc).any():
+                # If bb_conc is infinity, revert to Binomial distribution
+                log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
+            else:
+                # Beta-Binomial distribution
+                if isinstance(bb_conc, torch.Tensor):
+                    bb_conc = bb_conc.cpu().numpy()  # Convert to numpy if it's a torch tensor
+                alpha = masked_pred * bb_conc
+                beta = (1 - masked_pred) * bb_conc
+                log_likelihood = np.sum(scipy.stats.betabinom.logpmf(successes, n_trials, alpha, beta))
         else:
-            # Beta-Binomial distribution
-            if isinstance(bb_conc, torch.Tensor):
-                bb_conc = bb_conc.cpu().numpy()  # Convert to numpy if it's a torch tensor
-            alpha = masked_pred * bb_conc
-            beta = (1 - masked_pred) * bb_conc
-            log_likelihood = np.sum(scipy.stats.betabinom.logpmf(successes, n_trials, alpha, beta))
-    else:
-        # Binomial distribution
-        log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
+            # Binomial distribution
+            log_likelihood = np.sum(scipy.stats.binom.logpmf(successes, n_trials, masked_pred))
+        return l1_error, spearman_cor, l2_error, rmse, log_likelihood
+    
+    return l1_error, spearman_cor, l2_error, rmse
 
-    # Print results
-    print(f"L1 error: {l1_error}\nSpearman correlation: {spearman_cor}\nL2 error: {l2_error}\nRMSE: {rmse}\nLog-likelihood: {log_likelihood}")
+def prepare_output_directory(mask_perc, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column, waypoint):
+    """Prepares the output directory with timestamp and relevant parameters."""
 
-    return l1_error, spearman_cor, l2_error, rmse, log_likelihood
+    # Generate a random number to ensure uniqueness (e.g., 5-digit random integer)
+    random_number = np.random.randint(10000, 99999)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    cell_type_str = f"CellType_{cell_type_column}" if cell_type_column else "NoCellType"
+    use_global_prior_str = "GlobalPrior" if use_global_prior else "NoGlobalPrior"
+    waypoint_str = "UsingWaypoints" if waypoint else "NoWaypoints"
+    
+    # Handle input_conc for directory naming
+    input_conc_prior_str = "LearnedConc" if input_conc is None else f"ConcPrior_{input_conc}"
+    
+    # Construct the output directory name with random number appended
+    output_dir = (f"./analysis_{timestamp}_MaskPerc_{mask_perc}_K_{K_use}_{waypoint_str}_"
+                  f"Prior_{use_global_prior_str}_NumEpochs_{num_epochs}_"
+                  f"{input_conc_prior_str}_Inits_{num_inits}_"
+                  f"{cell_type_str}_Random_{random_number}")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
 
-# NMF baseline model! 
+def save_parameters(output_dir, args, K, input_conc):
+    """Saves run parameters as a JSON file."""
+    parameters = {
+        "mask_perc": args.mask_perc,
+        "cell_type_column": args.cell_type_column,
+        "K_use": K,
+        "input_path": args.input_path,
+        "use_global_prior": args.use_global_prior,
+        "input_conc_prior": input_conc.item() if torch.is_tensor(input_conc) else input_conc,
+        "num_inits": args.num_inits,
+        "num_epochs": args.num_epochs,
+        "timestamp": datetime.now().strftime('%Y%m%d_%H%M%S')
+    }
+    json_path = os.path.join(output_dir, 'parameters.json')
+    with open(json_path, 'w') as json_file:
+        json.dump(parameters, json_file, indent=4)
+    print(f"Parameters saved to {json_path}")
+
 def run_minibatch_nmf_baseline(adata, mask=None, n_components=10, batch_size=512, max_iter=200, random_state=42, true_juncs_layer="Original_Junction_Counts", true_clusts_layer="Original_Cluster_Counts"):
     '''
     Run NMF (Non-negative Matrix Factorization) on the PSI values derived from the masked AnnData object.
@@ -289,7 +308,6 @@ def run_minibatch_nmf_baseline(adata, mask=None, n_components=10, batch_size=512
     
     # Compute PSI (junction counts / cluster counts), avoiding division by zero
     psi_matrix = np.divide(junction_counts, cluster_counts, out=np.zeros_like(junction_counts, dtype=float), where=(cluster_counts != 0))
-
     minibatch_nmf_model = MiniBatchNMF(n_components=n_components, batch_size=batch_size, max_iter=max_iter, random_state=random_state)
 
     if mask == None:
@@ -312,40 +330,6 @@ def run_minibatch_nmf_baseline(adata, mask=None, n_components=10, batch_size=512
     print(f"Finished fitting NMF with {n_components} components.")
     return W, H
 
-def prepare_output_directory(mask_perc, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column):
-    """Prepares the output directory with timestamp and relevant parameters."""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    cell_type_str = f"CellType_{cell_type_column}" if cell_type_column else "NoCellType"
-    use_global_prior_str = "GlobalPrior" if use_global_prior else "NoGlobalPrior"
-    
-    # Handle input_conc for directory naming
-    input_conc_prior_str = "LearnedConc" if input_conc is None else f"ConcPrior_{input_conc}"
-    
-    output_dir = (f"./analysis_{timestamp}_MaskPerc_{mask_perc}_K_{K_use}_"
-                  f"Prior_{use_global_prior_str}_NumEpochs_{num_epochs}_"
-                  f"{input_conc_prior_str}_Inits_{num_inits}_"
-                  f"{cell_type_str}")
-    os.makedirs(output_dir, exist_ok=True)
-    return output_dir
-
-def save_parameters(output_dir, args, K, input_conc):
-    """Saves run parameters as a JSON file."""
-    parameters = {
-        "mask_perc": args.mask_perc,
-        "cell_type_column": args.cell_type_column,
-        "K_use": K,
-        "input_path": args.input_path,
-        "use_global_prior": args.use_global_prior,
-        "input_conc_prior": input_conc.item() if torch.is_tensor(input_conc) else input_conc,
-        "num_inits": args.num_inits,
-        "num_epochs": args.num_epochs,
-        "timestamp": datetime.now().strftime('%Y%m%d_%H%M%S')
-    }
-    json_path = os.path.join(output_dir, 'parameters.json')
-    with open(json_path, 'w') as json_file:
-        json.dump(parameters, json_file, indent=4)
-    print(f"Parameters saved to {json_path}")
-
 def handle_input_conc_prior(input_conc_prior):
     """Handles the conversion of input concentration prior to the appropriate format."""
     if input_conc_prior == "None":
@@ -363,12 +347,8 @@ def handle_input_conc_prior(input_conc_prior):
     else:
         raise ValueError("Unsupported type for input_conc_prior")
 
-def run_factor_model(my_data, K, device, use_global_prior, input_conc, num_inits=3, num_epochs=100, lr=0.1):
+def run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits=3, num_epochs=100, lr=0.1):
     """Runs the factor model with specified parameters, including the learning rate."""
-    
-    # Convert sparse matrices to COO format, ensure they are on the GPU, and follow the specified float type
-    full_y_tensor = my_data.ycount_lookup.to_sparse_coo()
-    full_total_counts_tensor = my_data.tcount_lookup.to_sparse_coo()
     
     print(f"Running on device: {device}")
     print(f"use_global_prior: {use_global_prior}") 
@@ -376,19 +356,29 @@ def run_factor_model(my_data, K, device, use_global_prior, input_conc, num_inits
     all_results = []
     all_params = []  # Store parameters for each initialization
 
+    # No waypoint initialization in this analysis 
+    psi_init = None 
+    phi_init = None
+    
     for _ in range(num_inits):
-        pyro.clear_param_store()  # Clear the parameter store for each initialization
+        # Clear the parameter store for each initialization
+        pyro.clear_param_store()  
+
+        # Run the factor model
         result, variable_sizes = factor_model.main(
             full_y_tensor, 
             full_total_counts_tensor, 
+            psi_init= psi_init, 
+            phi_init= phi_init, 
             use_global_prior=use_global_prior, 
             num_initializations=1,
             K=K, 
             lr=lr, 
             input_conc_prior=input_conc, 
-            loss_plot=False, 
+            loss_plot=True, 
             num_epochs=num_epochs, 
-            save_to_file=False
+            save_to_file=False, 
+            output_dir=output_dir
         )
 
         all_results.append(result)
@@ -397,6 +387,7 @@ def run_factor_model(my_data, K, device, use_global_prior, input_conc, num_inits
         params_copy = {name: pyro.get_param_store().get_param(name).detach().clone()
                        for name in pyro.get_param_store().get_all_param_names()}
         all_params.append(params_copy)
+
     return all_results, all_params
 
 def load_adata(input_path):
@@ -422,41 +413,87 @@ def main():
     num_inits = args.num_inits
     num_epochs = args.num_epochs
     lr = args.lr  # Learning rate
+    ATSE_file = args.ATSE_file 
+    run_NMF = args.run_NMF
+    waypoints_use = args.waypoints_use
+    brain_only = args.brain_only
     mask_perc = args.mask_perc
 
+    # Read in the intron cluster file 
+    print("Reading in obtained intron cluster (ATSE file!)")
+    intron_clusts = pd.read_csv(ATSE_file, sep="}")
+    genes = intron_clusts[["gene_id", "gene_name"]].drop_duplicates()
+
+    if brain_only:
+        print(f"Running model only on brain cells!")
+    else:
+        print(f"Running on all tissues!")
+        
     # Prepare the output directory with timestamp
-    output_dir = prepare_output_directory(mask_perc, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column)
+    output_dir = prepare_output_directory(mask_perc, K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column, waypoints_use)
 
     # Load data and set K
     adata = load_adata(input_path)
-    K = adata.obs[cell_type_column].nunique() if cell_type_column else K_use
+    adata.var = pd.merge(adata.var, genes[['gene_id', 'gene_name']], how='left', on='gene_id')
+
+    # K = adata.obs[cell_type_column].nunique() if cell_type_column else K_use
+    K = K_use
+    print(f"K going into model training is: {K}!")
 
     # Save run parameters as JSON
     save_parameters(output_dir, args, K, input_conc)
 
+    # Define the path to save/load tensor files
+    path_tosaveto = '/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/'
+
+    # Determine which file names to use based on brain_only flag
+    if brain_only:
+        full_y_tensor_filename = 'full_y_tensor_brain_only.pt'
+        full_total_counts_tensor_filename = 'full_total_counts_tensor_brain_only.pt'
+    else:
+        full_y_tensor_filename = 'full_y_tensor.pt'
+        full_total_counts_tensor_filename = 'full_total_counts_tensor.pt'
+
+    print(f"Using {full_y_tensor_filename} and {full_total_counts_tensor_filename} !")
+
+    # Full paths to the tensor files
+    full_y_tensor_path = os.path.join(path_tosaveto, full_y_tensor_filename)
+    full_total_counts_tensor_path = os.path.join(path_tosaveto, full_total_counts_tensor_filename)
+
+    # Load the sparse tensors first on CPU
+    full_y_tensor = torch.load(full_y_tensor_path, map_location='cpu')
+    full_total_counts_tensor = torch.load(full_total_counts_tensor_path, map_location='cpu')
+    
+    # Move to gpu if using 
+    full_y_tensor = full_y_tensor.to(device)
+    full_total_counts_tensor = full_total_counts_tensor.to(device)
+
     # Generate mask for the data 
-    mask_gen, seed = generate_mask(adata, mask_percentage=mask_perc)
+    mask_gen, seed = generate_mask(adata, layer_key="cell_by_cluster_matrix", mask_percentage=mask_perc)
 
     # Apply mask 
-    new_adata, my_data = apply_mask_to_anndata(adata, mask_gen, cluster_layer="Cluster_Counts", junction_layer="Junction_Counts")
+    new_adata, new_full_y_tensor, new_full_total_counts_tensor = apply_mask_to_anndata(adata, mask_gen, cluster_layer="cell_by_cluster_matrix", junction_layer="cell_by_junction_matrix")
 
-    # Run factor model!
-    all_results, all_params = run_factor_model(my_data, K, device, use_global_prior, input_conc, num_inits, num_epochs, lr)
-    
+    # Run factor model!   
+    all_results, all_params = run_factor_model(new_adata, new_full_y_tensor, new_full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits, num_epochs, lr)
+
     # Extract Latent Variables 
     # Select the best initialization based on the loss
     best_init = np.argmin([result[0]["losses"][-1] for result in all_results])
     latent_vars = all_results[best_init][0]['summary_stats']
-    
+    best_elbo = all_results[best_init][0]["losses"][-1]
+
     # Differential Splicing Analysis
     assign_post = latent_vars["assign"]["mean"]
     model_psi = latent_vars["psi"]["mean"]
+    input_conc_provided = input_conc
 
-    # If input_conc was None extract it from latent variables 
-    if input_conc == None:
-        bb_conc = latent_vars["bb_conc"]["mean"]
+    if input_conc is None:
+        bb_conc = torch.tensor(latent_vars["bb_conc"]["mean"])
     else:
         bb_conc = None
+
+    print(f"bb_conc is: {bb_conc}!")
 
     # Evaluate learned parameters on masked data 
     l1_error, spearman_cor, l2_error, rmse, log_likelihood = evaluate_model(
@@ -474,23 +511,21 @@ def main():
 
     # Evaluate NMF results 
     l1_error_NMF, spearman_cor_NMF, l2_error_NMF, rmse_NMF = evaluate_model(
-        new_adata, mask_gen, H, W, 
+        new_adata, mask_gen, H, W, NMF=True, 
         true_juncs_layer="Original_Junction_Counts", 
         true_clusts_layer="Original_Cluster_Counts"
     )
 
-    # Prepare results for saving
-    factor_model_results = {
-        "Model": "FactorModel",
-        "L1 Error": l1_error,
-        "Spearman Correlation": spearman_cor,
-        "L2 Error": l2_error,
-        "RMSE": rmse,
-        "Log Likelihood": log_likelihood
-    }
-    
+    # NMF Model results with additional fields set to None/NaN to match FactorModel
     nmf_model_results = {
         "Model": "NMF",
+        "K": K_use,
+        "mask_perc": mask_perc,
+        "use_global_prior": None,
+        "lr": None,
+        "input_conc": None,
+        "input_conc_provided": None,
+        "best_elbo": None,
         "L1 Error": l1_error_NMF,
         "Spearman Correlation": spearman_cor_NMF,
         "L2 Error": l2_error_NMF,
@@ -498,6 +533,24 @@ def main():
         "Log Likelihood": None
     }
 
+
+    # Prepare results for saving
+    factor_model_results = {
+        "Model": "FactorModel",
+        "K": K_use, 
+        "mask_perc": mask_perc, 
+        "use_global_prior": use_global_prior, 
+        "lr": lr,
+        "input_conc": input_conc, 
+        "input_conc_provided": input_conc_provided, 
+        "best_elbo": best_elbo,
+        "L1 Error": l1_error,
+        "Spearman Correlation": spearman_cor,
+        "L2 Error": l2_error,
+        "RMSE": rmse,
+        "Log Likelihood": log_likelihood
+    }
+    
     # Combine results into a DataFrame
     results_df = pd.DataFrame([factor_model_results, nmf_model_results])
 

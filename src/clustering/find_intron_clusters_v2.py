@@ -382,6 +382,7 @@ def refine_clusters(clust_info):
 #+++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, threshold_inc, min_intron, max_intron, min_junc_reads, singleton, min_num_cells_wjunc, filter_shared_ss, max_workers, batch_size, run_notebook):
+    
     # 1. Check format of junc_files and convert to list if necessary
     if isinstance(junc_files, list):
         pass
@@ -389,6 +390,8 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
         junc_files = junc_files.split(",")
     else:
         junc_files = [junc_files]
+
+    # Add option for bulk / matrix of junction counts 
 
     # 2. Convert parameters to integers outside the loop
     min_intron = int(min_intron)
@@ -481,7 +484,11 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
     # 12. Re-cluster introns after low confidence junction removal
     print("Reclustering intron splicing events after low confidence junction removal")
     juncs_gr = juncs_gr.drop_duplicate_positions()
-    clusters = juncs_gr.cluster(by="gene_id", slack=-1, count=True)
+
+    if gtf_file is not None:
+        clusters = juncs_gr.cluster(by="gene_id", slack=-1, count=True)
+    else:
+        clusters = juncs_coords_unique.cluster(slack=-1, count=True)
         
     # 13. Remove singletons if there are new ones 
     if not singleton:

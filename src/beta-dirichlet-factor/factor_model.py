@@ -28,6 +28,8 @@ import datetime
 from torch.distributions import Distribution
 Distribution.set_default_validate_args(False)
 
+import os
+
 import logging
 import matplotlib.pyplot as plt
 import torch
@@ -65,7 +67,7 @@ def convertr(hyperparam, name):
     if isinstance(hyperparam, torch.distributions.Distribution):
         return pyro.sample(name, hyperparam)
     elif hyperparam is None:
-        return pyro.sample(name, dist.Gamma(2.0, 2.0))
+        return pyro.sample(name, dist.Gamma(10.0, 10.0))
     else:
         # Ensure hyperparam is a tensor before checking if it's infinite
         hyperparam_tensor = torch.as_tensor(hyperparam, dtype=torch.float32)
@@ -73,7 +75,7 @@ def convertr(hyperparam, name):
             return hyperparam_tensor
         else:
             return torch.tensor(hyperparam, dtype=torch.float32)
-        
+
 def my_log_prob(y_sparse, total_counts_sparse, pred, input_conc):
    
     """
@@ -259,8 +261,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     # Initialize the loss function as Trace_ELBO, which estimates the ELBO.
     loss = Trace_ELBO(num_particles=ELBO_SAMPLES) 
 
-    # Set up the SVI object with the model, the guide will handle the process of variational 
-    # inference by optimizing the parameters of the guide to minimize the ELBO.
+    # SVI the step function minimizes the negative ELBO
     svi = SVI(model, guide, scheduler, loss)
 
     # Clear Pyro's parameter store before starting the optimization. This ensures that previous
@@ -338,7 +339,7 @@ def print_concentration(input_conc_prior):
     elif input_conc_prior is None:
         logging.info("No input concentration parameter provided. Using default Gamma(2.0, 2.0) to initialize and learn bb concentration.")
     else:
-        logging.info(f"Using a Beta-binomial distribution with concentration parameter {input_conc_prior}.")
+        logging.info(f"Using a Beta-binomial distribution with initial concentration parameter set to {input_conc_prior}.")
 
 def collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior, num_samples=10):
     
@@ -389,7 +390,7 @@ def extract_variable_sizes(model, *args, **kwargs):
             sizes[name] = node["value"].shape
     return sizes
 
-def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_init=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100):
+def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_init=None, file_prefix=None, use_global_prior=True, input_conc_prior=None, save_to_file=True, K=50, loss_plot=True, lr=0.05, num_epochs=100, output_dir=None):
 
     """
     Main function to fit our Leaflet Bayesian beta-dirichlet factor model.
@@ -476,7 +477,18 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
             plt.xlabel("Epoch")
             plt.ylabel("Loss")
             plt.title(f"Loss Plot for Initialization {i+1}")
-            plt.show()
+            
+            # Automatically generate a filename with a random number for uniqueness
+            random_num = random.randint(1, 100000)
+            plot_filename = f"random_init_{random_num}_loss_curve.png"
+            
+            # Join the output directory with the filename
+            if output_dir is not None:
+                plot_filepath = os.path.join(output_dir, plot_filename)
+                plt.savefig(plot_filepath)
+                print(f"Loss plot automatically saved to {plot_filepath}")
+            else:
+                raise ValueError("output_dir is required to save the loss plot.")
 
         # Sample from the guide (posterior) multiple times
         print("Sample from the guide (posterior)")

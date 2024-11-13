@@ -178,7 +178,7 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
             futures.append(executor.submit(read_and_process_file, junc_file, relevant_junction_ids, sequencing_type, junc_idx, cluster_idx, cluster_idx_flip))
         
         # Aggregate the results as they are completed
-        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Merging results"):
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Merging results", miniters=100):
             junc_counts, clust_counts = future.result()
             merge_dictionaries(cell_junction_counts, junc_counts)
             merge_dictionaries(cell_cluster_counts, clust_counts)
@@ -305,8 +305,15 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
     metadata_matched = metadata_matched.reset_index()
 
     # Prepare junction metadata (var) from intron_clusts
-    junction_var = intron_clusts[['junction_id', 'gene_id', 'num_cells_with_junc', 'total_read_counts', 
-                                  'Cluster', 'Count']].copy()
+    # Check if 'gene_id' column is present, then include it; otherwise, skip it
+    columns_to_include = ['junction_id', 'num_cells_with_junc', 'total_read_counts', 'Cluster', 'Count']
+
+    # Add 'gene_id' to columns if it exists in intron_clusts
+    if 'gene_id' in intron_clusts.columns:
+        columns_to_include.insert(1, 'gene_id')  # Insert 'gene_id' at the correct position if present
+
+    # Create a copy of the selected columns
+    junction_var = intron_clusts[columns_to_include].copy()
     junction_var.rename(columns={'Count': 'CountJuncs'}, inplace=True)
 
     # Reorder the junction metadata to match the order of relevant_junction_ids in cell_by_junction_matrix
