@@ -10,3 +10,6 @@ src/beta-binomial-lda/*.pkl.pkl
 src/beta-binomial-lda/*.png 
 src/beta-binomial-lda/*.out 
 src/beta-binomial-lda/*.npz 
+src/visualization/gencode_mm10.db
+src/visualization/human_v47_gencode
+src/visualization/human_v47_gencode_basic
