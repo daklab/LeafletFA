@@ -26,6 +26,7 @@ from torch.optim import Adam
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Beta, Binomial
 
 class SparseProportionDataset(Dataset):
     def __init__(self, junction_counts, intron_cluster_counts):
@@ -146,7 +147,51 @@ class Decoder(nn.Module):
         reconstruction = self.body(z)
         # Return the reconstructed data in logits form.
         return reconstruction
+
+
+def beta_binomial_loss_with_logits(y_true_counts, n_cluster_counts, logits_alpha, logits_beta, eps=1e-6):
+    """
+    Calculate the beta-binomial loss for a batch of data using logits for alpha and beta parameters, 
+    incorporating overdispersion with a beta distribution.
+
+    Args:
+        y_true_counts (Tensor): A tensor containing the observed counts for each junction-cluster pair.
+        n_cluster_counts (Tensor): A tensor of the total possible counts (trials) for each junction-cluster pair.
+        logits_alpha (Tensor): Logits output for the alpha parameter (unactivated).
+        logits_beta (Tensor): Logits output for the beta parameter (unactivated).
+        eps (float, optional): A small value to prevent numerical issues in log calculations. Defaults to 1e-6.
+
+    Returns:
+        Tensor: The average beta-binomial loss over all valid data points in the batch.
+    """
     
+    # ensure that logits are not infinte
+    assert not torch.isinf(logits_alpha).any()
+    assert not torch.isinf(logits_beta).any()
+
+    # Transform logits to positive alpha and beta parameters using softplus
+    alpha = F.softplus(logits_alpha) + eps  # add eps to ensure strictly positive
+    beta = F.softplus(logits_beta) + eps    # add eps to ensure strictly positive
+    
+    # Calculate the expected probability of success (p) using the beta distribution
+    p = alpha / (alpha + beta)
+    
+    # Binomial log-likelihood with p as the success probability
+    binom = Binomial(total_count=n_cluster_counts, probs=p)
+    log_likelihood = binom.log_prob(y_true_counts)
+    
+    # Regularization term for overdispersion, based on the beta distribution's log normalization constant
+    beta_dist = Beta(alpha, beta)
+    log_beta_norm = beta_dist.log_prob(p)
+    
+    # Total log-likelihood includes both binomial likelihood and regularization from the beta prior
+    total_log_likelihood = log_likelihood + log_beta_norm
+    
+    # Return the negative mean log-likelihood as the loss
+    loss = -total_log_likelihood.mean()
+    return loss
+
+
 def binomial_loss_stable(y_true_counts, n_cluster_counts, logits, eps=1e-04):
     """
     Calculate the binomial loss for a batch of data, focusing on valid data points where cluster counts are greater than 0.

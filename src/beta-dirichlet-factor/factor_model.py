@@ -284,7 +284,7 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     elif isinstance(input_conc_prior, torch.Tensor):
         input_conc_prior = input_conc_prior.to(device)
 
-    print(f"Training in progress for {num_epochs} epochs!")
+    print(f"Training in progress for {num_epochs} epochs!", flush=True)
 
     for epoch in range(num_epochs):
 
@@ -302,12 +302,12 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
 
         # Early stopping if no improvement for a number of epochs specified by patience.
         if epochs_since_improvement >= patience:
-            print(f"Stopping early at epoch {epoch}. Best Elbo Loss: {best_loss}")
+            print(f"Stopping early at epoch {epoch}. Best Elbo Loss: {best_loss}", flush=True)
             logging.info("Elbo loss: {}".format(loss)) 
             break
 
-        if epoch % 5 == 0:
-            print(f"Epoch {epoch}, Elbo loss: {loss}")
+        if epoch % 1 == 0:
+            print(f"Epoch {epoch}, Elbo loss: {loss}", flush=True)
 
         if epoch == num_epochs - 1:
             logging.info("Elbo loss: {}".format(loss))
@@ -421,7 +421,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
     # Run the model for each seed
     for i, seed in enumerate(seeds):
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-        print(f"Initialization {i+1} with seed {seed}")
+        print(f"Initialization {i+1} with seed {seed}", flush=True)
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         
         # Set the seed
@@ -430,7 +430,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
         random.seed(seed)
 
         # Define the guide
-        print("Define the guide using AutoDiagonalNormal based on the model structure.")
+        print("Define the guide using AutoDiagonalNormal based on the model structure.", flush=True)
 
         # Diagonal Gaussian: This guide assumes that the posterior distribution can be 
         # approximated by a multivariate normal distribution with a diagonal covariance matrix. 
@@ -467,7 +467,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
         guide.append(AutoDiagonalNormal(poutine.block(model, hide=['psi', 'assign']))) 
 
         # Fit the model
-        print("Fit the model")
+        print("Fit the model", flush=True)
 
         # Fit the model
         losses = fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=10, min_delta=0.01, lr=lr, num_epochs=num_epochs)
@@ -486,16 +486,16 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
             if output_dir is not None:
                 plot_filepath = os.path.join(output_dir, plot_filename)
                 plt.savefig(plot_filepath)
-                print(f"Loss plot automatically saved to {plot_filepath}")
+                print(f"Loss plot automatically saved to {plot_filepath}", flush=True)
             else:
                 raise ValueError("output_dir is required to save the loss plot.")
 
         # Sample from the guide (posterior) multiple times
-        print("Sample from the guide (posterior)")
+        print("Sample from the guide (posterior)", flush=True)
         all_samples = collect_samples(guide, y, total_counts, K, use_global_prior, input_conc_prior)
 
         # Calculate summary statistics for each latent variable
-        print("Calculate summary statistics")
+        print("Calculate summary statistics", flush=True)
         summary_stats = calculate_summary_stats(all_samples)
 
         # Append results
@@ -506,14 +506,14 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
             'summary_stats': summary_stats  # store computed summary statistics
         })
 
-    print("All initializations complete. Returning results.")
+    print("All initializations complete. Returning results.", flush=True)
     print("------------------------------------------------")
 
     # Get model variable sizes 
     variable_sizes = extract_variable_sizes(model, y, total_counts, K, use_global_prior, input_conc_prior)
 
     print("------------------------------------------------")
-    print("Model variable sizes:", variable_sizes)
+    print("Model variable sizes:", variable_sizes, flush=True)
     print("------------------------------------------------")
 
     if save_to_file:
@@ -521,7 +521,7 @@ def main(y, total_counts, num_initializations=5, seeds=None, psi_init=None, phi_
         date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         file_name = f"{file_prefix}_{date}_{K}_{num_initializations}_factors.pt" if file_prefix else f"results_{date}_{K}_{num_initializations}_factors.pt"
         torch.save(all_results, file_name)
-        print(f"Results saved to {file_name}")
+        print(f"Results saved to {file_name}", flush=True)
         print("------------------------------------------------")
 
     return all_results, variable_sizes

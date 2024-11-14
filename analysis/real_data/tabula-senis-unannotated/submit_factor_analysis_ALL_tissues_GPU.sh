@@ -8,8 +8,8 @@ CELL_TYPE_COLUMN_VALUES=("cell_type_grouped")  # Add None as an option?
 WAYPOINTS_USE_VALUES=(False)  # Include option for waypoints
 RUN_NMF_VALUES=(False)  # Include option for running NMF
 BRAIN_ONLY_VALUES=(False)  # Add brain_only as an option
-max_count=200
-num_epochs=100
+max_count=2
+num_epochs=10
 lr=0.1
 repeats=1  # Repeat each combination 
 
@@ -48,18 +48,22 @@ for K_use in "${K_USE_VALUES[@]}"; do
                                 sbatch <<EOT
 #!/bin/bash
 #SBATCH --job-name=${count}_ALL_${repeat}_real_data
-#SBATCH --time=1-00:00:00
-#SBATCH --mem=350G
+#SBATCH --output=job_output_%j.log  # %j includes the job ID in the filename
 #SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --time=06:00:00
+#SBATCH --mem=355G
 
-# Load necessary modules or activate your environment
-conda activate LeafletSC  # If using a virtual environment
+export CUDA_LAUNCH_BLOCKING=1  # Set the environment variable here
+
+# Activate your environment
+conda activate LeafletSC  
 
 python $analysis_script --input_path $input_file \
   --ATSE_file $ATSE_file \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 2 \
+  --num_inits 3 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   --cell_type_column ${cell_type_column} \

@@ -49,6 +49,7 @@ for K_use in "${K_USE_VALUES[@]}"; do
                                 sbatch <<EOT
 #!/bin/bash
 #SBATCH --job-name=${count}_brain_only_${repeat}_real_data
+#SBATCH --output=job_output_%j.log  # %j includes the job ID in the filename
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --time=06:00:00

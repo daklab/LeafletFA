@@ -105,8 +105,8 @@ def save_results_dataframe(output_dir, results):
 def run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits=3, num_epochs=100, lr=0.1):
     """Runs the factor model with specified parameters, including the learning rate."""
     
-    print(f"Running on device: {device}")
-    print(f"use_global_prior: {use_global_prior}") 
+    print(f"Running on device: {device}", flush=True)
+    print(f"use_global_prior: {use_global_prior}", flush=True) 
     
     all_results = []
     all_params = []  # Store parameters for each initialization       
@@ -209,8 +209,6 @@ def compute_and_save_entropy_plots(assign_post, output_dir, report_file, plot=Tr
 
 def save_plots(output_dir, all_results, report_file):
     """Saves loss plots for the factor model."""
-
-    print(f"All results object looks like:")
     losses = [result[0]["losses"][-1] for result in all_results]
     num_epochs = [len(result[0]["losses"]) for result in all_results]
 
@@ -361,15 +359,14 @@ def compute_and_plot_albf(psis_mus, psis_loc, psis, pi, output_dir):
     plt.close()
 
     # Run All-vs-All differential splicing test
-    print("Running All-vs-All differential splicing test...")
+    print("Running All-vs-All differential splicing test...", flush=True)
     all_vs_all_df = differential_splicing.all_vs_all_differential_splicing_test(psis_mus, psis_loc, pi)
-    print(all_vs_all_df.head())
 
     # Save All-vs-All test results to a CSV file
     all_vs_all_output_path = os.path.join(output_dir, 'all_vs_all_results.csv')
     all_vs_all_df.to_csv(all_vs_all_output_path, index=False)
 
-    print(f"All-vs-All differential splicing results saved to {all_vs_all_output_path}")
+    print(f"All-vs-All differential splicing results saved to {all_vs_all_output_path}", flush=True)
 
     return psis_df
 
@@ -508,8 +505,8 @@ def prune_factors(pi, assign_post, psis_mus, psis_loc, psi_learned, threshold=0.
     pruned_K = pruned_indices.shape[0]  # The number of factors that remain after pruning
 
     # Print how many factors were originally and how many are retained
-    print(f"Original number of factors (K): {original_K}")
-    print(f"Number of factors retained after pruning: {pruned_K}")
+    print(f"Original number of factors (K): {original_K}", flush=True)
+    print(f"Number of factors retained after pruning: {pruned_K}", flush=True)
 
     # Step 2: Prune latent variables based on the pruned indices
     pruned_pi = pi[pruned_indices]  # Pruned pi values
@@ -608,7 +605,7 @@ def main():
     brain_only = args.brain_only
 
     # Read in the intron cluster file 
-    print("Reading in obtained intron cluster (ATSE file!)")
+    print("Reading in obtained intron cluster (ATSE file!)", flush=True)
     intron_clusts = pd.read_csv(ATSE_file, sep="}")
 
     # Ensure columns are present before proceeding
@@ -616,13 +613,13 @@ def main():
         # Drop duplicates to create a unique list of genes
         genes = intron_clusts[["gene_id", "gene_name"]].drop_duplicates()
     else:
-        print("Error: 'gene_id' or 'gene_name' column not found in ATSE file.")
+        print("Warning: 'gene_id' or 'gene_name' column not found in ATSE file.", flush=True)
         genes = pd.DataFrame()  # Empty DataFrame as fallback
 
     if brain_only:
-        print(f"Running model only on brain cells!")
+        print(f"Running model only on brain cells!", flush=True)
     else:
-        print(f"Running on all tissues!")
+        print(f"Running on all tissues!", flush=True)
 
     # Prepare the output directory with timestamp
     output_dir = prepare_output_directory(K_use, use_global_prior, input_conc, num_inits, num_epochs, cell_type_column, waypoints_use)
@@ -649,19 +646,53 @@ def main():
         full_y_tensor_filename = 'full_y_tensor.pt'
         full_total_counts_tensor_filename = 'full_total_counts_tensor.pt'
 
-    print(f"Using {full_y_tensor_filename} and {full_total_counts_tensor_filename} !")
+    device = float_type["device"]
 
-    # Full paths to the tensor files
-    full_y_tensor_path = os.path.join(path_tosaveto, full_y_tensor_filename)
-    full_total_counts_tensor_path = os.path.join(path_tosaveto, full_total_counts_tensor_filename)
+    adata.layers["Cluster_Counts"] = coo_matrix(adata.layers["cell_by_cluster_matrix"])
+    adata.layers["Junction_Counts"]  = coo_matrix(adata.layers["cell_by_junction_matrix"])
 
-    # Load the sparse tensors first on CPU
-    full_y_tensor = torch.load(full_y_tensor_path, map_location='cpu')
-    full_total_counts_tensor = torch.load(full_total_counts_tensor_path, map_location='cpu')
+    # Extract cell indices and junction indices from the sparse junction layer
+    cell_index_array = np.array(adata.layers["Junction_Counts"].row)
+    junc_index_array = np.array(adata.layers["Junction_Counts"].col)
+
+    # Convert the row and col of the sparse matrix to torch tensors
+    cell_index_tensor = torch.tensor(cell_index_array, dtype=torch.int32, device=device)
+    junc_index_tensor = torch.tensor(junc_index_array, dtype=torch.int32, device=device)
+
+    # Convert the data of the sparse matrix to torch tensor
+    ycount_array = np.array(adata.layers["Junction_Counts"].data)
+    ycount = torch.tensor(ycount_array, **float_type)
+   
+    torch.cuda.empty_cache()
+
+    # Create the ycount sparse matrix (Junction counts)
+    ycount_lookup = torch.sparse_coo_tensor(
+        indices=torch.stack([cell_index_tensor, junc_index_tensor]), 
+        values=ycount,
+        size=(len(adata.obs), len(adata.var)),
+        device=device
+    )
+
+    # Extract the cluster layer (total counts)
+    coo2 = adata.layers["Cluster_Counts"]
+    total_counts_tensor = torch.tensor(coo2.data, **float_type)
     
-    # Move to gpu if using 
-    full_y_tensor = full_y_tensor.to(device)
-    full_total_counts_tensor = full_total_counts_tensor.to(device)
+    torch.cuda.empty_cache()
+    
+    # Create the tcount sparse matrix (Total counts)
+    tcount_lookup = torch.sparse_coo_tensor(
+        indices=torch.stack([cell_index_tensor, junc_index_tensor]), 
+        values=total_counts_tensor,
+        size=(len(adata.obs), len(adata.var)),
+        device=device
+    )
+
+    del cell_index_tensor, junc_index_tensor, ycount, total_counts_tensor
+    torch.cuda.empty_cache()
+
+    # Convert sparse matrices to COO format, ensure they are on the GPU, and follow the specified float type
+    full_y_tensor = ycount_lookup
+    full_total_counts_tensor = tcount_lookup
 
     K = K_use
 
@@ -676,7 +707,12 @@ def main():
     # Calculate and plot correlations of assignment matrices
     log_to_report(report_file, "Calculating correlations between initializations.")
     assign_matrices = [result[0]["summary_stats"]["assign"]["mean"] for result in all_results]
-    avg_corr, median_corr, min_corr = calculate_and_plot_correlations(assign_matrices, output_dir, report_file)
+
+    # Calculate correlations between initializations if more than 2 
+    if num_inits > 1:
+        avg_corr, median_corr, min_corr = calculate_and_plot_correlations(assign_matrices, output_dir, report_file)
+    else: 
+        avg_corr, median_corr, min_corr = None, None, None  # Set default values when there's only one initialization
 
     # Select the best initialization based on the loss
     best_init = np.argmin([result[0]["losses"][-1] for result in all_results])
@@ -725,8 +761,10 @@ def main():
     # Calculate silhouette score
     silhouette_avg, dbi, embedding = plot_umap(pruned_assign_post, adata, output_dir)
     plot_pi_barplot(pruned_pi, output_dir)
-    plot_clustermap(pruned_assign_post, adata, output_dir)
-    print(silhouette_avg, dbi)
+    
+    # plot_clustermap(pruned_assign_post, adata, output_dir)
+    
+    print(silhouette_avg, dbi, flush=True)
 
     plot_umap_by_category(embedding, adata, "cell_type_grouped", output_dir, "UMAP colored by cell_type_grouped", "umap_cell_type_grouped.png")
     plot_umap_by_category(embedding, adata, "subtissue_clean", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
