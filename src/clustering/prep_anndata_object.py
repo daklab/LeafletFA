@@ -45,10 +45,18 @@ def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_
               6: 'int32', 7: 'int32', 8: str, 9: 'int32', 10: str, 11: str}
     juncs = pd.read_csv(junc_file, sep="\t", header=None, dtype=dtypes)
     
+    print(f"Processing file: {junc_file}")
+
+    try:
+        juncs = pd.read_csv(junc_file, sep="\t", header=None, dtype=dtypes)
+    except pd.errors.EmptyDataError:
+        print(f"Empty or invalid file encountered: {junc_file}")
+        return {}, {}
+
     # Add column names here:
     col_names = ["chrom", "chromStart", "chromEnd", "name", "score", "strand", 
          "thickStart", "thickEnd", "itemRgb", "blockCount", "blockSizes", "blockStarts"]
-    if sequencing_type in ["smart_seq", "10x"]:
+    if sequencing_type in ["smart_seq", "10x", "split-seq", "easysci"]:
         col_names += ["num_cells_wjunc", "cell_readcounts"]
     juncs.columns = col_names 
 
@@ -175,6 +183,9 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for junc_file in junction_files:
+            if not os.path.exists(junc_file) or os.stat(junc_file).st_size == 0:
+                print(f"Skipping invalid or empty file: {junc_file}")
+                continue
             futures.append(executor.submit(read_and_process_file, junc_file, relevant_junction_ids, sequencing_type, junc_idx, cluster_idx, cluster_idx_flip))
         
         # Aggregate the results as they are completed
@@ -272,7 +283,7 @@ def sanity_check(cell_by_junction_matrix, cell_by_cluster_matrix, cell_junction_
 
     print("Sanity check passed!")
 
-def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_idx, junc_idx, metadata_subset, intron_clusts, save_file=False, prefix="ATSE_Anndata_Object"):
+def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_idx, junc_idx, metadata, intron_clusts, save_file=False, meta_cell_column="cell_id", prefix="ATSE_Anndata_Object"):
     """
     Create an AnnData object using the cell-by-junction and cell-by-cluster matrices,
     combined with the metadata for cells.
@@ -284,9 +295,10 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
     - cell_idx: Dictionary mapping cell indices to cell names.
     - junc_idx: Dictionary mapping junction IDs to indices.
     - cluster_idx_flip: Dictionary mapping cluster names to lists of junction indices.
-    - metadata_subset: DataFrame with metadata for the cells.
+    - metadata: DataFrame with metadata for the cells.
     - intron_clusts: DataFrame with intron cluster information.
     - save_file: Boolean flag indicating whether to save the AnnData object.
+    - meta_cell_column: Column in metadata representing cell identifiers.
     - prefix: Prefix for the filename when saving the AnnData object.
     
     Returns:
@@ -296,7 +308,10 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
 
     # Prepare cell metadata (obs)
     cells = list(cell_idx.values())  # Get the list of cells
-    metadata_matched = metadata_subset.set_index('cell_id').reindex(cells)
+    if meta_cell_column not in metadata.columns:
+        raise ValueError(f"Column '{meta_cell_column}' not found in metadata.")
+
+    metadata_matched = metadata.set_index(meta_cell_column).reindex(cells)
 
     # Add cell_id_index to metadata_matched
     metadata_matched['cell_id_index'] = metadata_matched.index.map({v: k for k, v in cell_idx.items()})
@@ -339,6 +354,8 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
 
     # Convert the COO matrix to CSR format since COO can't be used when saving AnnData file 
     adata.X = adata.X.tocsr()  
+    adata.obs.head()
+    print(adata.obs.dtypes)
 
     if save_file:
         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

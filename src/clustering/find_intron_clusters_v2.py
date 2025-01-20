@@ -405,6 +405,7 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
 
     # 3. Clean up junctions (filter by min_num_cells_wjunc, min_junc_reads requirements!)
     all_juncs_clean = clean_up_juncs(all_juncs_df, min_num_cells_wjunc, min_junc_reads)
+    print(all_juncs_clean.head())
 
     # Step 1: Split the 'junction_id' column into 'chrom', 'chromStart', 'chromEnd', and 'strand'
     all_juncs_clean[['chrom', 'chromStart', 'chromEnd', 'strand']] = all_juncs_clean['junction_id'].str.split('_', expand=True)

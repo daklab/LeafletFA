@@ -181,7 +181,7 @@ def calculate_centered_psi(junction_counts, cluster_counts, rho=0.1):
 
     Parameters:
     - junction_counts: A sparse matrix (COO format) with junction counts.
-    - cluster_counts: A sparse matrix (COO format) with cluster counts.
+    - cluster_counts: A sparse matrix (COO format) with cluster counts (ATSE counts).
     - rho: A float value (default: 0.1) representing the overdispersion parameter for the beta-binomial variance model.
     
     Returns:
@@ -217,38 +217,7 @@ def calculate_centered_psi(junction_counts, cluster_counts, rho=0.1):
     
     return Y_sparse
 
-def plot_diffusion_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10):
-    """
-    Plots the diffusion components and overlays the specified number of waypoints.
-    """
-    
-    # Plot diffusion components, colored by 'age'
-    sc.pl.diffmap(adata, color='age', size=size, show=False)  # Plot diffusion components
-
-    # Extract diffusion component coordinates
-    diffmap_coords = adata.obsm['X_diffmap']  # Diffusion component coordinates
-    
-    # Perform max-min sampling to get waypoints (if waypoints have not been computed beforehand)
-    waypoints = waypoints_dict[n_waypoints]
-    
-    # Get the coordinates for the selected waypoints
-    waypoint_coords_diffmap = diffmap_coords[waypoints]  # Waypoints on diffusion components
-
-    # Overlay the waypoints on the diffusion components plot using `matplotlib`
-    plt.scatter(waypoint_coords_diffmap[:, 0], waypoint_coords_diffmap[:, 1], s=50, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    
-    # Highlight the first waypoint with a different color (e.g., blue)
-    plt.scatter(waypoint_coords_diffmap[0, 0], waypoint_coords_diffmap[0, 1], s=80, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
-    
-    # Add labels and legend for waypoints
-    plt.title(f'Diffusion Components with {n_waypoints} Waypoints Highlighted')
-    plt.legend()
-
-    # Show the combined diffusion components plot with waypoints
-    plt.show()
-    plt.close()
-
-def plot_UMAP_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
+def plot_UMAP_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
     """
     Plots the UMAP components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'), 
     and overlays the specified number of waypoints. The legends are placed outside the plots.
@@ -257,7 +226,7 @@ def plot_UMAP_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_col
     fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
 
     # Step 1: Plot UMAP colored by 'age'
-    sc.pl.umap(adata, color='age', size=size, ax=axes[0], show=False, alpha=0.5)  # UMAP with 'age'
+    sc.pl.umap(adata, color=color_by, size=size, ax=axes[0], show=False, alpha=0.5)  # UMAP with 'age'
     
     # Step 2: Plot UMAP colored by the second annotation (default is 'tissue')
     sc.pl.umap(adata, color=second_color, size=size, ax=axes[1], show=False, alpha=0.5)  # UMAP with second annotation
@@ -295,7 +264,7 @@ def plot_UMAP_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_col
     plt.show()
     plt.close()
 
-def plot_tSNE_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
+def plot_tSNE_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
     """
     Plots the t-SNE components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'),
     and overlays the specified number of waypoints. The legends are placed outside the plots.
@@ -304,7 +273,7 @@ def plot_tSNE_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_col
     fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
 
     # Step 1: Plot t-SNE colored by 'age'
-    sc.pl.tsne(adata, color='age', size=15, ax=axes[0], show=False, alpha=0.5)  # t-SNE with 'age'
+    sc.pl.tsne(adata, color=color_by, size=15, ax=axes[0], show=False, alpha=0.5)  # t-SNE with 'age'
     
     # Step 2: Plot t-SNE colored by the second annotation (default is 'tissue')
     sc.pl.tsne(adata, color=second_color, size=15, ax=axes[1], show=False, alpha=0.5)  # t-SNE with second annotation
@@ -342,7 +311,7 @@ def plot_tSNE_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_col
     plt.show()
     plt.close()
 
-def plot_PCA_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
+def plot_PCA_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
     """
     Plots the PCA components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'), 
     and overlays the specified number of waypoints. The legends are placed outside the plots.
@@ -351,7 +320,7 @@ def plot_PCA_with_waypoints(adata, waypoints_dict, n_waypoints=20, waypoint_colo
     fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
 
     # Step 1: Plot PCA colored by 'age'
-    sc.pl.pca(adata, color='age', size=size, ax=axes[0], show=False)  # PCA with 'age'
+    sc.pl.pca(adata, color=color_by, size=size, ax=axes[0], show=False)  # PCA with 'age'
     
     # Step 2: Plot PCA colored by the second annotation (default is 'tissue')
     sc.pl.pca(adata, color=second_color, size=size, ax=axes[1], show=False)  # PCA with second annotation

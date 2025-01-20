@@ -9,9 +9,9 @@ CELL_TYPE_COLUMN_VALUES=("None" "cell_ontology_class")  # Add None as an option
 WAYPOINTS_USE_VALUES=(False)  # Include option for waypoints
 RUN_NMF_VALUES=(True)  # Include option for running NMF
 BRAIN_ONLY_VALUES=(True)  # Add brain_only as an option
-repeats=2  # Repeat each combination 2 times
+repeats=1  # Repeat each combination 2 times
 
-max_count=300
+max_count=200
 num_epochs=300
 lr=0.1
 
@@ -64,7 +64,7 @@ python $analysis_script --input_path $input_file \
   --ATSE_file $ATSE_file \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 2 \
+  --num_inits 3 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   --cell_type_column ${cell_type_column} \

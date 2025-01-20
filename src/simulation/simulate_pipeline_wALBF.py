@@ -1,5 +1,49 @@
 import argparse
 import pickle
+import sys
+import os
+import json
+import numpy as np
+import pandas as pd
+import torch
+import anndata as ad
+from importlib import reload
+from datetime import datetime
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from tqdm import tqdm
+from sklearn.metrics import roc_auc_score, accuracy_score
+import pyro 
+import umap.umap_ as umap
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score
+from sklearn.metrics import precision_recall_curve, average_precision_score
+import scipy.sparse as sp 
+
+# Import the factor model and simulation source code
+sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/beta-dirichlet-factor')
+import factor_model
+reload(factor_model)
+
+# Simulation source code
+sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/")
+import simulate_counts as sim 
+reload(sim)
+
+# Evaluation source code
+sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/evaluations/')
+import cost_correlation_assign
+import differential_splicing
+import masking_BBFactor as mask 
+
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
+float_type = {"device": device, "dtype": torch.float}
+if device == torch.device('cuda'):
+    torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Run differential splicing analysis.')
@@ -24,54 +68,10 @@ def parse_arguments():
     parser.add_argument('--mask_perc', type=float, default=0.1, help='Percentage of data (nonzero cluster counts) to mask.')
     parser.add_argument('--proportion_negative', type=float, default=0.5, help='Proportion of negatively spliced junctions.')
 
+    # Add arg for whether anndata object should be saved 
+    parser.add_argument('--save_anndata', action='store_true', help='Indicate whether the AnnData object should be saved (default: False).')
+
     return parser.parse_args()
-
-import sys
-import os
-import json
-import numpy as np
-import torch
-import anndata as ad
-from importlib import reload
-from datetime import datetime
-import seaborn as sns
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-import pandas as pd
-from sklearn.metrics import roc_auc_score, accuracy_score
-import pyro 
-import umap.umap_ as umap
-import matplotlib.patches as mpatches
-from sklearn.metrics import silhouette_score
-from sklearn.metrics import roc_auc_score, roc_curve, confusion_matrix
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score
-import scipy.sparse
-from sklearn.metrics import precision_recall_curve, average_precision_score
-
-# Import custom modules
-sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/beta-dirichlet-factor')
-import factor_model
-reload(factor_model)
-
-sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/")
-import simulate_counts as sim 
-reload(sim)
-
-sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/visualization/")
-import vis as vis
-
-sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/evaluations/')
-import cost_correlation_assign
-import differential_splicing
-import masking_BBFactor as mask 
-import scipy.sparse as sp 
-
-# Device configuration
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
-float_type = {"device": device, "dtype": torch.float}
-if device == torch.device('cuda'):
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 def create_report_file(output_dir):
     """Creates a report file for logging results."""
@@ -543,6 +543,7 @@ def main():
     run_NMF = args.run_NMF
     waypoints_use = args.waypoints_use
     brain_only = args.brain_only
+    save_anndata = args.save_anndata
 
     # Read in the intron cluster file 
     print("Reading in obtained intron cluster (ATSE file!)")
@@ -640,23 +641,23 @@ def main():
     results_path = os.path.join(output_dir, "final_results.csv")
     results_df.to_csv(results_path, index=False)
 
-#    # Save the `adata_input` AnnData object to the output directory
-#    adata_output_path = os.path.join(output_dir, "adata_input.h5ad")
-#    adata_input.var.columns = adata_input.var.columns.astype(str)
+    # Save the `adata_input` AnnData object to the output directory
+    if save_anndata:
+        adata_output_path = os.path.join(output_dir, "adata_input.h5ad")
+        adata_input.var.columns = adata_input.var.columns.astype(str)
 
-#    # Check and convert both 'Cluster_Counts' and 'Junction_Counts' layers from COO to CSR (or CSC)
-#    for layer in ['Cluster_Counts', 'Junction_Counts']:
-#        if isinstance(adata_input.layers[layer], scipy.sparse.coo_matrix):
-#            adata_input.layers[layer] = adata_input.layers[layer].tocsr()  # Convert to CSR or use .tocsc() if you prefer
+        # Check and convert both 'Cluster_Counts' and 'Junction_Counts' layers from COO to CSR (or CSC)
+        for layer in ['Cluster_Counts', 'Junction_Counts']:
+            if isinstance(adata_input.layers[layer], scipy.sparse.coo_matrix):
+                adata_input.layers[layer] = adata_input.layers[layer].tocsr()  # Convert to CSR or use .tocsc() if you prefer
 
-#    # Convert 'junc_ratio' from numpy.matrix to numpy.ndarray if it exists in layers
-#    if isinstance(adata_input.layers["junc_ratio"], np.matrix):
-#        adata_input.layers["junc_ratio"] = np.asarray(adata_input.layers["junc_ratio"])
+        # Convert 'junc_ratio' from numpy.matrix to numpy.ndarray if it exists in layers
+        if isinstance(adata_input.layers["junc_ratio"], np.matrix):
+            adata_input.layers["junc_ratio"] = np.asarray(adata_input.layers["junc_ratio"])
 
-    # Save the AnnData object for this particular analysis 
- #   adata_input.write(adata_output_path)
-
- #   log_to_report(report_file, f"AnnData saved to {adata_output_path}")
+        # Save the AnnData object for this particular analysis 
+        adata_input.write(adata_output_path)
+        log_to_report(report_file, f"AnnData saved to {adata_output_path}")
 
 #    # Save all latent variables (i.e., trained model parameters) to a pickle file
 #    latent_vars_output_path = os.path.join(output_dir, "latent_vars.pkl")

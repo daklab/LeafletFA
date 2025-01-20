@@ -766,33 +766,39 @@ def main():
     
     print(silhouette_avg, dbi, flush=True)
 
-    plot_umap_by_category(embedding, adata, "cell_type_grouped", output_dir, "UMAP colored by cell_type_grouped", "umap_cell_type_grouped.png")
-    plot_umap_by_category(embedding, adata, "subtissue_clean", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
-    plot_umap_by_category(embedding, adata, "age", output_dir, "UMAP colored by Age", "umap_age.png")
-    plot_umap_by_category(embedding, adata, "mouse.id", output_dir, "UMAP colored by Mouse ID", "umap_mouse.png")
-    plot_umap_by_category(embedding, adata, "sex", output_dir, "UMAP colored by sex", "sex_mouse.png")
+    # plot_umap_by_category(embedding, adata, "cell_type_grouped", output_dir, "UMAP colored by cell_type_grouped", "umap_cell_type_grouped.png")
+    # plot_umap_by_category(embedding, adata, "subtissue_clean", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
+    # plot_umap_by_category(embedding, adata, "age", output_dir, "UMAP colored by Age", "umap_age.png")
+    # plot_umap_by_category(embedding, adata, "mouse.id", output_dir, "UMAP colored by Mouse ID", "umap_mouse.png")
+    # plot_umap_by_category(embedding, adata, "sex", output_dir, "UMAP colored by sex", "sex_mouse.png")
+
+    plot_umap_by_category(embedding, adata, cell_type_column, output_dir, f"UMAP colored by {cell_type_column}", f"umap_{cell_type_column}.png")
 
     log_to_report(report_file, "Running multinomial logistic regression using learned PHI and known cell annotations.")
-    age_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'age')
+    # age_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'age')
+    age_accuracy = "NA"
+
+    # Log accuracy or save it to a file
+    # print(f"Multinomial Logistic Regression Accuracy: {age_accuracy}")
+    # subtissue_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'subtissue_clean')
+    subtissue_accuracy = "NA"
     
     # Log accuracy or save it to a file
-    print(f"Multinomial Logistic Regression Accuracy: {age_accuracy}")
-    subtissue_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'subtissue_clean')
-    
-    # Log accuracy or save it to a file
-    print(f"Multinomial Logistic Regression Accuracy: {subtissue_accuracy}")
-    cell_type_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'cell_ontology_class')
+    # print(f"Multinomial Logistic Regression Accuracy: {subtissue_accuracy}")
+    cell_type_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, cell_type_column)
     
     # Log accuracy or save it to a file
     print(f"Multinomial Logistic Regression Accuracy: {cell_type_accuracy}")
     
     # Perform logistic regression for mouse.id
-    mouse_id_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'mouse.id')
-    print(f"Multinomial Logistic Regression Accuracy for Mouse ID: {mouse_id_accuracy}")
+    #mouse_id_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'mouse.id')
+    #print(f"Multinomial Logistic Regression Accuracy for Mouse ID: {mouse_id_accuracy}")
+    mouse_id_accuracy = "NA"
 
     # Perform logistic regression for sex
-    sex_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'sex')
-    print(f"Multinomial Logistic Regression Accuracy for Sex: {sex_accuracy}")
+    # sex_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'sex')
+    # print(f"Multinomial Logistic Regression Accuracy for Sex: {sex_accuracy}")
+    sex_accuracy = "NA"
 
     # Get silhouette score from NMF 
     # silhouette_NMF = get_NMF(adata, K=K, output_dir=output_dir)

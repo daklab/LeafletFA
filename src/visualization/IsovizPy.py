@@ -120,9 +120,7 @@ def convert_junction_ids(df):
                 "end": int(end),
                 "name": f"junction_{idx + 1}",
                 "strand": strand,
-                "usage_ratio": row[
-                    "usage_ratio"
-                ],  # Add usage_ratio to each junction dictionary
+                "usage_ratio": row["usage_ratio"],  # Add usage_ratio to each junction dictionary
             }
         )
     return splice_junctions
@@ -472,18 +470,23 @@ def create_transform_function(intervals_to_compress, compression_factor):
 
     return transform_x, reverse_transform_x
 
-
 def plot_isoforms(
     db,
     transcript_data,
     region_start,
     region_end,
     base_width=8,
+    fixed_height=False, 
+    fixed_height_value=8,
     trans_height=0.5,
     filename=None,
     introns_list=None,
-    plot_shared_inton_lines=False,
+    show_transcript_type=False,
+    plot_shared_intron_lines=False,
+    plot_introns_as_blocks=False,
     compression_factor=1,
+    num_ticks=5,
+    trans_label=50
 ):
     """
     Plots isoforms with exons, CDS, and introns for each transcript in transcript_data,
@@ -491,9 +494,14 @@ def plot_isoforms(
     """
     # Calculate dynamic height based on the number of transcripts
     num_transcripts = len(transcript_data)
-    dynamic_height = 1 + (num_transcripts * trans_height)
+    dynamic_height = 2 + (num_transcripts * trans_height)
+    
+    if fixed_height:
+        dynamic_height = fixed_height_value
 
+    print(f"(dynamic_height", dynamic_height)
     fig, ax = plt.subplots(figsize=(base_width, dynamic_height))
+    
     y_offset = 0
     labels_added = {"Exon": False, "CDS": False, "Intron": False}
     # Retrieve gene information from the first transcript
@@ -569,10 +577,14 @@ def plot_isoforms(
             labels_added["Intron"] = True
 
         # Annotate with transcript name and type
-        transcript_label = f"{transcript_info['transcript_name']} ({transcript_info['transcript_type']})"
+        if show_transcript_type:
+            transcript_label = f"{transcript_info['transcript_name']} ({transcript_info['transcript_type']})"
+
+        else:
+            transcript_label = f"{transcript_info['transcript_name']}"
 
         ax.text(
-            transform_x(region_end) + 20,
+            transform_x(region_end) + trans_label,
             y_offset,
             transcript_label,
             verticalalignment="center",
@@ -581,14 +593,34 @@ def plot_isoforms(
 
         y_offset += 1  # Move up for the next transcript
 
+    y_offset += 1  # Move up for the next transcript
+    
     if introns_list is not None:
-        if plot_shared_inton_lines:
+        if plot_shared_intron_lines and not plot_introns_as_blocks:
+            # plot introns as vertical lines
             for intron_coords in introns_list:
                 # Plot vertical lines at the junction start and end points
                 intron_start = transform_x(intron_coords[0])
                 intron_end = transform_x(intron_coords[1])
                 ax.axvline(x=intron_start, color="red", linestyle="--", lw=1)
                 ax.axvline(x=intron_end, color="purple", linestyle="--", lw=1)
+
+        elif plot_introns_as_blocks and not plot_shared_intron_lines:
+            # Plot introns as grey blocks
+            for intron_coords in introns_list:
+                intron_start = transform_x(intron_coords[0])
+                intron_end = transform_x(intron_coords[1])
+                ax.add_patch(
+                    plt.Rectangle(
+                    (intron_start, y_offset - 0.5),  # Position below last transcript row
+                    intron_end - intron_start,
+                    0.4,
+                    color="grey",
+                    alpha=0.5,
+                    label="Intron Block" if not labels_added.get("Intron Block") else "",
+                )
+                )
+                labels_added["Intron Block"] = True
 
     # Customize plot appearance
     ax.set_xlim([transform_x(region_start), transform_x(region_end)])
@@ -599,7 +631,7 @@ def plot_isoforms(
         fontsize=12,
     )
     original_coordinate_ticks = np.linspace(
-        round(region_start, -3), round(region_end, -3), num=5
+        round(region_start, -2), round(region_end, -2), num=num_ticks
     )
     original_coordinate_ticks = [int(x) for x in original_coordinate_ticks]
     new_coord_ticks = [transform_x(x) for x in original_coordinate_ticks]
@@ -608,7 +640,16 @@ def plot_isoforms(
     ax.set_xticklabels(original_coordinate_ticks)
 
     ax.set_yticks([])
-    ax.legend(loc="upper left", fontsize=6, title_fontsize=6)
+    
+    # ax.legend(loc="upper left", fontsize=6, title_fontsize=6)
+
+    ax.legend(
+    loc="upper left",  # Position the legend relative to the bbox
+    fontsize=6, 
+    title_fontsize=6,
+    bbox_to_anchor=(-0.15, 1), # Adjusts position outside the axes
+    borderaxespad=0  # Adjust padding
+    )
 
     # Save plot
     if filename is None:
