@@ -117,12 +117,31 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
             probs[0,] = (1 - J3_prob) / 2
             probs[2,] = (1 - J3_prob) / 2
             sample_label = "negative"
-        
+
         elif clust_label == 1:
-            # get J3 prob (exon skipping), allow different PSI values across cell types for positive control
-            J3_prob = probs[1,]
-            probs[0,] = (1-J3_prob)/2
-            probs[2,] = (1-J3_prob)/2
+            # For positive cases, split cell types into two groups
+            # Half will favor high PSI, half will favor low PSI
+            num_high = K // 2  # number of cell types that will have high PSI
+            num_low = K - num_high  # remaining will have low PSI
+
+            J3_diff = 0
+            while J3_diff < 0.5:
+                # Sample PSIs from different distributions for each group
+                J3_probs_low = torch.distributions.beta.Beta(1, 3).sample([num_low])  # favor low PSI
+                J3_probs_high = torch.distributions.beta.Beta(3, 1).sample([num_high])  # favor high PSI
+                # Get the difference between the two groups medians 
+                J3_diff = torch.median(J3_probs_high) - torch.median(J3_probs_low)
+
+            # Combine into one vector of length K
+            J3_probs = torch.cat([J3_probs_low, J3_probs_high])
+
+            # Randomly shuffle to avoid having all high/low PSIs grouped together
+            J3_probs = J3_probs[torch.randperm(K)]
+
+            # Set the probabilities
+            probs[1,] = J3_probs  # J3 probabilities across K cell types some will be low and some will be high
+            probs[0,] = (1 - J3_probs) / 2  # J1 probabilities
+            probs[2,] = (1 - J3_probs) / 2  # J2 probabilities
             sample_label = "positive"
 
         probs_df = pd.DataFrame(probs.cpu().numpy())  
@@ -291,15 +310,16 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
         threshold = cell_type_psi_df[cell_type_psi_df["sample_label"] == "positive"]["difference"].quantile(0.05)
 
     # Relabel clusters based on the calculated threshold
-    relabel_clusts = cell_type_psi_df[
-        (cell_type_psi_df["sample_label"] == "positive") & (cell_type_psi_df["difference"] < threshold)
-        ].Cluster.unique()
+    # Not doing this ATM ! 
+    # relabel_clusts = cell_type_psi_df[
+    #    (cell_type_psi_df["sample_label"] == "positive") & (cell_type_psi_df["difference"] < threshold)
+    #    ].Cluster.unique()
     
     # Create the 'true_label' column, initially copying from 'sample_label'
     cell_type_psi_df["true_label"] = cell_type_psi_df["sample_label"]
     
     # Update 'true_label' for clusters that should be relabeled to 'negative'
-    cell_type_psi_df.loc[cell_type_psi_df["Cluster"].isin(relabel_clusts), "true_label"] = "negative"
+    # cell_type_psi_df.loc[cell_type_psi_df["Cluster"].isin(relabel_clusts), "true_label"] = "negative"
     cell_type_psi_df.sort_values(by=["junction_id_index"], inplace=True)
 
     # Print the value counts for 'true_label' and 'sample_label' for comparison
@@ -366,7 +386,7 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     full_total_counts_tensor = tcount_lookup.to_sparse_coo()
 
     print("Data successfully simulated and prepared!")
-    return full_y_tensor, full_total_counts_tensor, adata_input 
+    return full_y_tensor, full_total_counts_tensor, adata_input, cell_type_psi_df
 
 
     

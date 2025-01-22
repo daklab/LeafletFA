@@ -11,9 +11,11 @@ RUN_NMF_VALUES=(True)  # Include option for running NMF
 BRAIN_ONLY_VALUES=(True)  # Add brain_only as an option
 repeats=1  # Repeat each combination 2 times
 
-max_count=200
+max_count=20
 num_epochs=300
 lr=0.1
+
+# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
@@ -51,10 +53,11 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
                   sbatch <<EOT
 #!/bin/bash
 #SBATCH --job-name=sim_data_${count}_rep${repeat}
+#SBATCH --time=02:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --time=02:00:00
 #SBATCH --mem=32G
+#SBATCH --cpus-per-task=4
 
 # Load necessary modules or activate your environment
 conda activate LeafletSC  # If using a virtual environment
@@ -64,7 +67,7 @@ python $analysis_script --input_path $input_file \
   --ATSE_file $ATSE_file \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 3 \
+  --num_inits 2 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   --cell_type_column ${cell_type_column} \

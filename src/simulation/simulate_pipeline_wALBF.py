@@ -314,12 +314,14 @@ def get_NMF(adata_input, K, output_dir, true_juncs_layer="cell_by_junction_matri
 def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir, K, report_file):
     
     # Compute ALBF
-    albf, l0 = differential_splicing.compute_albf(psis_mus, psis_loc + 1e-9, torch.tensor(pi))
+    albf, l0 = differential_splicing.compute_albf(psis_mus, psis_loc, torch.tensor(pi))
     l0 = l0.detach().cpu()
     albf = albf.detach().cpu()
     
+    print(albf.shape)
+
     # Prepare dataframes
-    albf_df = pd.DataFrame(albf, columns=["ALBF"])
+    albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
     albf_df["junction_id_index"] = range(albf_df.shape[0])
     
     psis_df = pd.DataFrame(psis.T)
@@ -444,6 +446,9 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
 
     with open(os.path.join(output_dir, 'ALBF_report.txt'), 'w') as f:
         f.write(report)
+
+    # Write psis_df to a CSV file
+    psis_df.to_csv(os.path.join(output_dir, 'ALBF_scores.csv'), index=False) 
 
     return correlation_diff_albf, correlation_diff_delta, auc_score, optimal_threshold, accuracy, precision, recall, fp, fn
 
@@ -576,7 +581,11 @@ def main():
 
     # Simulate data
     log_to_report(report_file, f"Simulating splice junction counts with {proportion_negative} proportion negative!")
-    full_y_tensor, full_total_counts_tensor, adata_input = simulate_and_prepare(adata_filtered, K, float_type, proportion_negative, cell_type_column)
+    full_y_tensor, full_total_counts_tensor, adata_input, cell_type_psi_df = simulate_and_prepare(adata_filtered, K, float_type, proportion_negative, cell_type_column)
+
+    # Write cell_type_psi_df to a CSV file 
+    cell_type_psi_df_path = os.path.join(output_dir, 'cell_type_psi_df.csv')
+    cell_type_psi_df.to_csv(cell_type_psi_df_path, index=False)
 
     # Run the factor model
     log_to_report(report_file, f"Running factor model with K = {K}!")
@@ -666,7 +675,6 @@ def main():
 #    log_to_report(report_file, f"Latent variables saved to {latent_vars_output_path}")
 
     print(f"Results saved to {results_path}")
-
     report_file.close()
 
 if __name__ == "__main__":

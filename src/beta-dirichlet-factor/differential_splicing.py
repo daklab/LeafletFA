@@ -8,10 +8,11 @@ def combined_mean_variance(means, variances, pis):
     variances = torch.clamp(variances, min=eps)
     inv_variances = 1 / variances
 
-    # Convert pis (NumPy array) to PyTorch tensor and ensure correct dimensions
+    # Convert pis to PyTorch tensor and ensure correct dimensions
     pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)
 
     # Weighting by pis
+    # This computes a single combined Gaussian distribution from multiple components, weighted by their mixing proportions.
     weighted_inv_variances = pis * inv_variances
     combined_variance = 1 / torch.sum(weighted_inv_variances, dim=0)
     combined_mean = combined_variance * torch.sum(means * weighted_inv_variances, dim=0)
@@ -61,56 +62,70 @@ def gaussian_log_pdf(x, mean, std):
     log_num = - (x - mean) ** 2 / (2 * var)
     return log_num - log_denom
 
+def log_sum_exp(x, dim=0):
+    """
+    Numerically stable implementation of log(Σᵢ exp(xᵢ))
+    
+    To prevent overflow/underflow, we use the identity:
+    log(Σᵢ exp(xᵢ)) = α + log(Σᵢ exp(xᵢ - α))
+    where α = max(xᵢ)
+    """
+    # Find maximum value for numerical stability
+    max_x, _ = torch.max(x, dim=dim, keepdim=True)
+    
+    # Subtract maximum (in exp space, this is division)
+    x_shifted = x - max_x
+    
+    # Compute log-sum-exp with shifted values
+    return max_x + torch.log(torch.sum(torch.exp(x_shifted), dim=dim))
+
 def check_for_nan_inf(tensor, name):
     if torch.isnan(tensor).any():
         print(f"{name} contains NaN values")
     if torch.isinf(tensor).any():
         print(f"{name} contains infinity values")
 
-def log_sum_exp(x):
-    max_x = torch.max(x)  # Get the maximum value in the input tensor
-    return max_x + torch.log(torch.sum(torch.exp(x - max_x)))
-
 def likelihood_under_null(means, variances, pis):
+
+    # This is my original function for this likelihood calculation 
     combined_mean, combined_variance = combined_mean_variance(means, variances, pis)
     combined_std = combined_variance ** 0.5
 
+    # Calculate probability of 0 under the combined distribution
     # Calculate the log of the combined Gaussian PDF at zero
     combined_log_pdf_zero = gaussian_log_pdf(torch.tensor(0.0), combined_mean, combined_std)
     
-    # Calculate the weighted sum of logs of Gaussian PDFs evaluated at zero for each mean and std
+    # Calculate probability of 0 under each component and weight by pis
     log_pdfs_zero = gaussian_log_pdf(torch.tensor(0.0), means, variances ** 0.5)
-    pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)  # Ensure correct tensor type and shape
+    sum_log_pdfs_zero = torch.sum(log_pdfs_zero, dim=0)
     
-    # Old way 
-    weighted_sum_log_pdfs_zero = torch.sum(pis * log_pdfs_zero, dim=0)
+    # pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)  
+    # weighted_sum_log_pdfs_zero = torch.sum(pis * log_pdfs_zero, dim=0)
+
     # Calculate the log likelihood under H0
-    log_likelihood_H0 = weighted_sum_log_pdfs_zero - combined_log_pdf_zero
-    
-    # Instead of summing directly, use the log_sum_exp trick for numerical stability
-    # weighted_sum_log_pdfs_zero = log_sum_exp(pis * log_pdfs_zero)
-    # Calculate the log likelihood under H0 using log-sum-exp trick for stability
-    # log_likelihood_H0 = weighted_sum_log_pdfs_zero - combined_log_pdf_zero
+    log_likelihood_H0 = sum_log_pdfs_zero - combined_log_pdf_zero
     
     # Check for NaN or infinity values
     check_for_nan_inf(combined_mean, "Combined Mean")
     check_for_nan_inf(combined_variance, "Combined Variance")
     check_for_nan_inf(combined_log_pdf_zero, "Combined Log PDF Zero")
-    check_for_nan_inf(weighted_sum_log_pdfs_zero, "Weighted Sum Log PDFs Zero")
+    check_for_nan_inf(sum_log_pdfs_zero, "Sum Log PDFs Zero")
     check_for_nan_inf(log_likelihood_H0, "Log Likelihood H0")
-    
-    return torch.exp(log_likelihood_H0)  # Convert log likelihood back to standard likelihood
-
+    return log_likelihood_H0  # Convert log likelihood back to standard likelihood
+ 
 def compute_albf(psis_mus, psis_loc, pis, eps = 1e-20):
-
-    likelihood_H0 = likelihood_under_null(psis_mus, psis_loc, pis)
-    # Compute likelihood under H_0 for each junction
-    likelihood_H0 = torch.clamp(likelihood_H0, min=eps)
+    # This is the original function for computing ALBF
+    # with somewhat messy handling of numerical stability  
+    log_likelihood_H0 = likelihood_under_null(psis_mus, psis_loc, pis)
+     
+    #likelihood_H0 = torch.clamp(likelihood_H0, min=eps)
+     
     # Compute ALBF for each junction
-    albf = -torch.log(likelihood_H0)
+    albf = -log_likelihood_H0
+    
     # Convert -0.0 to 0
     albf = torch.where(albf == -0.0, torch.tensor(0.0), albf)
-    return albf, likelihood_H0
+    return albf, log_likelihood_H0 
 
 def all_vs_one_differential_splicing_test(means, variances, pis, factor_index=0):
     """
