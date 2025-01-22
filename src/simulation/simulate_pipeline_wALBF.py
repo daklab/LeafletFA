@@ -51,6 +51,7 @@ def parse_arguments():
     # Required arguments
     parser.add_argument('--input_path', type=str, required=True, help='Path to the input .h5ad file.')
     parser.add_argument('--ATSE_file', type=str, help='File containing ATSE annotations from the previous Leaflet processing step.')
+    parser.add_argument('--save_anndata', action='store_true', help='Indicate whether to save simulted anndata file.')
 
     # Optional arguments with default values
     parser.add_argument('--cell_type_column', type=str, default=None, help='Column name for cell types in the AnnData object.')
@@ -64,12 +65,8 @@ def parse_arguments():
     parser.add_argument('--use_global_prior', action='store_true', help='Whether to use junctin specific priors in the factor model (default: False).')
     parser.add_argument('--waypoints_use', action='store_true', help="Indicate whether the factor model should be initialized with predefined matrices (default: False).")
     parser.add_argument('--brain_only', action='store_true', help="Indicate whether the model will be run only on brain data (default: False).")
-    parser.add_argument('--run_NMF', action='store_true', help='Indicate whether NMF should be run as a baseline (default: False).')
     parser.add_argument('--mask_perc', type=float, default=0.1, help='Percentage of data (nonzero cluster counts) to mask.')
     parser.add_argument('--proportion_negative', type=float, default=0.5, help='Proportion of negatively spliced junctions.')
-
-    # Add arg for whether anndata object should be saved 
-    parser.add_argument('--save_anndata', action='store_true', help='Indicate whether the AnnData object should be saved (default: False).')
 
     return parser.parse_args()
 
@@ -321,7 +318,9 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     print(albf.shape)
 
     # Prepare dataframes
-    albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
+    # albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
+    albf_df = pd.DataFrame(albf, columns=["ALBF"])
+
     albf_df["junction_id_index"] = range(albf_df.shape[0])
     
     psis_df = pd.DataFrame(psis.T)
@@ -529,7 +528,7 @@ def main():
     """Main function to handle the analysis pipeline."""
     # Parse command-line arguments
     args = parse_arguments()
-
+    
     # Convert input concentration prior into the appropriate type
     input_conc = handle_input_conc_prior(args.input_conc_prior)
 
@@ -545,11 +544,10 @@ def main():
     num_epochs = args.num_epochs
     lr = args.lr  # Learning rate
     ATSE_file = args.ATSE_file 
-    run_NMF = args.run_NMF
     waypoints_use = args.waypoints_use
     brain_only = args.brain_only
     save_anndata = args.save_anndata
-
+    
     # Read in the intron cluster file 
     print("Reading in obtained intron cluster (ATSE file!)")
     intron_clusts = pd.read_csv(ATSE_file, sep="}")
@@ -587,9 +585,32 @@ def main():
     cell_type_psi_df_path = os.path.join(output_dir, 'cell_type_psi_df.csv')
     cell_type_psi_df.to_csv(cell_type_psi_df_path, index=False)
 
-    # Run the factor model
-    log_to_report(report_file, f"Running factor model with K = {K}!")
+    if save_anndata:
+        # Save the `adata_input` AnnData object to the output directory
+        adata_output_path = os.path.join(output_dir, "adata_input.h5ad")
+        adata_input.var.columns = adata_input.var.columns.astype(str)
 
+        for layer_name, layer_data in adata_input.layers.items():
+            if isinstance(layer_data, sp.coo_matrix):  
+                print(f"Converting layer {layer_name} from COO to CSR format.")
+                adata_input.layers[layer_name] = layer_data.tocsr()  # Convert COO to CSR
+
+        # Convert 'junc_ratio' from numpy.matrix to numpy.ndarray if it exists in layers
+        if isinstance(adata_input.layers["junc_ratio"], np.matrix):
+            adata_input.layers["junc_ratio"] = np.asarray(adata_input.layers["junc_ratio"])
+
+        # Save the AnnData object for this particular analysis 
+        adata_input.write(adata_output_path)
+        log_to_report(report_file, f"AnnData saved to {adata_output_path}")
+        
+         # Save tensors to the output directory
+        y_tensor_path = os.path.join(output_dir, 'full_y_tensor.pt')
+        total_counts_tensor_path = os.path.join(output_dir, 'full_total_counts_tensor.pt')
+
+        torch.save(full_y_tensor, y_tensor_path)
+        torch.save(full_total_counts_tensor, total_counts_tensor_path)
+    
+    log_to_report(report_file, f"Running factor model with K = {K}!")
     all_results, all_params = run_factor_model(adata_input, full_y_tensor, full_total_counts_tensor, K, device, use_global_prior, input_conc, waypoints_use, output_dir, num_inits, num_epochs, lr)
     save_plots(output_dir, all_results, report_file)
 
@@ -623,16 +644,17 @@ def main():
     silhouette_avg = plot_umap(assign_post, adata_input, output_dir)
     plot_pi_barplot(pi, output_dir)
     plot_clustermap(assign_post, adata_input, output_dir)
-
+    
     # Get silhouette score from NMF 
     silhouette_NMF = get_NMF(adata_input, K=K, output_dir=output_dir)
-
+    
     # Step 1: Define the columns for the DataFrame
     columns = [
         "proportion_negative", "K", "use_global_prior", "input_conc", "learning_rate", 
-        "avg_corr", "median_corr", "min_corr", "correlation_diff_albf", "correlation_diff_delta", "auc_score", 
-        "optimal_threshold", "accuracy", "precision", "recall", 
-        "false_positives", "false_negatives", "silhouette_avg", "cell_type_column", "silhouette_NMF", "input_conc"
+        "avg_corr", "median_corr", "min_corr", "correlation_diff_albf", "correlation_diff_delta", 
+        "auc_score", "optimal_threshold", "accuracy", "precision", "recall", 
+        "false_positives", "false_negatives", "silhouette_avg", "cell_type_column", 
+        "silhouette_NMF", "input_conc"
     ]
 
     if cell_type_column == None:
@@ -640,39 +662,15 @@ def main():
 
     # Step 2: Create a DataFrame with a single row
     results_df = pd.DataFrame([[
-        proportion_negative, K, use_global_prior, input_conc, lr, 
-        avg_corr, median_corr, min_corr, correlation_diff_albf, correlation_diff_delta, auc_score, 
-        optimal_threshold, accuracy, precision, recall, 
-        fp, fn, silhouette_avg, cell_type_column, silhouette_NMF, input_conc
-    ]], columns=columns)
+            proportion_negative, K, use_global_prior, input_conc, lr, 
+            avg_corr, median_corr, min_corr, correlation_diff_albf, correlation_diff_delta, auc_score, 
+            optimal_threshold, accuracy, precision, recall, 
+            fp, fn, silhouette_avg, cell_type_column, silhouette_NMF, input_conc
+        ]], columns=columns)
 
     # Step 3: Save the DataFrame to a CSV file in the output directory
     results_path = os.path.join(output_dir, "final_results.csv")
     results_df.to_csv(results_path, index=False)
-
-    # Save the `adata_input` AnnData object to the output directory
-    if save_anndata:
-        adata_output_path = os.path.join(output_dir, "adata_input.h5ad")
-        adata_input.var.columns = adata_input.var.columns.astype(str)
-
-        # Check and convert both 'Cluster_Counts' and 'Junction_Counts' layers from COO to CSR (or CSC)
-        for layer in ['Cluster_Counts', 'Junction_Counts']:
-            if isinstance(adata_input.layers[layer], scipy.sparse.coo_matrix):
-                adata_input.layers[layer] = adata_input.layers[layer].tocsr()  # Convert to CSR or use .tocsc() if you prefer
-
-        # Convert 'junc_ratio' from numpy.matrix to numpy.ndarray if it exists in layers
-        if isinstance(adata_input.layers["junc_ratio"], np.matrix):
-            adata_input.layers["junc_ratio"] = np.asarray(adata_input.layers["junc_ratio"])
-
-        # Save the AnnData object for this particular analysis 
-        adata_input.write(adata_output_path)
-        log_to_report(report_file, f"AnnData saved to {adata_output_path}")
-
-#    # Save all latent variables (i.e., trained model parameters) to a pickle file
-#    latent_vars_output_path = os.path.join(output_dir, "latent_vars.pkl")
-#    with open(latent_vars_output_path, "wb") as f:
-#        pickle.dump(latent_vars, f)
-#    log_to_report(report_file, f"Latent variables saved to {latent_vars_output_path}")
 
     print(f"Results saved to {results_path}")
     report_file.close()

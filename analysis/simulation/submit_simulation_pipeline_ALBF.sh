@@ -1,21 +1,20 @@
 #!/bin/bash
 
 # Define possible values for each parameter
-PROPORTION_NEGATIVE_VALUES=(0.1 0.5 0.9)
+PROPORTION_NEGATIVE_VALUES=(0.5)
 K_USE_VALUES=(2)
 USE_GLOBAL_PRIOR_VALUES=(False True)
 INPUT_CONC_PRIOR_VALUES=("None" "inf")  # Include "inf" as a string
-CELL_TYPE_COLUMN_VALUES=("None" "cell_ontology_class")  # Add None as an option
+CELL_TYPE_COLUMN_VALUES=("None") #"cell_ontology_class")  # Add None as an option
 WAYPOINTS_USE_VALUES=(False)  # Include option for waypoints
-RUN_NMF_VALUES=(True)  # Include option for running NMF
 BRAIN_ONLY_VALUES=(True)  # Add brain_only as an option
+SAVE_ANNDATA_VALUES=(False)  
+
 repeats=1  # Repeat each combination 2 times
 
-max_count=20
-num_epochs=300
-lr=0.1
-
-# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis
+max_count=5
+num_epochs=100
+lr=0.2
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
@@ -34,12 +33,11 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
       for input_conc_prior in "${INPUT_CONC_PRIOR_VALUES[@]}"; do
         for cell_type_column in "${CELL_TYPE_COLUMN_VALUES[@]}"; do
           for waypoints_use in "${WAYPOINTS_USE_VALUES[@]}"; do
-            for run_NMF in "${RUN_NMF_VALUES[@]}"; do
-              for brain_only in "${BRAIN_ONLY_VALUES[@]}"; do
-                
-                # Repeat each combination 'n' times (2 in this case)
+            for brain_only in "${BRAIN_ONLY_VALUES[@]}"; do
+              for save_anndata in "${SAVE_ANNDATA_VALUES[@]}"; do
+
+                # Repeat each combination 'n' times
                 for repeat in $(seq 1 $repeats); do
-                
                   # Increment the counter
                   ((count++))
 
@@ -49,13 +47,11 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
                     exit 0
                   fi
 
-                  # Define the SLURM job script
+                  # Submit the SLURM job script
                   sbatch <<EOT
 #!/bin/bash
 #SBATCH --job-name=sim_data_${count}_rep${repeat}
 #SBATCH --time=02:00:00
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
 
@@ -73,9 +69,8 @@ python $analysis_script --input_path $input_file \
   --cell_type_column ${cell_type_column} \
   $( [[ $use_global_prior == "True" ]] && echo "--use_global_prior" ) \
   $( [[ $waypoints_use == "True" ]] && echo "--waypoints_use" ) \
-  $( [[ $run_NMF == "True" ]] && echo "--run_NMF" ) \
-  $( [[ $brain_only == "True" ]] && echo "--brain_only" )
-
+  $( [[ $brain_only == "True" ]] && echo "--brain_only" ) \
+  $( [[ $save_anndata == "True" ]] && echo "--save_anndata" )
 EOT
 
                 done

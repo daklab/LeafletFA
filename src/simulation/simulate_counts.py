@@ -124,14 +124,10 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
             num_high = K // 2  # number of cell types that will have high PSI
             num_low = K - num_high  # remaining will have low PSI
 
-            J3_diff = 0
-            while J3_diff < 0.5:
-                # Sample PSIs from different distributions for each group
-                J3_probs_low = torch.distributions.beta.Beta(1, 3).sample([num_low])  # favor low PSI
-                J3_probs_high = torch.distributions.beta.Beta(3, 1).sample([num_high])  # favor high PSI
-                # Get the difference between the two groups medians 
-                J3_diff = torch.median(J3_probs_high) - torch.median(J3_probs_low)
-
+            # Sample PSIs from different distributions for each group
+            J3_probs_low = torch.distributions.beta.Beta(1, 3).sample([num_low])  # favor low PSI
+            J3_probs_high = torch.distributions.beta.Beta(3, 1).sample([num_high])  # favor high PSI
+    
             # Combine into one vector of length K
             J3_probs = torch.cat([J3_probs_low, J3_probs_high])
 
