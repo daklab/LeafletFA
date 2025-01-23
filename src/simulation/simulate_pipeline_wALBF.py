@@ -318,8 +318,8 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     print(albf.shape)
 
     # Prepare dataframes
-    # albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
-    albf_df = pd.DataFrame(albf, columns=["ALBF"])
+    albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
+    # albf_df = pd.DataFrame(albf, columns=["ALBF"])
 
     albf_df["junction_id_index"] = range(albf_df.shape[0])
     
