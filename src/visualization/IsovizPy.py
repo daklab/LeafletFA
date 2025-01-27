@@ -6,7 +6,81 @@ from tqdm import tqdm
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 from datetime import datetime
+from pyfaidx import Fasta
 
+def reverse_complement(seq):
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return ''.join(complement.get(base, base) for base in reversed(seq))
+
+def check_splice_site_motifs(fasta_file, splice_junctions, window_size=2):
+    genome = Fasta(fasta_file)
+    canonical_motifs = {
+        "GT-AG": ("GT", "AG"),
+        "AT-AC": ("AT", "AC"),
+        "GC-AG": ("GC", "AG")
+    }
+    
+    for junction in splice_junctions:
+        chrom = junction["chrom"]
+        if chrom not in genome:
+            chrom = f"chr{chrom}" if not chrom.startswith("chr") else chrom.replace("chr", "")
+            
+        if junction["strand"] == "+":
+            # 5' splice site (donor) at start, 3' splice site (acceptor) at end
+            donor_seq = str(genome[chrom][junction["start"]:junction["start"]+window_size]).upper()
+            acceptor_seq = str(genome[chrom][junction["end"]-window_size:junction["end"]]).upper()
+        else:
+            # For negative strand:
+            # 5' splice site (donor) at end, 3' splice site (acceptor) at start
+            # Need to take reverse complement as FASTA stores 5'->3'
+            donor_seq = reverse_complement(str(genome[chrom][junction["end"]-window_size:junction["end"]]).upper())
+            acceptor_seq = reverse_complement(str(genome[chrom][junction["start"]:junction["start"]+window_size]).upper())
+        
+        motif_match = "non-canonical"
+        for motif_name, (donor, acceptor) in canonical_motifs.items():
+            if donor_seq == donor and acceptor_seq == acceptor:
+                motif_match = motif_name
+                break
+                
+        junction["splice_motif"] = motif_match
+        junction["donor_seq"] = donor_seq
+        junction["acceptor_seq"] = acceptor_seq
+        
+    return splice_junctions
+
+def analyze_splice_junctions(gtf_file, fasta_file, junction_df, tolerance=1):
+    """
+    Comprehensive analysis of splice junctions including annotation status and splice sites.
+    
+    Args:
+        gtf_file (str): Path to GTF annotation file
+        fasta_file (str): Path to genome FASTA file
+        junction_df (pd.DataFrame): DataFrame containing junction information
+        tolerance (int): Base pair tolerance for matching annotated sites
+    """
+    # Create database if needed
+    db = create_db(gtf_file)
+    
+    # Convert junction IDs to structured format
+    splice_junctions = convert_junction_ids(junction_df)
+    
+    # Check annotation status
+    junction_annotations = check_junction_annotation(splice_junctions, db, tolerance)
+    
+    # Check splice site motifs
+    junctions_with_motifs = check_splice_site_motifs(fasta_file, splice_junctions)
+    
+    # Merge results
+    results = []
+    for junction, annotation in zip(junctions_with_motifs, junction_annotations):
+        result = {
+            **junction,
+            **annotation,
+            "is_canonical": junction["splice_motif"] in ["GT-AG", "AT-AC", "GC-AG"]
+        }
+        results.append(result)
+    
+    return pd.DataFrame(results)
 
 # Load Gencode GTF and create a database
 def create_db(gtf_file, db_name="gencode_mm10.db"):

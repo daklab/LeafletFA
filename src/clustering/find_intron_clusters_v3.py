@@ -1,0 +1,809 @@
+#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+import pandas as pd
+from typing import Dict, List
+import networkx as nx
+import pyranges as pr
+from tqdm import tqdm
+from pyfaidx import Fasta
+import gffutils
+import logging
+import os 
+import time
+import sqlite3
+from collections import defaultdict
+import networkx as nx
+
+class JunctionReader:
+    def __init__(self, 
+                min_intron: int = 50, 
+                max_intron: int = 500000, 
+                sequencing_type: str = "single_cell", 
+                batch_size: int = 10,
+                min_cells: int = 2,
+                min_reads: int = 100):
+        
+        self.min_intron = min_intron
+        self.max_intron = max_intron
+        self.sequencing_type = sequencing_type
+        self.dtypes = {0: str, 1: 'int32', 2: 'int32', 3: str, 4: 'int32', 5: str,
+                      6: 'int32', 7: 'int32', 8: str, 9: 'int32', 10: str, 11: str}
+        self.batch_size = batch_size
+        self.min_cells = min_cells
+        self.min_reads = min_reads
+        self.combined_junctions = {}
+
+    def parse_file(self, file_path: str) -> Dict[str, Dict]:
+        """
+        Read and process a junction file, returning a dictionary of junctions with cell information.
+
+        Args:
+            file_path (str): Path to the junction file
+
+        Returns:
+            Dict[str, Dict]: Dictionary containing junction information with cell-specific details
+        """
+        try:
+            juncs = pd.read_csv(file_path, sep="\t", header=None, dtype=self.dtypes)
+
+            col_names = ["chrom", "chromStart", "chromEnd", "name", "score", "strand",
+                        "thickStart", "thickEnd", "itemRgb", "blockCount", "blockSizes", "blockStarts"]
+            if self.sequencing_type == "single_cell":
+                col_names += ["num_cells_wjunc", "cell_readcounts"]
+            juncs.columns = col_names[:len(juncs.columns)]
+
+            juncs[['block_add_start', 'block_subtract_end']] = (
+                juncs["blockSizes"].str.extract(r'(\d+),(\d+)').astype(int)
+            )
+            juncs["chromStart"] += juncs['block_add_start']
+            juncs["chromEnd"] -= juncs['block_subtract_end']
+            juncs["intron_length"] = juncs["chromEnd"] - juncs["chromStart"]
+
+            juncs = juncs[
+                (juncs["intron_length"] >= self.min_intron) & 
+                (juncs["intron_length"] <= self.max_intron)
+            ]
+            standard_chromosomes_pattern = r'^(?:chr)?(?:[1-9]|1[0-9]|2[0-2]|X|Y|MT)$'
+            juncs = juncs[juncs['chrom'].str.match(standard_chromosomes_pattern)]
+
+            juncs['junction_id'] = (
+                juncs['chrom'] + '_' + 
+                juncs['chromStart'].astype(str) + '_' +
+                juncs['chromEnd'].astype(str) + '_' + 
+                juncs['strand']
+            )
+
+            junc_dict = {}
+            for _, row in juncs.iterrows():
+                junction_id = row['junction_id']
+                if junction_id not in junc_dict:
+                    junc_dict[junction_id] = {
+                        'cells': 1,
+                        'total_score': row['score'],
+                        'chrom': row['chrom'],
+                        'start': row['chromStart'],
+                        'end': row['chromEnd'],
+                        'strand': row['strand']
+                    }
+                else:
+                    junc_dict[junction_id]['cells'] += 1
+                    junc_dict[junction_id]['total_score'] += row['score']
+
+            return junc_dict
+        
+        except Exception as e:
+            logging.error(f"Could not read in {file_path}: {e}")
+            return {}
+        
+    def process_files(self, file_list: List[str], num_workers: int = 4) -> Dict[str, Dict]:
+        """
+        Process multiple junction files in parallel batches.
+        
+        Args:
+            file_list: List of file paths
+            num_workers: Number of parallel workers
+            
+        Returns:
+            Combined junction dictionary
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from itertools import islice
+        from tqdm import tqdm
+        
+        def process_batch(batch_files):
+            batch_junctions = {}
+            for file_path in batch_files:
+                file_junctions = self.parse_file(file_path)
+                for j_id, j_data in file_junctions.items():
+                    if j_id not in batch_junctions:
+                        batch_junctions[j_id] = j_data
+                    else:
+                        batch_junctions[j_id]['cells'] += j_data['cells']
+                        batch_junctions[j_id]['total_score'] += j_data['total_score']
+            return batch_junctions
+
+        def merge_batch_results(batch_result):
+            for j_id, j_data in batch_result.items():
+                if j_id not in self.combined_junctions:
+                    self.combined_junctions[j_id] = j_data
+                else:
+                    self.combined_junctions[j_id]['cells'] += j_data['cells']
+                    self.combined_junctions[j_id]['total_score'] += j_data['total_score']
+
+        total_batches = (len(file_list) + self.batch_size - 1) // self.batch_size
+    
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            with tqdm(total=total_batches, desc="Processing junction files") as pbar:
+                for i in range(0, len(file_list), self.batch_size):
+                    batch = list(islice(file_list, i, i + self.batch_size))
+                    batch_result = executor.submit(process_batch, batch)
+                    merge_batch_results(batch_result.result())
+                    pbar.update(1)
+
+        return self.combined_junctions
+
+    def SJ_QC(self, junctions: Dict[str, Dict], min_cells: int = 2, min_reads: int = 100) -> Dict[str, Dict]:
+        """
+        Filter junctions based on minimum cell and read requirements.
+
+        Args:
+            junctions: Dictionary of junctions
+            min_cells: Minimum number of cells required
+            min_reads: Minimum number of reads required
+
+        Returns:
+            Filtered junction dictionary
+        """
+        initial_count = len(junctions)
+
+        # Filter based on cells and reads
+        filtered_junctions = {
+            j_id: j_data for j_id, j_data in junctions.items()
+            if j_data['cells'] >= min_cells and j_data['total_score'] >= min_reads
+        }
+
+        # Log filtering results
+        filtered_count = len(filtered_junctions)
+        # To log also add which filters were used
+        logging.info(f"Minimum cells per junction to pass set to: {min_cells}")
+        logging.info(f"Minimum total reads per junction to pass set to: {min_reads}")
+        logging.info(f"Initial junctions before basic QC: {initial_count}")
+        logging.info(f"Filtered junctions: {filtered_count}")
+        logging.info(f"Removed junctions: {initial_count - filtered_count}")
+        logging.info(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
+
+        return filtered_junctions
+
+    def clear_combined_junctions(self):
+        """Reset the combined junctions dictionary"""
+        self.combined_junctions = {}
+
+class JunctionAnalyzer:
+    def __init__(self, fasta_file: str, db: gffutils.FeatureDB, window_size: int = 2, tolerance: int = 1):
+        self.genome = Fasta(fasta_file)
+        self.db = db
+        self.window_size = window_size
+        self.tolerance = tolerance
+        self.canonical_motifs = {
+            "GT-AG": ("GT", "AG"),
+            "AT-AC": ("AT", "AC"),
+            "GC-AG": ("GC", "AG")
+        }
+
+    @staticmethod
+    def reverse_complement(seq: str) -> str:
+        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+        return ''.join(complement.get(base, base) for base in reversed(seq))
+
+    def get_splice_sequences(self, junction: Dict):
+        chrom = self.check_chromosome(junction["chrom"])
+        
+        if junction["strand"] == "+":
+            donor_seq = str(self.genome[chrom][junction["start"]:junction["start"]+self.window_size]).upper()
+            acceptor_seq = str(self.genome[chrom][junction["end"]-self.window_size:junction["end"]]).upper()
+        else:
+            donor_seq = self.reverse_complement(str(self.genome[chrom][junction["end"]-self.window_size:junction["end"]]).upper())
+            acceptor_seq = self.reverse_complement(str(self.genome[chrom][junction["start"]:junction["start"]+self.window_size]).upper())
+            
+        return donor_seq, acceptor_seq
+
+    def check_chromosome(self, chrom: str) -> str:
+        if chrom not in self.genome:
+            return f"chr{chrom}" if not chrom.startswith("chr") else chrom.replace("chr", "")
+        return chrom
+
+    def get_motif_type(self, donor_seq: str, acceptor_seq: str) -> str:
+        for motif_name, (donor, acceptor) in self.canonical_motifs.items():
+            if donor_seq == donor and acceptor_seq == acceptor:
+                return motif_name
+        return "non-canonical"
+
+    def check_splice_sites(self, junctions: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Add splice site annotations to junction dictionary"""
+        for j_id, junction in junctions.items():
+            donor_seq, acceptor_seq = self.get_splice_sequences(junction)
+            junction["splice_motif"] = self.get_motif_type(donor_seq, acceptor_seq)
+            junction["donor_seq"] = donor_seq
+            junction["acceptor_seq"] = acceptor_seq
+        return junctions
+
+    def filter_canonical(self, junctions: Dict[str, Dict], only_canonical: bool = True) -> Dict[str, Dict]:
+       """Filter junctions based on splice site motifs"""
+       if not only_canonical:
+           return junctions
+
+       initial_count = len(junctions)
+       motif_counts = {}
+    
+       for j_data in junctions.values():
+           motif = j_data["splice_motif"]
+           motif_counts[motif] = motif_counts.get(motif, 0) + 1
+    
+       canonical_junctions = {j_id: j_data for j_id, j_data in junctions.items() 
+                            if j_data["splice_motif"] != "non-canonical"}
+    
+       filtered_count = len(canonical_junctions)
+    
+       logging.info(f"Initial junctions before splice site filtering: {initial_count}")
+       logging.info("\nSplice site motif breakdown:")
+       for motif, count in motif_counts.items():
+           logging.info(f"{motif}: {count} ({(count/initial_count)*100:.2f}%)")
+       logging.info(f"\nCanonical junctions kept: {filtered_count}")
+       logging.info(f"Non-canonical removed: {initial_count - filtered_count}")
+       logging.info(f"Percentage canonical: {(filtered_count/initial_count)*100:.2f}%")
+    
+       return canonical_junctions
+    
+    def check_junction_annotation(self, junctions: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Add annotation status for both ends of each junction"""
+        # Group junctions by chromosome to minimize database queries
+        chrom_groups = {}
+        for j_id, j in junctions.items():
+            chrom_groups.setdefault(j["chrom"], []).append((j_id, j))
+
+        for chrom, junc_group in tqdm(chrom_groups.items(), desc="Processing chromosomes"):
+            # Get all relevant transcripts for this chromosome group
+            min_pos = min(j["start"] for _, j in junc_group)
+            max_pos = max(j["end"] for _, j in junc_group)
+
+            # Single query for all transcripts in range
+            transcripts = list(self.db.region(
+                region=(chrom, min_pos - 1000, max_pos + 1000),
+                featuretype="transcript"
+            ))
+
+            # Cache exon data
+            exon_cache = {t.id: list(self.db.children(t, featuretype="exon", order_by="start"))
+                         for t in transcripts}
+
+            # Get gene info for transcripts
+            gene_info = {}
+            for t in transcripts:
+                gene = list(self.db.parents(t, featuretype="gene"))[0]
+                gene_info[t.id] = {
+                    'gene_id': gene.id,
+                    'gene_name': gene.attributes.get('gene_name', [None])[0]
+                }
+
+            # Process each junction
+            for j_id, junction in junc_group:
+                start = junction["start"]
+                end = junction["end"]
+                strand = junction["strand"]
+
+                label_5_prime, label_3_prime = "unannotated on 5'", "unannotated on 3'"
+                position_off_5_prime, position_off_3_prime = None, None
+                transcripts_junc = set()
+                genes_found = set()
+
+                for transcript in transcripts:
+                    exons = exon_cache[transcript.id]
+
+                    if strand == "+":
+                        for exon in exons:
+                            if abs(exon.end - start) <= self.tolerance:
+                                label_5_prime = "annotated on 5'"
+                                position_off_5_prime = exon.end - start
+                                transcripts_junc.add(transcript.id)
+                                break
+
+                            if exon.end > start + self.tolerance:
+                                break
+
+                        for exon in exons:
+                            if abs(exon.start - end) <= self.tolerance:
+                                label_3_prime = "annotated on 3'"
+                                position_off_3_prime = exon.start - end
+                                break
+
+                            if exon.start > end + self.tolerance:
+                                break
+                    else:
+                        for exon in exons:
+                            if abs(exon.start - end) <= self.tolerance:
+                                label_5_prime = "annotated on 5'"
+                                position_off_5_prime = exon.start - end
+                                transcripts_junc.add(transcript.id)
+                                break
+
+                            if exon.start > end + self.tolerance:
+                                break
+
+                        for exon in exons:
+                            if abs(exon.end - start) <= self.tolerance:
+                                label_3_prime = "annotated on 3'"
+                                position_off_3_prime = exon.end - start
+                                transcripts_junc.add(transcript.id)
+                                break
+
+                            if exon.end > start + self.tolerance:
+                                break
+                        
+                    # Add gene info when transcript matches
+                    if transcript.id in transcripts_junc:
+                        gene_data = gene_info[transcript.id]
+                        genes_found.add((gene_data['gene_id'], gene_data['gene_name']))
+        
+                junction.update({
+                    "label_5_prime": label_5_prime,
+                    "label_3_prime": label_3_prime,
+                    "position_off_5_prime": position_off_5_prime,
+                    "position_off_3_prime": position_off_3_prime,
+                    "transcripts": list(transcripts_junc),
+                    "gene_ids": [g[0] for g in genes_found],
+                    "gene_names": [g[1] for g in genes_found]
+                })
+
+        return junctions
+    
+    def filter_annotated(self, junctions: Dict[str, Dict], require_both_ends: bool = False) -> Dict[str, Dict]:
+        """Filter junctions based on annotation status"""
+        initial_count = len(junctions)
+        annotation_stats = {
+        "both_ends": 0,
+        "five_prime_only": 0,
+        "three_prime_only": 0,
+        "unannotated": 0,
+        "multi_gene": 0
+        }
+
+        multi_gene_junctions = {}
+
+        for j_id, j_data in junctions.items():
+            five_prime = j_data["label_5_prime"].startswith("annotated")
+            three_prime = j_data["label_3_prime"].startswith("annotated")
+            
+            if len(j_data["gene_ids"]) > 1:
+                annotation_stats["multi_gene"] += 1
+                multi_gene_junctions[j_id] = j_data
+                continue
+    
+            if five_prime and three_prime:
+                annotation_stats["both_ends"] += 1
+            elif five_prime:
+                annotation_stats["five_prime_only"] += 1
+            elif three_prime:
+                annotation_stats["three_prime_only"] += 1
+            else:
+                annotation_stats["unannotated"] += 1
+        
+        filtered_junctions = {
+            j_id: j_data for j_id, j_data in junctions.items()
+            if len(j_data["gene_ids"]) == 1 and (
+                (require_both_ends and 
+                    j_data["label_5_prime"].startswith("annotated") and 
+                    j_data["label_3_prime"].startswith("annotated")) or
+                (not require_both_ends and 
+                    (j_data["label_5_prime"].startswith("annotated") or 
+                    j_data["label_3_prime"].startswith("annotated"))))
+            }
+        
+        filtered_count = len(filtered_junctions)
+
+        # Save multi-gene junctions to file
+        if multi_gene_junctions:
+            multi_gene_file = f'multi_gene_junctions_{time.strftime("%Y%m%d-%H%M%S")}.csv'
+            pd.DataFrame.from_dict(multi_gene_junctions, orient='index').to_csv(multi_gene_file)
+            logging.info(f"Multi-gene junctions saved to {multi_gene_file}")
+        
+        logging.info(f"Initial junctions: {initial_count}")
+        logging.info("\nAnnotation breakdown:")
+        for status, count in annotation_stats.items():
+            logging.info(f"{status}: {count} ({(count/initial_count)*100:.2f}%)")
+        logging.info(f"\nJunctions kept: {filtered_count}")
+        logging.info(f"Junctions removed: {initial_count - filtered_count}")
+        logging.info(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
+        
+        return filtered_junctions
+
+class GenomeDB:
+    def __init__(self, db_name: str, gtf_file: str = None, fasta_file: str = None, max_retries: int = 3):
+        self.db_name = db_name
+        self.gtf_file = gtf_file
+        self.fasta_file = fasta_file
+        self.genome = None
+        self.db = None
+        
+        if self.fasta_file:
+            print(f"Loading genome from {self.fasta_file}")
+            self.genome = Fasta(self.fasta_file)
+            
+        if self.gtf_file and self.db_name:
+            if not os.path.exists(self.db_name):
+                print(f"Creating database {self.db_name} from {self.gtf_file}")
+                self.db = self.create_db()
+            else:
+                print(f"Loading existing database {self.db_name}")
+                for attempt in range(max_retries):
+                    try:
+                        self.db = gffutils.FeatureDB(self.db_name)
+                        break
+                    except sqlite3.OperationalError as e:
+                        if attempt == max_retries - 1:
+                            raise e
+                        print(f"Database locked, retrying... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(1)  # Wait before retry
+
+    def create_db(self) -> gffutils.FeatureDB:
+        return gffutils.create_db(
+            self.gtf_file,
+            dbfn=self.db_name,
+            force=True,
+            keep_order=True,
+            merge_strategy="merge",
+            sort_attribute_values=True,
+            disable_infer_genes=True,
+            disable_infer_transcripts=True,
+        )
+    
+    def get_db(self) -> gffutils.FeatureDB:
+        return self.db
+    
+# Class for ATSE mapping or junction grouping 
+# Nodes are splice sites (donor/acceptor)
+# Edges represent junctions
+# Connected components form ATSEs
+# Event classification based on graph topology
+
+class ATSEAnalyzer:
+    def __init__(self):
+        self.events = {}
+        
+    def build_splice_graph(self, junctions: Dict[str, Dict]):
+        gene_graphs = {}
+        gene_groups = defaultdict(dict)
+
+        # Track statistics
+        stats = {
+            'total_junctions': len(junctions),
+            'included_junctions': 0,
+            'excluded_no_gene': 0,
+            'junctions_per_gene': defaultdict(int),
+            'single_junction_genes': set()  # Track genes with only one junction
+        }
+
+        # First pass - group junctions by gene
+        for j_id, j_data in junctions.items():
+            if not j_data['gene_ids']:
+                stats['excluded_no_gene'] += 1
+                continue
+            gene_id = j_data['gene_ids'][0]
+            gene_groups[gene_id][j_id] = j_data
+            stats['included_junctions'] += 1
+
+        # Build graphs and track single-junction genes
+        for gene_id, gene_juncs in gene_groups.items():
+            G = nx.Graph()
+
+            for j_id, j_data in gene_juncs.items():
+                if j_data['strand'] == '+':
+                    donor = (j_data['chrom'], j_data['start'], 'donor')
+                    acceptor = (j_data['chrom'], j_data['end'], 'acceptor')
+                else:
+                    donor = (j_data['chrom'], j_data['end'], 'donor')
+                    acceptor = (j_data['chrom'], j_data['start'], 'acceptor')
+
+                G.add_edge(donor, acceptor,
+                          junction_id=j_id,
+                          strand=j_data['strand'],
+                          score=j_data['total_score'])
+
+            gene_graphs[gene_id] = G
+            num_junctions = len(gene_juncs)
+            stats['junctions_per_gene'][gene_id] = num_junctions
+
+            if num_junctions == 1:
+                stats['single_junction_genes'].add(gene_id)
+
+        # Calculate additional statistics
+        stats['num_genes'] = len(gene_graphs)
+        stats['num_single_junction_genes'] = len(stats['single_junction_genes'])
+        stats['num_analyzable_genes'] = stats['num_genes'] - stats['num_single_junction_genes']
+        stats['single_junction_pairs'] = stats['num_single_junction_genes']
+        stats['avg_junctions_per_gene'] = stats['included_junctions'] / len(gene_graphs) if gene_graphs else 0
+        stats['max_junctions_in_gene'] = max(stats['junctions_per_gene'].values()) if stats['junctions_per_gene'] else 0
+        stats['min_junctions_in_gene'] = min(stats['junctions_per_gene'].values()) if stats['junctions_per_gene'] else 0
+
+        # Print summary automatically
+        print(f"""Splice Graph Building Summary:
+    Total junctions: {stats['total_junctions']}
+    - Included in graphs: {stats['included_junctions']}
+    - Excluded (no gene): {stats['excluded_no_gene']}
+
+    Gene Statistics:
+    - Total genes: {stats['num_genes']}
+    - Genes with single junction (can't analyze): {stats['num_single_junction_genes']} ({stats['num_single_junction_genes']/stats['num_genes']*100:.1f}% of genes)
+    - Analyzable genes (>1 junction): {stats['num_analyzable_genes']} ({stats['num_analyzable_genes']/stats['num_genes']*100:.1f}% of genes)
+
+    Junction Distribution:
+    - Average junctions per gene: {stats['avg_junctions_per_gene']:.1f}
+    - Max junctions in a gene: {stats['max_junctions_in_gene']}
+    - Min junctions in a gene: {stats['min_junctions_in_gene']}""")
+
+        return gene_graphs, stats
+
+    def find_connected_junctions(self, G: nx.Graph, start_junction_id: str, visited: set) -> set:
+        """
+        Find all junctions connected by shared splice sites, including indirect connections.
+        Returns empty set if only one junction is found.
+        """
+        # Get start junction's nodes
+        start_nodes = []
+        for u, v, data in G.edges(data=True):
+            if data['junction_id'] == start_junction_id:
+                start_nodes = [u, v]
+                break
+            
+        if not start_nodes:
+            return set()
+
+        # Find all nodes in the connected component
+        component_nodes = set(nx.node_connected_component(G, start_nodes[0]))
+
+        # Get all junctions in this component
+        connected = set()
+        for u, v, data in G.edges(data=True):
+            if u in component_nodes and v in component_nodes:
+                junction_id = data['junction_id']
+                if junction_id not in visited:
+                    connected.add(junction_id)
+
+        return connected if len(connected) > 1 else set()
+
+    def analyze_splice_sites(self, G: nx.Graph) -> Dict:
+        """
+        Analyze splice site connectivity in a graph.
+        """
+        stats = {
+            'num_nodes': G.number_of_nodes(),
+            'num_edges': G.number_of_edges(),
+            'donor_sites': len([n for n in G.nodes() if n[2] == 'donor']),
+            'acceptor_sites': len([n for n in G.nodes() if n[2] == 'acceptor'])
+        }
+
+        # Analyze node degrees (how many junctions share each splice site)
+        degrees = [d for _, d in G.degree()]
+        stats['max_degree'] = max(degrees) if degrees else 0
+        stats['isolated_sites'] = degrees.count(1)
+
+        return stats
+
+    def find_atse_groups(self, graphs: Dict[str, nx.Graph]) -> Dict[str, Dict]:
+        atse_groups = {}
+        event_counter = 0
+
+        # Statistics tracking
+        stats = {
+            'total_junctions': sum(G.number_of_edges() for G in graphs.values()),
+            'analyzable_junctions': 0,  # junctions in genes with ≥2 junctions
+            'junctions_in_atses': set(),  # track unique junctions used in ATSEs
+            'junction_counts': defaultdict(int)  # number of junctions per ATSE
+        }
+
+        # First count analyzable junctions
+        for gene_id, G in graphs.items():
+            num_junctions = G.number_of_edges()
+            if num_junctions >= 2:
+                stats['analyzable_junctions'] += num_junctions
+
+        # Find ATSEs
+        for gene_id, G in graphs.items():
+            visited = set()
+
+            # Start from each unvisited junction
+            for _, _, data in G.edges(data=True):
+                junction_id = data['junction_id']
+                if junction_id not in visited:
+                    # Find connected junctions sharing splice sites
+                    connected = self.find_connected_junctions(G, junction_id, visited)
+
+                    if connected:
+                        event_id = f"ATSE_{event_counter}"
+                        # Get all splice sites involved
+                        splice_sites = set()
+                        for j_id in connected:
+                            for u, v, data in G.edges(data=True):
+                                if data['junction_id'] == j_id:
+                                    splice_sites.add(u)
+                                    splice_sites.add(v)
+
+                        num_junctions = len(connected)
+                        stats['junction_counts'][num_junctions] += 1
+                        stats['junctions_in_atses'].update(connected)
+
+                        atse_groups[event_id] = {
+                            'gene_id': gene_id,
+                            'junction_ids': list(connected),
+                            'num_junctions': len(connected),
+                            'splice_sites': list(splice_sites)
+                        }
+                        event_counter += 1
+                        visited.update(connected)
+                    else:
+                        visited.add(junction_id)
+
+        # Calculate final statistics
+        total_atses = len(atse_groups)
+        junctions_used = len(stats['junctions_in_atses'])
+        unused_junctions = stats['analyzable_junctions'] - junctions_used
+
+        # Print summary
+        print(f"""
+        ATSE Analysis Summary:
+        ---------------------
+        Total junctions in dataset: {stats['total_junctions']}
+        Analyzable junctions (in genes with ≥2 junctions): {stats['analyzable_junctions']}
+        Junctions included in ATSEs: {junctions_used}
+        Junctions not included in ATSEs: {unused_junctions}
+        Total ATSEs found: {total_atses}
+
+        ATSE Size Distribution:
+        ----------------------""")
+    
+        # Sort and print ATSE size distribution
+        sorted_counts = dict(sorted(stats['junction_counts'].items()))
+        for num_junctions, count in sorted_counts.items():
+            print(f"ATSEs with {num_junctions} junctions: {count}")
+
+        return atse_groups, sorted_counts
+        
+    def classify_events(self, graphs: Dict[str, nx.Graph], atse_groups: Dict[str, Dict]):
+        # Initialize counter for event types
+        event_counts = {
+            'alternative_3_prime': 0,
+            'alternative_5_prime': 0,
+            'exon_skip': 0,
+            'complex': 0
+        }
+
+        for event_id, group in atse_groups.items():
+            G = graphs[group['gene_id']]
+
+            # Count unique donor and acceptor sites
+            donor_sites = len([s for s in group['splice_sites'] if s[2] == 'donor'])
+            acceptor_sites = len([s for s in group['splice_sites'] if s[2] == 'acceptor'])
+
+            if donor_sites == 1 and acceptor_sites > 1:
+                group['event_type'] = 'alternative_3_prime'
+            elif donor_sites > 1 and acceptor_sites == 1:
+                group['event_type'] = 'alternative_5_prime'
+            elif len(group['junction_ids']) == 3:
+                # Get junction coordinates and strand
+                junc_coords = []
+                strand = None
+                for j_id in group['junction_ids']:
+                    for u, v, data in G.edges(data=True):
+                        if data['junction_id'] == j_id:
+                            coord1, coord2 = u[1], v[1]
+                            strand = u[2]  # Get strand from node tuple (assuming format: (gene_id, position, strand))
+                            junc_coords.append((coord1, coord2))
+                            break
+                        
+                # Sort junctions based on start position, accounting for strand
+                if strand == '+':
+                    # For positive strand, smaller coordinate is start
+                    junc_coords.sort(key=lambda x: min(x))
+                else:
+                    # For negative strand, larger coordinate is start
+                    junc_coords.sort(key=lambda x: -max(x))
+
+                # Check for exon skipping by comparing starts and ends based on strand
+                is_exon_skip = False
+                if strand == '+':
+                    # Positive strand: compare smallest coordinates for starts, largest for ends
+                    if (min(junc_coords[0]) == min(junc_coords[1]) and  # J1 start == J2 start
+                        max(junc_coords[1]) == max(junc_coords[2])):    # J2 end == J3 end
+                        is_exon_skip = True
+                else:
+                    # Negative strand: compare largest coordinates for starts, smallest for ends
+                    if (max(junc_coords[0]) == max(junc_coords[1]) and  # J1 start == J2 start
+                        min(junc_coords[1]) == min(junc_coords[2])):    # J2 end == J3 end
+                        is_exon_skip = True
+
+                group['event_type'] = 'exon_skip' if is_exon_skip else 'complex'
+            else:
+                group['event_type'] = 'complex'
+
+            # Update counter
+            event_counts[group['event_type']] += 1
+
+        return atse_groups, event_counts
+
+def create_analysis_summary(reader, len_junction_files, filtered_junctions):
+   summary_data = {
+       'Parameter': [
+           'Number of input files',
+           'Min intron length',
+           'Max intron length',
+           'Min cells per junction',
+           'Min reads per junction',
+           'Splice site filter',
+           'Total junctions found',
+           'Average cells per junction',
+           'Number of unique genes', 
+       ],
+       'Value': [
+           len_junction_files,
+           reader.min_intron,
+           reader.max_intron,
+           reader.min_cells,
+           reader.min_reads,
+           'Canonical only',
+           len(filtered_junctions),
+           sum(j['cells'] for j in filtered_junctions.values()) / len(filtered_junctions) if filtered_junctions else 0,
+        len({g for j in filtered_junctions.values() for g in j['gene_ids']}) if filtered_junctions else 0
+       ]
+   }
+   
+   summary_df = pd.DataFrame(summary_data)
+   # Add today's and time date to file name 
+   file_name = 'ATSE_mapping_junction_summary_' + time.strftime("%Y%m%d-%H%M%S") + '.csv'
+   summary_df.to_csv(file_name, index=False)
+   print(f"Summary saved to {file_name}")
+   return summary_df
+
+def main():
+    parser = argparse.ArgumentParser(description='Process junction files and annotate splice sites')
+    parser.add_argument('--junction-files', nargs='+', required=True, help='List of junction BED files')
+    parser.add_argument('--gtf', required=True, help='GTF file path')
+    parser.add_argument('--fasta', required=True, help='Genome FASTA file path')
+    parser.add_argument('--db-name', required=True, help='Name for/of the genome database')
+    parser.add_argument('--min-intron', type=int, default=50, help='Minimum intron length')
+    parser.add_argument('--max-intron', type=int, default=500000, help='Maximum intron length')
+    parser.add_argument('--min-cells', type=int, default=2, help='Minimum number of cells')
+    parser.add_argument('--min-reads', type=int, default=100, help='Minimum number of reads')
+    args = parser.parse_args()
+    
+    # Initialize the junction reader
+    reader = JunctionReader(
+        min_intron=args.min_intron,
+        max_intron=args.max_intron,
+        min_cells=args.min_cells,
+        min_reads=args.min_reads
+    )
+    
+    # Process and filter junctions
+    junctions = reader.process_files(args.junction_files)
+    filtered_junctions = reader.SJ_QC(junctions)
+    
+    # Initialize genome database
+    genome_db = GenomeDB(db_name=args.db_name, gtf_file=args.gtf, fasta_file=args.fasta)
+    
+    # Initialize junction analyzer
+    analyzer = JunctionAnalyzer(fasta_file=args.fasta, db=genome_db.get_db())
+    
+    # Analyze junctions
+    junctions = analyzer.check_splice_sites(filtered_junctions)
+    canonical_junctions = analyzer.filter_canonical(junctions)
+    annotated_junctions = analyzer.check_junction_annotation(canonical_junctions)
+    
+    # Call after filtering
+    summary = create_analysis_summary(reader, len(args.junction_files), annotated_junctions)
+
+    return annotated_junctions
+
+if __name__ == "__main__":
+    main()
+
+# python your_script.py --junction-files *.bed --gtf gencode.v19.gtf --fasta genome.fa --db-name gencode.db

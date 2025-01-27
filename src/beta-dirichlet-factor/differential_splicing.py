@@ -12,11 +12,11 @@ def combined_mean_variance(means, variances, pis):
     pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)
 
     # Weighting by pis
-    # This computes a single combined Gaussian distribution from multiple components, weighted by their mixing proportions.
+    # This computes a single combined Gaussian distribution from multiple components
+    # weighted by their mixing proportions.
     weighted_inv_variances = pis * inv_variances
     combined_variance = 1 / torch.sum(weighted_inv_variances, dim=0)
     combined_mean = combined_variance * torch.sum(means * weighted_inv_variances, dim=0)
-    
     return combined_mean, combined_variance
 
 def combined_mean_variance_exclude(means, variances, pis, exclude_index=0):
@@ -61,23 +61,6 @@ def gaussian_log_pdf(x, mean, std):
     log_denom = 0.5 * torch.log(2 * torch.pi * var)
     log_num = - (x - mean) ** 2 / (2 * var)
     return log_num - log_denom
-
-def log_sum_exp(x, dim=0):
-    """
-    Numerically stable implementation of log(Σᵢ exp(xᵢ))
-    
-    To prevent overflow/underflow, we use the identity:
-    log(Σᵢ exp(xᵢ)) = α + log(Σᵢ exp(xᵢ - α))
-    where α = max(xᵢ)
-    """
-    # Find maximum value for numerical stability
-    max_x, _ = torch.max(x, dim=dim, keepdim=True)
-    
-    # Subtract maximum (in exp space, this is division)
-    x_shifted = x - max_x
-    
-    # Compute log-sum-exp with shifted values
-    return max_x + torch.log(torch.sum(torch.exp(x_shifted), dim=dim))
 
 def check_for_nan_inf(tensor, name):
     if torch.isnan(tensor).any():

@@ -170,13 +170,8 @@ def process_gtf(gtf_file): #make this into a seperate script that processes the 
 
 def filter_junctions_by_shared_splice_sites(df):
     """
-    Filter junctions by shared splice sites.
-
-    Parameters:
-    - df (pd.DataFrame): Input DataFrame.
-
-    Returns:
-    - pd.DataFrame: Filtered DataFrame.
+    Filter junctions by shared splice sites, keeping only junctions that share at least
+    one splice site with another junction in their cluster.
     """
     # Function to apply to each group (cluster)
     def filter_group(group):
@@ -184,13 +179,14 @@ def filter_junctions_by_shared_splice_sites(df):
         # Find duplicated start and end positions within the group
         duplicated_starts = group['Start'].duplicated(keep=False)
         duplicated_ends = group['End'].duplicated(keep=False)
+        # Only keep junctions that share at least one splice site
+        return group[duplicated_starts | duplicated_ends]['junction_id'].tolist()
         
-        # Keep rows where either start or end position is duplicated (this results in at least two junctions in every cluster)
-        return group[duplicated_starts | duplicated_ends]
-    
-    # Group by 'Cluster' and apply the filtering function
-    filtered_df = df.groupby('Cluster').apply(filter_group).reset_index(drop=True)
-    return filtered_df.Cluster.unique()
+    # Group by Cluster and get list of junction_ids to keep
+    junctions_to_keep = df.groupby('Cluster').apply(filter_group)
+    # Flatten the list of junction_ids
+    junctions_to_keep = [j for sublist in junctions_to_keep for j in sublist]
+    return junctions_to_keep
 
 def read_single_junction_file(junc_file, min_intron=50, max_intron=500000, sequencing_type="single_cell"):
     """
@@ -320,11 +316,12 @@ def mapping_juncs_exons(juncs_gr, gtf_exons_gr, singletons):
     # Ensure distance parameter is still 1 
     juncs_gr = juncs_gr[abs(juncs_gr.Distance) == 1]
 
-    # Group juncs_gr by gene_id and ensure that each junction has Start and End aligning with at least one End_b and Start_b respectively
+    # Group juncs_gr by gene_id and ensure that each junction has Start and End 
+    # aligning with at least one End_b and Start_b respectively
     grouped_gr = juncs_gr.df.groupby("gene_id")
     juncs_keep = []
     for name, group in grouped_gr:
-        group = group[(group.Start.isin(group.End_b)) & (group.End.isin(group.Start_b))]
+        group = group[(group.Start.isin(group.End_b)) | (group.End.isin(group.Start_b))]
         # Save junctions that are found here after filtering for matching start and end positions
         juncs_keep.append(group.junction_id.unique())
 
@@ -452,10 +449,10 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
 
     # 9. Now for each cluster we want to check that each junction shares a splice site with at least one other junction in the cluster
     if filter_shared_ss:
-        clusts_keep = filter_junctions_by_shared_splice_sites(clusters.df)
+        juncs_keep = filter_junctions_by_shared_splice_sites(clusters.df)
         # Update clusters, juncs_gr, and juncs_coords_unique to only include clusters
-        clusters = clusters[clusters.Cluster.isin(clusts_keep)]
-        juncs_gr = juncs_gr[juncs_gr.junction_id.isin(clusters.junction_id)]
+        clusters = clusters[clusters.junction_id.isin(juncs_keep)]
+        juncs_gr = juncs_gr[juncs_gr.junction_id.isin(juncs_keep)]
 
     juncs_coords_unique = juncs_coords_unique[juncs_coords_unique.junction_id.isin(clusters.junction_id)]
     
@@ -501,10 +498,10 @@ def main(junc_files, gtf_file, output_file, sequencing_type, junc_bed_file, thre
 
     # 14. Confirm that junctions in each cluster share splice sites
     print("Confirming that junctions in each cluster share splice sites")
-    clusts_keep = filter_junctions_by_shared_splice_sites(clusters.df)
+    juncs_keep = filter_junctions_by_shared_splice_sites(clusters.df)
     # Update clusters, juncs_gr, and juncs_coords_unique to only include clusters
-    clusters = clusters[clusters.Cluster.isin(clusts_keep)]
-    juncs_gr = juncs_gr[juncs_gr.junction_id.isin(clusters.junction_id)]
+    clusters = clusters[clusters.junction_id.isin(juncs_keep)]
+    juncs_gr = juncs_gr[juncs_gr.junction_id.isin(juncs_keep)]
     juncs_coords_unique = juncs_coords_unique[juncs_coords_unique.junction_id.isin(clusters.junction_id)]
     all_juncs_df = all_juncs_df[all_juncs_df.junction_id.isin(juncs_coords_unique.junction_id)]
     print("The number of clusters after filtering for shared splice sites is " + str(len(clusters.Cluster.unique())))
