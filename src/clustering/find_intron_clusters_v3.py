@@ -14,6 +14,11 @@ import time
 import sqlite3
 from collections import defaultdict
 import networkx as nx
+import random 
+import gzip
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm.contrib.concurrent import thread_map
+from itertools import islice
 
 class JunctionReader:
     def __init__(self, 
@@ -22,7 +27,8 @@ class JunctionReader:
                 sequencing_type: str = "single_cell", 
                 batch_size: int = 10,
                 min_cells: int = 2,
-                min_reads: int = 100):
+                min_reads: int = 100, 
+                num_workers: int = 4):
         
         self.min_intron = min_intron
         self.max_intron = max_intron
@@ -32,6 +38,7 @@ class JunctionReader:
         self.batch_size = batch_size
         self.min_cells = min_cells
         self.min_reads = min_reads
+        self.num_workers = num_workers
         self.combined_junctions = {}
 
     def parse_file(self, file_path: str) -> Dict[str, Dict]:
@@ -96,54 +103,63 @@ class JunctionReader:
             logging.error(f"Could not read in {file_path}: {e}")
             return {}
         
-    def process_files(self, file_list: List[str], num_workers: int = 4) -> Dict[str, Dict]:
+    def process_files(self, file_list: List[str]) -> Dict[str, Dict]:
         """
         Process multiple junction files in parallel batches.
-        
+
         Args:
             file_list: List of file paths
-            num_workers: Number of parallel workers
-            
+
         Returns:
             Combined junction dictionary
         """
-        from concurrent.futures import ThreadPoolExecutor
-        from itertools import islice
-        from tqdm import tqdm
-        
         def process_batch(batch_files):
             batch_junctions = {}
             for file_path in batch_files:
-                file_junctions = self.parse_file(file_path)
-                for j_id, j_data in file_junctions.items():
-                    if j_id not in batch_junctions:
-                        batch_junctions[j_id] = j_data
-                    else:
-                        batch_junctions[j_id]['cells'] += j_data['cells']
-                        batch_junctions[j_id]['total_score'] += j_data['total_score']
+                try:
+                    file_junctions = self.parse_file(file_path)
+                    for j_id, j_data in file_junctions.items():
+                        if j_id not in batch_junctions:
+                            batch_junctions[j_id] = j_data
+                        else:
+                            batch_junctions[j_id]['cells'] += j_data['cells']
+                            batch_junctions[j_id]['total_score'] += j_data['total_score']
+                except Exception as e:
+                    logging.error(f"Error processing file {file_path}: {str(e)}")
             return batch_junctions
 
-        def merge_batch_results(batch_result):
-            for j_id, j_data in batch_result.items():
-                if j_id not in self.combined_junctions:
-                    self.combined_junctions[j_id] = j_data
-                else:
-                    self.combined_junctions[j_id]['cells'] += j_data['cells']
-                    self.combined_junctions[j_id]['total_score'] += j_data['total_score']
+        # Create batches
+        batches = [file_list[i:i + self.batch_size] for i in range(0, len(file_list), self.batch_size)]
+        total_batches = len(batches)
 
-        total_batches = (len(file_list) + self.batch_size - 1) // self.batch_size
-    
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            with tqdm(total=total_batches, desc="Processing junction files") as pbar:
-                for i in range(0, len(file_list), self.batch_size):
-                    batch = list(islice(file_list, i, i + self.batch_size))
-                    batch_result = executor.submit(process_batch, batch)
-                    merge_batch_results(batch_result.result())
-                    pbar.update(1)
+        print(f"\nProcessing {len(file_list)} files in {total_batches} batches")
+        print(f"Using {self.num_workers} workers, batch size: {self.batch_size}\n")
+
+        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+            futures = [executor.submit(process_batch, batch) for batch in batches]
+
+            with tqdm(total=total_batches, desc="Processing batches") as pbar:
+                for future in as_completed(futures):
+                    try:
+                        batch_result = future.result()
+
+                        # Merge results
+                        for j_id, j_data in batch_result.items():
+                            if j_id not in self.combined_junctions:
+                                self.combined_junctions[j_id] = j_data
+                            else:
+                                self.combined_junctions[j_id]['cells'] += j_data['cells']
+                                self.combined_junctions[j_id]['total_score'] += j_data['total_score']
+
+                        pbar.update(1)
+
+                    except Exception as e:
+                        logging.error(f"Batch processing error: {str(e)}")
+                        pbar.update(1)
 
         return self.combined_junctions
 
-    def SJ_QC(self, junctions: Dict[str, Dict], min_cells: int = 2, min_reads: int = 100) -> Dict[str, Dict]:
+    def SJ_QC(self, junctions: Dict[str, Dict]) -> Dict[str, Dict]:
         """
         Filter junctions based on minimum cell and read requirements.
 
@@ -160,14 +176,14 @@ class JunctionReader:
         # Filter based on cells and reads
         filtered_junctions = {
             j_id: j_data for j_id, j_data in junctions.items()
-            if j_data['cells'] >= min_cells and j_data['total_score'] >= min_reads
+            if j_data['cells'] >= self.min_cells and j_data['total_score'] >= self.min_reads
         }
 
         # Log filtering results
         filtered_count = len(filtered_junctions)
         # To log also add which filters were used
-        logging.info(f"Minimum cells per junction to pass set to: {min_cells}")
-        logging.info(f"Minimum total reads per junction to pass set to: {min_reads}")
+        logging.info(f"Minimum cells per junction to pass set to: {self.min_cells}")
+        logging.info(f"Minimum total reads per junction to pass set to: {self.min_reads}")
         logging.info(f"Initial junctions before basic QC: {initial_count}")
         logging.info(f"Filtered junctions: {filtered_count}")
         logging.info(f"Removed junctions: {initial_count - filtered_count}")
@@ -589,6 +605,93 @@ class ATSEAnalyzer:
 
         return stats
 
+    def analyze_singleton_junctions(self, G: nx.Graph, junction_id: str) -> Dict:
+        """Analyze a singleton junction for its properties."""
+        junction_info = {}
+
+        for u, v, data in G.edges(data=True):
+            if data['junction_id'] == junction_id:
+                junction_info = {
+                    'junction_id': junction_id,
+                    'donor_site': u[1],
+                    'acceptor_site': v[1],
+                    'strand': data['strand'],
+                    'score': data['score'],  # number of reads
+                    'chromosome': u[0]
+                }
+                break
+
+        return junction_info
+    
+    def sample_unincluded_junctions(self, graphs: Dict[str, nx.Graph], included_junctions: set, sample_size: int = 500) -> List[Dict]:
+        """
+        Sample unincluded junctions and verify they don't share splice sites.
+        Returns list of any problematic cases found.
+        """
+        all_unincluded = []
+        for gene_id, G in graphs.items():
+            gene_junctions = {data['junction_id'] for _, _, data in G.edges(data=True)}
+            unincluded = gene_junctions - included_junctions
+            all_unincluded.extend((gene_id, j_id) for j_id in unincluded)
+
+        # Sample junctions
+        if len(all_unincluded) > sample_size:
+            sampled = random.sample(all_unincluded, sample_size)
+        else:
+            sampled = all_unincluded
+
+        problematic = []
+
+        # Check each sampled junction
+        for gene_id, junction_id in sampled:
+            G = graphs[gene_id]
+
+            # Get junction's splice sites
+            current_donor = None
+            current_acceptor = None
+            for u, v, data in G.edges(data=True):
+                if data['junction_id'] == junction_id:
+                    current_donor = u[1]  # Just the coordinate
+                    current_acceptor = v[1]
+                    break
+                
+            if current_donor is None or current_acceptor is None:
+                print(f"Warning: Could not find coordinates for {junction_id}")
+                continue
+            
+            # Check all other junctions in the same gene
+            for u, v, data in G.edges(data=True):
+                other_id = data['junction_id']
+                if other_id != junction_id:
+                    other_donor = u[1]
+                    other_acceptor = v[1]
+
+                    # Check for exact coordinate matches
+                    if (current_donor == other_donor or 
+                        current_donor == other_acceptor or
+                        current_acceptor == other_donor or 
+                        current_acceptor == other_acceptor):
+
+                        # For debugging, print the exact match found
+                        problematic.append({
+                            'gene_id': gene_id,
+                            'junction_id': junction_id,
+                            'junction_coords': (current_donor, current_acceptor),
+                            'shares_site_with': other_id,
+                            'other_coords': (other_donor, other_acceptor),
+                            'shared_coord': current_donor if (current_donor == other_donor or current_donor == other_acceptor) else current_acceptor
+                        })
+
+        if problematic:
+            print("\nDetailed analysis of problematic cases:")
+            for case in problematic[:5]:
+                print(f"\nJunction: {case['junction_id']} ({case['junction_coords']})")
+                print(f"Shares with: {case['shares_site_with']} ({case['other_coords']})")
+                print(f"Shared coordinate: {case['shared_coord']}")
+
+        return problematic
+    
+
     def find_atse_groups(self, graphs: Dict[str, nx.Graph]) -> Dict[str, Dict]:
         atse_groups = {}
         event_counter = 0
@@ -596,9 +699,10 @@ class ATSEAnalyzer:
         # Statistics tracking
         stats = {
             'total_junctions': sum(G.number_of_edges() for G in graphs.values()),
-            'analyzable_junctions': 0,  # junctions in genes with ≥2 junctions
-            'junctions_in_atses': set(),  # track unique junctions used in ATSEs
-            'junction_counts': defaultdict(int)  # number of junctions per ATSE
+            'analyzable_junctions': 0,
+            'junctions_in_atses': set(),
+            'junction_counts': defaultdict(int),
+            'singleton_junctions': []  # Store info about singleton junctions
         }
 
         # First count analyzable junctions
@@ -611,16 +715,13 @@ class ATSEAnalyzer:
         for gene_id, G in graphs.items():
             visited = set()
 
-            # Start from each unvisited junction
             for _, _, data in G.edges(data=True):
                 junction_id = data['junction_id']
                 if junction_id not in visited:
-                    # Find connected junctions sharing splice sites
                     connected = self.find_connected_junctions(G, junction_id, visited)
 
                     if connected:
                         event_id = f"ATSE_{event_counter}"
-                        # Get all splice sites involved
                         splice_sites = set()
                         for j_id in connected:
                             for u, v, data in G.edges(data=True):
@@ -628,8 +729,7 @@ class ATSEAnalyzer:
                                     splice_sites.add(u)
                                     splice_sites.add(v)
 
-                        num_junctions = len(connected)
-                        stats['junction_counts'][num_junctions] += 1
+                        stats['junction_counts'][len(connected)] += 1
                         stats['junctions_in_atses'].update(connected)
 
                         atse_groups[event_id] = {
@@ -641,30 +741,52 @@ class ATSEAnalyzer:
                         event_counter += 1
                         visited.update(connected)
                     else:
+                        # This is a singleton junction
+                        singleton_info = self.analyze_singleton_junctions(G, junction_id)
+                        singleton_info['gene_id'] = gene_id
+                        stats['singleton_junctions'].append(singleton_info)
                         visited.add(junction_id)
 
         # Calculate final statistics
         total_atses = len(atse_groups)
         junctions_used = len(stats['junctions_in_atses'])
-        unused_junctions = stats['analyzable_junctions'] - junctions_used
-
-        # Print summary
-        print(f"""
-        ATSE Analysis Summary:
-        ---------------------
-        Total junctions in dataset: {stats['total_junctions']}
-        Analyzable junctions (in genes with ≥2 junctions): {stats['analyzable_junctions']}
-        Junctions included in ATSEs: {junctions_used}
-        Junctions not included in ATSEs: {unused_junctions}
-        Total ATSEs found: {total_atses}
-
-        ATSE Size Distribution:
-        ----------------------""")
+        singleton_count = len(stats['singleton_junctions'])
     
-        # Sort and print ATSE size distribution
+        # Perform sanity check on sample of unincluded junctions
+        problematic = self.sample_unincluded_junctions(graphs, stats['junctions_in_atses'])
+
+        # Write singleton information to file
+        with open('singleton_junctions.tsv', 'w') as f:
+            # Write header
+            f.write('gene_id\tjunction_id\tchromosome\tdonor_site\tacceptor_site\tstrand\tread_count\n')
+            # Write data
+            for j in stats['singleton_junctions']:
+                f.write(f"{j['gene_id']}\t{j['junction_id']}\t{j['chromosome']}\t{j['donor_site']}\t"
+                       f"{j['acceptor_site']}\t{j['strand']}\t{j['score']}\n")
+
+        print(f"""
+    ATSE Analysis Summary:
+    ---------------------
+    Total junctions in dataset: {stats['total_junctions']}
+    Analyzable junctions (in genes with ≥2 junctions): {stats['analyzable_junctions']}
+    Junctions included in ATSEs: {junctions_used}
+    Singleton junctions: {singleton_count}
+    Total ATSEs found: {total_atses}
+
+    ATSE Size Distribution:
+    ----------------------""")
+
         sorted_counts = dict(sorted(stats['junction_counts'].items()))
         for num_junctions, count in sorted_counts.items():
             print(f"ATSEs with {num_junctions} junctions: {count}")
+
+        if problematic:
+            print(f"\nWARNING: Found {len(problematic)} potentially problematic cases in random sampling")
+            print("First few examples:")
+            for case in problematic[:5]:
+                print(f"Junction {case['junction_id']} in gene {case['gene_id']} shares site with {case['shares_site_with']}")
+        else:
+            print("\nRandom sampling verification: OK - no shared splice sites found in sampled junctions")
 
         return atse_groups, sorted_counts
         
@@ -729,6 +851,88 @@ class ATSEAnalyzer:
             event_counts[group['event_type']] += 1
 
         return atse_groups, event_counts
+    
+    def save_atse_file(self, atse_groups: Dict[str, Dict], junctions: Dict[str, Dict], file_name: str):
+        """
+        Save ATSE groups to a tab-delimited file with gzip compression, including junction annotations.
+
+        Args:
+            atse_groups: Dictionary of ATSE events
+            junctions: Dictionary of junction annotations
+            file_name: Output file path (will append .gz if not present)
+        """
+        import gzip
+
+        required_fields = {'gene_id', 'num_junctions', 'event_type', 'junction_ids'}
+
+        # Ensure file has .gz extension
+        if not file_name.endswith('.gz'):
+            file_name = file_name + '.gz'
+
+        try:
+            with gzip.open(file_name, 'wt') as f:  # 'wt' for write text mode
+                # Write header
+                f.write("event_id\tgene_id\tnum_junctions\tevent_type\t"
+                       "junction_id\tchrom\tstart\tend\tstrand\tcells\ttotal_score\t"
+                       "splice_motif\tdonor_seq\tacceptor_seq\t"
+                       "label_5_prime\tlabel_3_prime\t"
+                       "position_off_5_prime\tposition_off_3_prime\t"
+                       "transcripts\n")
+
+                # Write data
+                for event_id, group in atse_groups.items():
+                    # Verify all required fields are present
+                    missing_fields = required_fields - set(group.keys())
+                    if missing_fields:
+                        print(f"Warning: Event {event_id} missing required fields: {missing_fields}")
+                        continue
+                    
+                    try:
+                        # For each junction in the ATSE
+                        for junction_id in group['junction_ids']:
+                            if junction_id not in junctions:
+                                print(f"Warning: Junction {junction_id} not found in annotations")
+                                continue
+
+                            j_data = junctions[junction_id]
+
+                            # Convert transcripts list to string
+                            transcripts_str = '|'.join(j_data.get('transcripts', []))
+
+                            # Write line with all information
+                            f.write(f"{event_id}\t"
+                                   f"{group['gene_id']}\t"
+                                   f"{group['num_junctions']}\t"
+                                   f"{group['event_type']}\t"
+                                   f"{junction_id}\t"
+                                   f"{j_data.get('chrom', 'NA')}\t"
+                                   f"{j_data.get('start', 'NA')}\t"
+                                   f"{j_data.get('end', 'NA')}\t"
+                                   f"{j_data.get('strand', 'NA')}\t"
+                                   f"{j_data.get('cells', 'NA')}\t"
+                                   f"{j_data.get('total_score', 'NA')}\t"
+                                   f"{j_data.get('splice_motif', 'NA')}\t"
+                                   f"{j_data.get('donor_seq', 'NA')}\t"
+                                   f"{j_data.get('acceptor_seq', 'NA')}\t"
+                                   f"{j_data.get('label_5_prime', 'NA')}\t"
+                                   f"{j_data.get('label_3_prime', 'NA')}\t"
+                                   f"{j_data.get('position_off_5_prime', 'NA')}\t"
+                                   f"{j_data.get('position_off_3_prime', 'NA')}\t"
+                                   f"{transcripts_str}\n")
+
+                    except Exception as e:
+                        print(f"Warning: Error writing event {event_id}: {str(e)}")
+                        continue
+                    
+            print(f"ATSEs successfully saved to {file_name}")
+            print(f"Wrote {len(atse_groups)} ATSE events")
+        
+        except IOError as e:
+            print(f"Error: Could not write to file {file_name}: {str(e)}")
+            raise
+        except Exception as e:
+            print(f"Error: Unexpected error while saving ATSEs: {str(e)}")
+            raise
 
 def create_analysis_summary(reader, len_junction_files, filtered_junctions):
    summary_data = {
@@ -762,48 +966,3 @@ def create_analysis_summary(reader, len_junction_files, filtered_junctions):
    summary_df.to_csv(file_name, index=False)
    print(f"Summary saved to {file_name}")
    return summary_df
-
-def main():
-    parser = argparse.ArgumentParser(description='Process junction files and annotate splice sites')
-    parser.add_argument('--junction-files', nargs='+', required=True, help='List of junction BED files')
-    parser.add_argument('--gtf', required=True, help='GTF file path')
-    parser.add_argument('--fasta', required=True, help='Genome FASTA file path')
-    parser.add_argument('--db-name', required=True, help='Name for/of the genome database')
-    parser.add_argument('--min-intron', type=int, default=50, help='Minimum intron length')
-    parser.add_argument('--max-intron', type=int, default=500000, help='Maximum intron length')
-    parser.add_argument('--min-cells', type=int, default=2, help='Minimum number of cells')
-    parser.add_argument('--min-reads', type=int, default=100, help='Minimum number of reads')
-    args = parser.parse_args()
-    
-    # Initialize the junction reader
-    reader = JunctionReader(
-        min_intron=args.min_intron,
-        max_intron=args.max_intron,
-        min_cells=args.min_cells,
-        min_reads=args.min_reads
-    )
-    
-    # Process and filter junctions
-    junctions = reader.process_files(args.junction_files)
-    filtered_junctions = reader.SJ_QC(junctions)
-    
-    # Initialize genome database
-    genome_db = GenomeDB(db_name=args.db_name, gtf_file=args.gtf, fasta_file=args.fasta)
-    
-    # Initialize junction analyzer
-    analyzer = JunctionAnalyzer(fasta_file=args.fasta, db=genome_db.get_db())
-    
-    # Analyze junctions
-    junctions = analyzer.check_splice_sites(filtered_junctions)
-    canonical_junctions = analyzer.filter_canonical(junctions)
-    annotated_junctions = analyzer.check_junction_annotation(canonical_junctions)
-    
-    # Call after filtering
-    summary = create_analysis_summary(reader, len(args.junction_files), annotated_junctions)
-
-    return annotated_junctions
-
-if __name__ == "__main__":
-    main()
-
-# python your_script.py --junction-files *.bed --gtf gencode.v19.gtf --fasta genome.fa --db-name gencode.db
