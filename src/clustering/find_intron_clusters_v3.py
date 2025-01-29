@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-import argparse
-from pathlib import Path
 import pandas as pd
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import networkx as nx
-import pyranges as pr
 from tqdm import tqdm
 from pyfaidx import Fasta
 import gffutils
@@ -15,10 +12,8 @@ import sqlite3
 from collections import defaultdict
 import networkx as nx
 import random 
-import gzip
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm.contrib.concurrent import thread_map
-from itertools import islice
+import re
 
 class JunctionReader:
     def __init__(self, 
@@ -182,12 +177,12 @@ class JunctionReader:
         # Log filtering results
         filtered_count = len(filtered_junctions)
         # To log also add which filters were used
-        logging.info(f"Minimum cells per junction to pass set to: {self.min_cells}")
-        logging.info(f"Minimum total reads per junction to pass set to: {self.min_reads}")
-        logging.info(f"Initial junctions before basic QC: {initial_count}")
-        logging.info(f"Filtered junctions: {filtered_count}")
-        logging.info(f"Removed junctions: {initial_count - filtered_count}")
-        logging.info(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
+        print(f"Minimum cells per junction to pass set to: {self.min_cells}")
+        print(f"Minimum total reads per junction to pass set to: {self.min_reads}")
+        print(f"Initial junctions before basic QC: {initial_count}")
+        print(f"Filtered junctions: {filtered_count}")
+        print(f"Removed junctions: {initial_count - filtered_count}")
+        print(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
 
         return filtered_junctions
 
@@ -261,13 +256,13 @@ class JunctionAnalyzer:
     
        filtered_count = len(canonical_junctions)
     
-       logging.info(f"Initial junctions before splice site filtering: {initial_count}")
-       logging.info("\nSplice site motif breakdown:")
+       print(f"Initial junctions before splice site filtering: {initial_count}")
+       print("\nSplice site motif breakdown:")
        for motif, count in motif_counts.items():
-           logging.info(f"{motif}: {count} ({(count/initial_count)*100:.2f}%)")
-       logging.info(f"\nCanonical junctions kept: {filtered_count}")
-       logging.info(f"Non-canonical removed: {initial_count - filtered_count}")
-       logging.info(f"Percentage canonical: {(filtered_count/initial_count)*100:.2f}%")
+           print(f"{motif}: {count} ({(count/initial_count)*100:.2f}%)")
+       print(f"\nCanonical junctions kept: {filtered_count}")
+       print(f"Non-canonical removed: {initial_count - filtered_count}")
+       print(f"Percentage canonical: {(filtered_count/initial_count)*100:.2f}%")
     
        return canonical_junctions
     
@@ -303,7 +298,7 @@ class JunctionAnalyzer:
                 }
 
             # Process each junction
-            for j_id, junction in junc_group:
+            for j_id, junction in tqdm(junc_group, desc="Processing junctions"):
                 start = junction["start"]
                 end = junction["end"]
                 strand = junction["strand"]
@@ -373,9 +368,25 @@ class JunctionAnalyzer:
 
         return junctions
     
-    def filter_annotated(self, junctions: Dict[str, Dict], require_both_ends: bool = False) -> Dict[str, Dict]:
-        """Filter junctions based on annotation status"""
+    def filter_annotated(self, junctions: Dict[str, Dict], annotation_status_include: str = 'both') -> Dict[str, Dict]:
+        """
+        Filter junctions based on annotation status.
+    
+        Args:
+            junctions: Dictionary of junctions
+            annotation_status_include: Filtering option for junctions
+                - 'both': Keep only junctions where both ends are annotated
+                - 'either': Keep junctions where at least one end is annotated
+                - 'unanno_also': Keep all junctions regardless of annotation
+
+        Returns:
+            Filtered junction dictionary
+        """
+        if annotation_status_include not in ['both', 'either', 'unanno_also']:
+            raise ValueError("annotation_status_include must be one of: 'both', 'either', 'unanno_also'")
+        
         initial_count = len(junctions)
+
         annotation_stats = {
         "both_ends": 0,
         "five_prime_only": 0,
@@ -384,53 +395,75 @@ class JunctionAnalyzer:
         "multi_gene": 0
         }
 
+        filtered_junctions = {}
         multi_gene_junctions = {}
 
+        # Process each junction
         for j_id, j_data in junctions.items():
-            five_prime = j_data["label_5_prime"].startswith("annotated")
-            three_prime = j_data["label_3_prime"].startswith("annotated")
             
+            # Check position off for 5' and 3' ends if not None 
+            five_prime=False 
+            three_prime=False
+
+            if j_data["position_off_5_prime"] is not None:
+                five_prime = (j_data["position_off_5_prime"] <= 1) and (j_data["position_off_5_prime"] > 0)
+            if j_data["position_off_3_prime"] is not None:
+                three_prime = (j_data["position_off_3_prime"] <= 1) and (j_data["position_off_3_prime"] > 0)
+
+            # Handle multi-gene junctions
             if len(j_data["gene_ids"]) > 1:
                 annotation_stats["multi_gene"] += 1
                 multi_gene_junctions[j_id] = j_data
                 continue
-    
+
+            # Categorize junction
             if five_prime and three_prime:
                 annotation_stats["both_ends"] += 1
+                category = "both"
             elif five_prime:
                 annotation_stats["five_prime_only"] += 1
+                category = "five_prime"
             elif three_prime:
                 annotation_stats["three_prime_only"] += 1
+                category = "three_prime"
             else:
                 annotation_stats["unannotated"] += 1
-        
-        filtered_junctions = {
-            j_id: j_data for j_id, j_data in junctions.items()
-            if len(j_data["gene_ids"]) == 1 and (
-                (require_both_ends and 
-                    j_data["label_5_prime"].startswith("annotated") and 
-                    j_data["label_3_prime"].startswith("annotated")) or
-                (not require_both_ends and 
-                    (j_data["label_5_prime"].startswith("annotated") or 
-                    j_data["label_3_prime"].startswith("annotated"))))
-            }
-        
-        filtered_count = len(filtered_junctions)
+                category = "unannotated"
 
+            # Apply filtering based on annotation_status_include
+            keep_junction = False
+            if annotation_status_include == 'both':
+                keep_junction = (category == "both")
+            elif annotation_status_include == 'either':
+                keep_junction = (category in ["both", "five_prime", "three_prime"])
+            elif annotation_status_include == 'unanno_also':
+                keep_junction = True
+
+            if keep_junction:
+                # Add junction to filtered dictionary and include its category
+                j_data["annotation_status"] = category
+                filtered_junctions[j_id] = j_data
+
+        filtered_count = len(filtered_junctions)
+        
         # Save multi-gene junctions to file
         if multi_gene_junctions:
             multi_gene_file = f'multi_gene_junctions_{time.strftime("%Y%m%d-%H%M%S")}.csv'
             pd.DataFrame.from_dict(multi_gene_junctions, orient='index').to_csv(multi_gene_file)
-            logging.info(f"Multi-gene junctions saved to {multi_gene_file}")
-        
-        logging.info(f"Initial junctions: {initial_count}")
-        logging.info("\nAnnotation breakdown:")
+            print(f"\nMulti-gene junctions saved to {multi_gene_file}")
+
+        # Print statistics
+        print(f"\nInitial junctions: {initial_count}")
+        print("\nAnnotation breakdown:")
         for status, count in annotation_stats.items():
-            logging.info(f"{status}: {count} ({(count/initial_count)*100:.2f}%)")
-        logging.info(f"\nJunctions kept: {filtered_count}")
-        logging.info(f"Junctions removed: {initial_count - filtered_count}")
-        logging.info(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
-        
+            print(f"{status}: {count} ({(count/initial_count)*100:.2f}%)")
+
+        print(f"\nFiltering summary:")
+        print(f"Annotation status filter: {annotation_status_include}")
+        print(f"Junctions kept: {filtered_count}")
+        print(f"Junctions removed: {initial_count - filtered_count}")
+        print(f"Percentage kept: {(filtered_count/initial_count)*100:.2f}%")
+
         return filtered_junctions
 
 class GenomeDB:
@@ -472,7 +505,7 @@ class GenomeDB:
             disable_infer_genes=True,
             disable_infer_transcripts=True,
         )
-    
+        
     def get_db(self) -> gffutils.FeatureDB:
         return self.db
     
@@ -481,7 +514,6 @@ class GenomeDB:
 # Edges represent junctions
 # Connected components form ATSEs
 # Event classification based on graph topology
-
 class ATSEAnalyzer:
     def __init__(self):
         self.events = {}
@@ -806,6 +838,7 @@ class ATSEAnalyzer:
             donor_sites = len([s for s in group['splice_sites'] if s[2] == 'donor'])
             acceptor_sites = len([s for s in group['splice_sites'] if s[2] == 'acceptor'])
 
+            # Need a window on how far the alternative splice sites are 
             if donor_sites == 1 and acceptor_sites > 1:
                 group['event_type'] = 'alternative_3_prime'
             elif donor_sites > 1 and acceptor_sites == 1:

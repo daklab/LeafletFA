@@ -45,8 +45,6 @@ def read_single_junction_file_filt(junc_file, relevant_junction_ids, sequencing_
               6: 'int32', 7: 'int32', 8: str, 9: 'int32', 10: str, 11: str}
     juncs = pd.read_csv(junc_file, sep="\t", header=None, dtype=dtypes)
     
-    print(f"Processing file: {junc_file}")
-
     try:
         juncs = pd.read_csv(junc_file, sep="\t", header=None, dtype=dtypes)
     except pd.errors.EmptyDataError:
@@ -165,7 +163,7 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
         junction_files = [junction_files]
 
     junctions = sorted(relevant_junction_ids)
-    junction_to_cluster = dict(zip(intron_clusts['junction_id'], intron_clusts['Cluster']))
+    junction_to_cluster = dict(zip(intron_clusts['junction_id'], intron_clusts['event_id']))
     ordered_clusters = [junction_to_cluster[junc] for junc in junctions if junc in junction_to_cluster]
 
     junc_idx = {junction: i for i, junction in enumerate(junctions)}
@@ -205,7 +203,7 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     # Replace keys to be cell_indices 
     cell_id_to_index = {v: k for k, v in cell_idx.items()}
 
-    # Step 2: Replace the cell id keys with the corresponding indices
+    # Replace the cell id keys with the corresponding indices
     indexed_cell_junction_counts = {
         cell_id_to_index[cell]: junctions for cell, junctions in cell_junction_counts.items() if cell in cell_id_to_index
     }
@@ -222,7 +220,7 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     # Build sparse matrix for cell-by-junction
     cell_by_junction_matrix = coo_matrix((flat_counts_junc, (flat_cells_junc, flat_junctions)), shape=(len(cells), len(junc_idx)))
 
-    # Step 4: Flatten dictionaries for cell-by-cluster
+    # Flatten dictionaries for cell-by-cluster
     flat_cells_clust = np.array([cell for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
     flat_clusters = np.array([clust for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
     flat_counts_clust = np.array([indexed_cell_cluster_counts[cell][clust] for cell in indexed_cell_cluster_counts for clust in indexed_cell_cluster_counts[cell]])
@@ -231,57 +229,6 @@ def process_files_and_build_matrices_parallel(junction_files, relevant_junction_
     cell_by_cluster_matrix = coo_matrix((flat_counts_clust, (flat_cells_clust, flat_clusters)), shape=(len(cells), len(cluster_idx)))
 
     return cell_by_junction_matrix, cell_by_cluster_matrix, cells, junctions, cell_idx, junc_idx, cluster_idx, cluster_idx_flip
-
-def sanity_check(cell_by_junction_matrix, cell_by_cluster_matrix, cell_junction_counts, cell_cluster_counts, intron_clusts, cells, junctions, cluster_idx_flip):
-    """
-    Perform a sanity check for the given sparse matrices and the original counts.
-    
-    Parameters:
-    - cell_by_junction_matrix: The sparse matrix for cell-by-junction counts.
-    - cell_by_cluster_matrix: The sparse matrix for cell-by-cluster counts.
-    - cell_junction_counts: Dictionary with original junction counts.
-    - cell_cluster_counts: Dictionary with original cluster counts.
-    - intron_clusts: DataFrame with junction-to-cluster mappings.
-    - cells: List of cell names.
-    - junctions: List of junction indices.
-    - cluster_idx_flip: Precomputed mapping from clusters to junction indices.
-    """
-    # Pick a random cell
-    random_cell = random.choice(cells)
-
-    # Ensure the cell has junctions
-    if random_cell not in cell_junction_counts or not cell_junction_counts[random_cell]:
-        print(f"Cell {random_cell} has no junctions.")
-        return
-
-    # Pick a random junction from that cell
-    random_junction_index = random.choice(list(cell_junction_counts[random_cell].keys()))
-
-    # Get the row and column indices
-    cell_idx_value = cells.index(random_cell)
-    junc_idx_value = random_junction_index
-
-    # Extract the values from the sparse matrices
-    junction_count_matrix_value = cell_by_junction_matrix.toarray()[cell_idx_value, junc_idx_value]
-    cluster_count_matrix_value = cell_by_cluster_matrix.toarray()[cell_idx_value, junc_idx_value]
-
-    # Extract the expected values from cell_junction_counts and cell_cluster_counts
-    expected_junction_count = cell_junction_counts[random_cell][random_junction_index]
-
-    # Find the cluster corresponding to the random_junction
-    cluster_name = cluster_idx_flip[random_junction_index]  # Get the cluster name using cluster_idx_flip
-    expected_cluster_count = cell_cluster_counts[random_cell][random_junction_index]  # Get the expected count
-
-    # Print comparison results
-    print(f"Sanity Check for Cell: {random_cell}, Junction Index: {random_junction_index}, Cluster: {cluster_name}")
-    print(f"Junction Count - Sparse Matrix: {junction_count_matrix_value}, Expected: {expected_junction_count}")
-    print(f"Cluster Count  - Sparse Matrix: {cluster_count_matrix_value}, Expected: {expected_cluster_count}")
-
-    # Add assert statements to ensure the values are correct
-    assert junction_count_matrix_value == expected_junction_count, f"Junction counts mismatch! Got {junction_count_matrix_value}, expected {expected_junction_count}"
-    assert cluster_count_matrix_value == expected_cluster_count, f"Cluster counts mismatch! Got {cluster_count_matrix_value}, expected {expected_cluster_count}"
-
-    print("Sanity check passed!")
 
 def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_idx, junc_idx, metadata, intron_clusts, save_file=False, meta_cell_column="cell_id", prefix="ATSE_Anndata_Object"):
     """
@@ -321,7 +268,8 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
 
     # Prepare junction metadata (var) from intron_clusts
     # Check if 'gene_id' column is present, then include it; otherwise, skip it
-    columns_to_include = ['junction_id', 'num_cells_with_junc', 'total_read_counts', 'Cluster', 'Count']
+    columns_to_include = ['junction_id', 'event_id', 'total_score', 'splice_motif', 'label_5_prime',
+       'label_3_prime']
 
     # Add 'gene_id' to columns if it exists in intron_clusts
     if 'gene_id' in intron_clusts.columns:
@@ -329,7 +277,7 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
 
     # Create a copy of the selected columns
     junction_var = intron_clusts[columns_to_include].copy()
-    junction_var.rename(columns={'Count': 'CountJuncs'}, inplace=True)
+    junction_var.rename(columns={'total_score': 'CountJuncs'}, inplace=True)
 
     # Reorder the junction metadata to match the order of relevant_junction_ids in cell_by_junction_matrix
     junctions = list(junc_idx.keys())  # Use the junction IDs in order
