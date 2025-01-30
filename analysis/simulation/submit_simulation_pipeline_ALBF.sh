@@ -1,20 +1,20 @@
 #!/bin/bash
 
 # Define possible values for each parameter
-PROPORTION_NEGATIVE_VALUES=(0.1 0.5 0.9)
+PROPORTION_NEGATIVE_VALUES=(0.5 0.1 0.9)
 K_USE_VALUES=(2)
 USE_GLOBAL_PRIOR_VALUES=(False True)
 INPUT_CONC_PRIOR_VALUES=("None" "inf")  # Include "inf" as a string
 CELL_TYPE_COLUMN_VALUES=("None" "cell_ontology_class")  # Add None as an option
 WAYPOINTS_USE_VALUES=(False)  # Include option for waypoints
 BRAIN_ONLY_VALUES=(True)  # Add brain_only as an option
-SAVE_ANNDATA_VALUES=(True)  
+SAVE_ANNDATA_VALUES=(False)  
 
 repeats=1  # Repeat each combination 2 times
 
-max_count=100
+max_count=2
 num_epochs=300
-lr=0.15
+lr=0.2
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py
@@ -23,7 +23,7 @@ analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulat
 input_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSE_Anndata_Object_with_initializations_brain_only_20241018_134852.h5ad
 ATSE_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/tabula_senis_test_intron_clusters_50_500000_10_20240927_single_cell.gz
 
-# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis
+# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/0130
 
 # Initialize a counter
 count=0
@@ -56,6 +56,8 @@ for proportion_negative in "${PROPORTION_NEGATIVE_VALUES[@]}"; do
 #SBATCH --time=02:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 
 # Load necessary modules or activate your environment
 conda activate LeafletSC  # If using a virtual environment

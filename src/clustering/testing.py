@@ -50,7 +50,7 @@ reader = JunctionReader(batch_size=batch_size,
                         num_workers=num_workers)
 
 # For testing, sample 100 junction files
-junction_files = junction_files.sample(20)
+junction_files = junction_files.sample(100)
 
 # Process and filter junctions
 # Note: if you have a large number of junctions (e.g. > 1000),
@@ -68,6 +68,14 @@ analyzer = JunctionAnalyzer(fasta_file=fasta_file, db=genome_db.get_db(), tolera
 # Ensure that the junctions have canonical splice sites
 junctions = analyzer.check_splice_sites(filtered_junctions)
 canonical_junctions = analyzer.filter_canonical(junctions)
+
+# Sample 1000 junctions for testing from the canonical junctions
+# import random 
+# sample_size = min(1000, len(canonical_junctions))
+# sampled_keys = random.sample(list(canonical_junctions.keys()), sample_size)
+
+# Create new dictionary with only sampled junctions
+#sampled_junctions = {key: canonical_junctions[key] for key in sampled_keys}
 
 # Annotate junctions 5' and 3' with trancript exons 
 annotated_junctions = analyzer.check_junction_annotation(canonical_junctions)
@@ -89,27 +97,30 @@ ATSE_lablled, event_counts = atse_analyzer.classify_events(sgraph, ATSE_groups)
 print(event_counts) 
 
 # # Save the ATSEs to a file
-# today = datetime.datetime.now().strftime("%Y-%m-%d")
-# atse_file = f"{today}_test_atse_file.txt"
+today = datetime.datetime.now().strftime("%Y-%m-%d")
+atse_file = f"{today}_test_atse_file.txt"
 # 
-# output_file = os.path.join(output_path, atse_file)
-# atse_analyzer.save_atse_file(ATSE_lablled, filtered_junctions, output_file)
+output_file = os.path.join(output_path, atse_file)
+atse_analyzer.save_atse_file(ATSE_lablled, filtered_junctions, output_file)
 # 
 # # Visualize random ATSEs
 # p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-01-29_test_atse_file.txt.gz", sep="\t")
-# db = gffutils.FeatureDB("gencodeVM19", keep_order=True)
-# juncs = p[p["event_id"]=="ATSE_16"]
-# juncs["usage_ratio"] = 0
-# juncs["Cluster"] = juncs["event_id"]
-# splice_junctions = ja.convert_junction_ids(juncs)
-# 
-# # Check junction annotations
-# junction_annotation_results = ja.check_junction_annotation(splice_junctions, db)
-# 
-# # Extract unique transcript IDs from junction_labels
-# unique_transcripts = list({transcript for label in junction_annotation_results for transcript in label['transcripts']})
-# 
-# # Fetch transcript exon coordinates and determine plot boundaries
-# transcript_data = ja.fetch_transcripts_and_annotations(db, unique_transcripts)
-# region_start, region_end = ja.determine_region_boundaries(splice_junctions)
-# ja.plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start-200, region_end-400, base_width=10, trans_height=0.2, show_usage=False, show_junc_lines=True)
+db = gffutils.FeatureDB("gencodeVM19", keep_order=True)
+atse_event = p.sample(1)["event_id"].values[0]
+juncs = p[p["event_id"]==atse_event]
+juncs["usage_ratio"] = 0
+juncs["Cluster"] = juncs["event_id"]
+splice_junctions = ja.convert_junction_ids(juncs)
+
+# Check junction annotations
+junction_annotation_results = ja.check_junction_annotation(splice_junctions, db)
+
+# Extract unique transcript IDs from junction_labels
+unique_transcripts = list({transcript for label in junction_annotation_results for transcript in label['transcripts']})
+
+# Fetch transcript exon coordinates and determine plot boundaries
+transcript_data = ja.fetch_transcripts_and_annotations(db, unique_transcripts)
+region_start, region_end = ja.determine_region_boundaries(splice_junctions)
+ja.plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start, region_end, base_width=8, trans_height=0.5, show_usage=False, show_junc_lines=True)
+
+print(p[p["event_id"] == atse_event])

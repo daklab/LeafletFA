@@ -304,58 +304,72 @@ class JunctionAnalyzer:
                 strand = junction["strand"]
 
                 label_5_prime, label_3_prime = "unannotated on 5'", "unannotated on 3'"
+                min_dist_5_prime = float('inf')
+                min_dist_3_prime = float('inf')
                 position_off_5_prime, position_off_3_prime = None, None
                 transcripts_junc = set()
                 genes_found = set()
 
                 for transcript in transcripts:
                     exons = exon_cache[transcript.id]
+                    found_5_prime = False
+                    found_3_prime = False
 
                     if strand == "+":
+                        # Check 5' end (start position)
                         for exon in exons:
-                            if abs(exon.end - start) <= self.tolerance:
-                                label_5_prime = "annotated on 5'"
+                            dist = abs(exon.end - start)
+                            if dist <= self.tolerance and dist < min_dist_5_prime:
+                                min_dist_5_prime = dist
                                 position_off_5_prime = exon.end - start
-                                transcripts_junc.add(transcript.id)
-                                break
+                                label_5_prime = "annotated on 5'"
+                                found_5_prime = True
 
                             if exon.end > start + self.tolerance:
                                 break
 
+                        # Check 3' end (end position)
                         for exon in exons:
-                            if abs(exon.start - end) <= self.tolerance:
-                                label_3_prime = "annotated on 3'"
+                            dist = abs(exon.start - end)
+                            if dist <= self.tolerance and dist < min_dist_3_prime:
+                                min_dist_3_prime = dist
                                 position_off_3_prime = exon.start - end
-                                break
+                                label_3_prime = "annotated on 3'"
+                                found_3_prime = True
 
                             if exon.start > end + self.tolerance:
                                 break
                     else:
+                        # Check 5' end (end position for negative strand)
                         for exon in exons:
-                            if abs(exon.start - end) <= self.tolerance:
-                                label_5_prime = "annotated on 5'"
+                            dist = abs(exon.start - end)
+                            if dist <= self.tolerance and dist < min_dist_5_prime:
+                                min_dist_5_prime = dist
                                 position_off_5_prime = exon.start - end
-                                transcripts_junc.add(transcript.id)
-                                break
+                                label_5_prime = "annotated on 5'"
+                                found_5_prime = True
 
                             if exon.start > end + self.tolerance:
                                 break
 
+                        # Check 3' end (start position for negative strand)
                         for exon in exons:
-                            if abs(exon.end - start) <= self.tolerance:
-                                label_3_prime = "annotated on 3'"
+                            dist = abs(exon.end - start)
+                            if dist <= self.tolerance and dist < min_dist_3_prime:
+                                min_dist_3_prime = dist
                                 position_off_3_prime = exon.end - start
-                                transcripts_junc.add(transcript.id)
-                                break
+                                label_3_prime = "annotated on 3'"
+                                found_3_prime = True
 
                             if exon.end > start + self.tolerance:
                                 break
-                        
-                    # Add gene info when transcript matches
-                    if transcript.id in transcripts_junc:
+
+                    # Add transcript if either end is found
+                    if found_5_prime or found_3_prime:
+                        transcripts_junc.add(transcript.id)
                         gene_data = gene_info[transcript.id]
                         genes_found.add((gene_data['gene_id'], gene_data['gene_name']))
-        
+
                 junction.update({
                     "label_5_prime": label_5_prime,
                     "label_3_prime": label_3_prime,
@@ -401,15 +415,17 @@ class JunctionAnalyzer:
         # Process each junction
         for j_id, j_data in junctions.items():
             
-            # Check position off for 5' and 3' ends if not None 
-            five_prime=False 
-            three_prime=False
+            # Initialize flags
+            five_prime = False
+            three_prime = False
 
+            # Check position off for 5' and 3' ends if not None
             if j_data["position_off_5_prime"] is not None:
-                five_prime = (j_data["position_off_5_prime"] <= 1) and (j_data["position_off_5_prime"] > 0)
-            if j_data["position_off_3_prime"] is not None:
-                three_prime = (j_data["position_off_3_prime"] <= 1) and (j_data["position_off_3_prime"] > 0)
+                five_prime = (0 <= j_data["position_off_5_prime"] <= 1)
 
+            if j_data["position_off_3_prime"] is not None:
+                three_prime = (0 <= j_data["position_off_3_prime"] <= 1)
+    
             # Handle multi-gene junctions
             if len(j_data["gene_ids"]) > 1:
                 annotation_stats["multi_gene"] += 1
@@ -905,12 +921,11 @@ class ATSEAnalyzer:
         try:
             with gzip.open(file_name, 'wt') as f:  # 'wt' for write text mode
                 # Write header
-                f.write("event_id\tgene_id\tnum_junctions\tevent_type\t"
+                f.write("event_id\tgene_id\tgene_name\tnum_junctions\tevent_type\tannotation_status\t"
                        "junction_id\tchrom\tstart\tend\tstrand\tcells\ttotal_score\t"
                        "splice_motif\tdonor_seq\tacceptor_seq\t"
                        "label_5_prime\tlabel_3_prime\t"
-                       "position_off_5_prime\tposition_off_3_prime\t"
-                       "transcripts\n")
+                       "position_off_5_prime\tposition_off_3_prime\n")
 
                 # Write data
                 for event_id, group in atse_groups.items():
@@ -929,14 +944,18 @@ class ATSEAnalyzer:
 
                             j_data = junctions[junction_id]
 
-                            # Convert transcripts list to string
-                            transcripts_str = '|'.join(j_data.get('transcripts', []))
+                            # Handle gene names - join with pipe if multiple names exist
+                            gene_names = j_data.get('gene_names', [])
+                            gene_names_str = '|'.join(str(name) for name in gene_names) if gene_names else 'NA'
+
 
                             # Write line with all information
                             f.write(f"{event_id}\t"
                                    f"{group['gene_id']}\t"
+                                   f"{gene_names_str}\t"
                                    f"{group['num_junctions']}\t"
                                    f"{group['event_type']}\t"
+                                   f"{j_data.get('annotation_status', 'NA')}\t"
                                    f"{junction_id}\t"
                                    f"{j_data.get('chrom', 'NA')}\t"
                                    f"{j_data.get('start', 'NA')}\t"
@@ -950,8 +969,8 @@ class ATSEAnalyzer:
                                    f"{j_data.get('label_5_prime', 'NA')}\t"
                                    f"{j_data.get('label_3_prime', 'NA')}\t"
                                    f"{j_data.get('position_off_5_prime', 'NA')}\t"
-                                   f"{j_data.get('position_off_3_prime', 'NA')}\t"
-                                   f"{transcripts_str}\n")
+                                   f"{j_data.get('position_off_3_prime', 'NA')}\n"
+                                )
 
                     except Exception as e:
                         print(f"Warning: Error writing event {event_id}: {str(e)}")

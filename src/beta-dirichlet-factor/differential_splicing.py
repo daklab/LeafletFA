@@ -1,23 +1,38 @@
+import warnings
 import numpy as np
 import torch 
 import torch.nn.functional as F
 import pandas as pd
 
 def combined_mean_variance(means, variances, pis):
-    eps = 1e-5  # Small value to ensure numerical stability
-    variances = torch.clamp(variances, min=eps)
-    inv_variances = 1 / variances
+    eps = 1e-10  # Smaller epsilon for finer numerical stability
 
-    # Convert pis to PyTorch tensor and ensure correct dimensions
+    # Input validation
+    if torch.any(variances <= 0):
+        raise ValueError("Encountered non-positive variances")
+
+    # Convert pis to a PyTorch tensor and ensure it has the correct shape 
     pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)
+    
+    # Compute the inverse variances for each component 
+    inv_variances = 1/ torch.clamp(variances, min=eps)
 
-    # Weighting by pis
-    # This computes a single combined Gaussian distribution from multiple components
-    # weighted by their mixing proportions.
+    # Use log-space computations for better numerical stability
+    log_inv_variances = -torch.log(torch.clamp(variances, min=eps))
+
+    # This computes a single combined Gaussian distribution from multiple components weighted by their mixing proportions.
     weighted_inv_variances = pis * inv_variances
     combined_variance = 1 / torch.sum(weighted_inv_variances, dim=0)
     combined_mean = combined_variance * torch.sum(means * weighted_inv_variances, dim=0)
-    return combined_mean, combined_variance
+
+    # Compute in log space to avoid underflow?
+    log_weighted_inv_variances = torch.log(pis) + log_inv_variances
+    combined_variance_stable = 1 / torch.exp(torch.logsumexp(log_weighted_inv_variances, dim=0))
+    
+    weighted_means = means * pis * torch.exp(log_inv_variances)
+    combined_mean_stable = combined_variance * torch.sum(weighted_means, dim=0)
+
+    return combined_mean_stable, combined_variance_stable
 
 def combined_mean_variance_exclude(means, variances, pis, exclude_index=0):
     """
@@ -96,17 +111,38 @@ def likelihood_under_null(means, variances, pis):
     check_for_nan_inf(log_likelihood_H0, "Log Likelihood H0")
     return log_likelihood_H0  # Convert log likelihood back to standard likelihood
  
-def compute_albf(psis_mus, psis_loc, pis, eps = 1e-20):
-    # This is the original function for computing ALBF
-    # with somewhat messy handling of numerical stability  
+def compute_albf(psis_mus, psis_loc, pis, eps=1e-10):
+    """
+    Compute Approximate Log Bayes Factor with improved numerical stability
+    
+    Args:
+        psis_mus: Tensor of means
+        psis_loc: Tensor of variances
+        pis: Mixing proportions
+    Returns:
+        albf: Approximate Log Bayes Factor
+        log_likelihood_H0: Log likelihood under null hypothesis
+    """
+        
+    # First, validate inputs 
+    validate_inputs(psis_mus, psis_loc, pis)
+
+    # Compute log likelihood under null (all factors same)
     log_likelihood_H0 = likelihood_under_null(psis_mus, psis_loc, pis)
          
-    # Compute ALBF for each junction
-    albf = -log_likelihood_H0
+    # Compute ALBF 
+    albf = -log_likelihood_H0  # Convert to positive ALBF score
     
-    # Convert -0.0 to 0
+    # Handle numerical instabilities (ALBF can be non negative)
+    albf = torch.where(torch.abs(albf) < eps, torch.zeros_like(albf), albf)
+
+    # Convert -0.0 to 0 (what do these mean exactly?)
     albf = torch.where(albf == -0.0, torch.tensor(0.0), albf)
 
+    # Add warning for extreme values
+    if torch.any(albf > 100):
+        warnings.warn("Very large ALBF values detected - possible numerical instability!?")
+        
     return albf, log_likelihood_H0 
 
 def all_vs_one_differential_splicing_test(means, variances, pis, factor_index=0):
@@ -142,15 +178,20 @@ def all_vs_one_differential_splicing_test(means, variances, pis, factor_index=0)
 
 def all_vs_all_differential_splicing_test(means, variances, pis):
     """
-    Perform an All-vs-All differential splicing test, comparing each factor to the combined effect of others.
+    Perform All-vs-All differential splicing test using ALBF.
+    
+    Mathematical basis:
+    - H0: PSI distributions are the same across all factors
+    - H1: At least one factor has a different PSI distribution
+    - ALBF = -log(P(D|H0)) measures evidence against H0
     
     Args:
-        means: Tensor of means for all factors.
-        variances: Tensor of variances for all factors.
-        pis: Tensor of mixing proportions (if applicable).
-    
+        means: Tensor[K, N] of K factors and N junctions
+        variances: Tensor[K, N] of corresponding variances
+        pis: Tensor[K] of mixing proportions
+        
     Returns:
-        markers_df: DataFrame with junction index, factor, and corresponding ALBF values.
+        DataFrame with ALBF scores for each factor and junction
     """
     n_factors = means.size(0)  # Number of factors (K)
     results = []
@@ -170,3 +211,17 @@ def all_vs_all_differential_splicing_test(means, variances, pis):
     # Create a DataFrame to store all results
     markers_df = pd.DataFrame(results)
     return markers_df
+
+def validate_inputs(means, variances, pis):
+    """Validate inputs for differential splicing analysis"""
+    if not torch.is_tensor(means) or not torch.is_tensor(variances):
+        raise TypeError("Means and variances must be PyTorch tensors")
+        
+    if means.shape != variances.shape:
+        raise ValueError("Means and variances must have same shape")
+        
+    if torch.any(variances < 0):
+        raise ValueError("Variances must be non-negative")
+        
+    if not torch.allclose(torch.sum(pis), torch.tensor(1.0)):
+        raise ValueError("Mixing proportions must sum to 1")
