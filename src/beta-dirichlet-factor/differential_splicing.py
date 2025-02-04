@@ -3,225 +3,98 @@ import numpy as np
 import torch 
 import torch.nn.functional as F
 import pandas as pd
-
-def combined_mean_variance(means, variances, pis):
-    eps = 1e-10  # Smaller epsilon for finer numerical stability
-
-    # Input validation
-    if torch.any(variances <= 0):
-        raise ValueError("Encountered non-positive variances")
-
-    # Convert pis to a PyTorch tensor and ensure it has the correct shape 
-    pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)
     
-    # Compute the inverse variances for each component 
-    inv_variances = 1/ torch.clamp(variances, min=eps)
-
-    # Use log-space computations for better numerical stability
-    log_inv_variances = -torch.log(torch.clamp(variances, min=eps))
-
-    # This computes a single combined Gaussian distribution from multiple components weighted by their mixing proportions.
-    weighted_inv_variances = pis * inv_variances
-    combined_variance = 1 / torch.sum(weighted_inv_variances, dim=0)
-    combined_mean = combined_variance * torch.sum(means * weighted_inv_variances, dim=0)
-
-    # Compute in log space to avoid underflow?
-    log_weighted_inv_variances = torch.log(pis) + log_inv_variances
-    combined_variance_stable = 1 / torch.exp(torch.logsumexp(log_weighted_inv_variances, dim=0))
-    
-    weighted_means = means * pis * torch.exp(log_inv_variances)
-    combined_mean_stable = combined_variance * torch.sum(weighted_means, dim=0)
-
-    return combined_mean_stable, combined_variance_stable
-
-def combined_mean_variance_exclude(means, variances, pis, exclude_index=0):
+def combined_weighted_mean_variance(means, variances, pis):
     """
-    Compute the combined mean and variance for all factors except the specified one.
+    Compute combined mean and variance by weighting individual estimates by their precision.
+    This is not a mixture of Gaussians, but rather a precision-weighted combination where:
+    - More precise estimates (smaller variance) get more weight
+    - Estimates are weighted by both their precision and their mixing proportion
     
     Args:
-        means: Tensor of means for all factors.
-        variances: Tensor of variances for all factors.
-        pis: Tensor or NumPy array of mixing proportions (if applicable).
-        exclude_index: The index of the factor to exclude from the combination (e.g., 0 to exclude factor 1).
+        means: Tensor of mean estimates for each component (shape: [K])
+        variances: Tensor of variance estimates for each component (shape: [K])
+        pis: Weights for each component (shape: [K])
     
     Returns:
-        combined_mean: The combined mean of all factors except the excluded one.
-        combined_variance: The combined variance of all factors except the excluded one.
+        combined_mean: The combined mean estimate (scalar)
+        combined_variance: The combined variance estimate (scalar)
     """
-    eps = 1e-5  # Small value to ensure numerical stability
-    variances = torch.clamp(variances, min=eps)
+    precisions = 1.0 / variances  # Compute precisions
+    weighted_precisions = torch.tensor(pis) * precisions
 
-    # Convert pis to a PyTorch tensor if it's a NumPy array
-    if isinstance(pis, np.ndarray):
-        pis = torch.tensor(pis, dtype=torch.float32, device=means.device)
-    
-    # Exclude the factor at the specified index
-    means_excluded = torch.cat([means[:exclude_index], means[exclude_index + 1:]])
-    variances_excluded = torch.cat([variances[:exclude_index], variances[exclude_index + 1:]])
-    pis_excluded = torch.cat([pis[:exclude_index], pis[exclude_index + 1:]])
+    combined_variance = 1.0 / torch.sum(weighted_precisions)  # Inverse sum of weighted precisions
+    combined_mean = combined_variance * torch.sum(weighted_precisions * means)  # Precision-weighted mean
 
-    inv_variances = 1 / variances_excluded
-    pis_excluded = pis_excluded.view(-1, 1)  # Ensure correct shape
-
-    # Compute combined mean and variance for the remaining factors
-    weighted_inv_variances = pis_excluded * inv_variances
-    combined_variance = 1 / torch.sum(weighted_inv_variances, dim=0)
-    combined_mean = combined_variance * torch.sum(means_excluded * weighted_inv_variances, dim=0)
-    
     return combined_mean, combined_variance
 
+
 def gaussian_log_pdf(x, mean, std):
-    eps = 1e-10  # Small value to ensure numerical stability
-    var = std ** 2 + eps
-    log_denom = 0.5 * torch.log(2 * torch.pi * var)
-    log_num = - (x - mean) ** 2 / (2 * var)
-    return log_num - log_denom
-
-def check_for_nan_inf(tensor, name):
-    if torch.isnan(tensor).any():
-        print(f"{name} contains NaN values")
-    if torch.isinf(tensor).any():
-        print(f"{name} contains infinity values")
-
-def likelihood_under_null(means, variances, pis):
-
-    # This is my original function for this likelihood calculation 
-    combined_mean, combined_variance = combined_mean_variance(means, variances, pis)
-    combined_std = combined_variance ** 0.5
-
-    # Calculate probability of 0 under the combined distribution
-    # Calculate the log of the combined Gaussian PDF at zero
-    combined_log_pdf_zero = gaussian_log_pdf(torch.tensor(0.0), combined_mean, combined_std)
-    
-    # Calculate probability of 0 under each component and weight by pis
-    log_pdfs_zero = gaussian_log_pdf(torch.tensor(0.0), means, variances ** 0.5)
-    # sum_log_pdfs_zero = torch.sum(log_pdfs_zero, dim=0)
-    
-    pis = torch.tensor(pis, dtype=torch.float32, device=means.device).view(-1, 1)  
-    weighted_sum_log_pdfs_zero = torch.sum(pis * log_pdfs_zero, dim=0)
-
-    # Calculate the log likelihood under H0
-    log_likelihood_H0 = weighted_sum_log_pdfs_zero - combined_log_pdf_zero
-    
-    # Check for NaN or infinity values
-    check_for_nan_inf(combined_mean, "Combined Mean")
-    check_for_nan_inf(combined_variance, "Combined Variance")
-    check_for_nan_inf(combined_log_pdf_zero, "Combined Log PDF Zero")
-    check_for_nan_inf(weighted_sum_log_pdfs_zero, "Sum Log PDFs Zero")
-    check_for_nan_inf(log_likelihood_H0, "Log Likelihood H0")
-    return log_likelihood_H0  # Convert log likelihood back to standard likelihood
- 
-def compute_albf(psis_mus, psis_loc, pis, eps=1e-10):
     """
-    Compute Approximate Log Bayes Factor with improved numerical stability
-    
+    Compute the log probability density function (log-PDF) of a Gaussian distribution.
+
     Args:
-        psis_mus: Tensor of means
-        psis_loc: Tensor of variances
-        pis: Mixing proportions
-    Returns:
-        albf: Approximate Log Bayes Factor
-        log_likelihood_H0: Log likelihood under null hypothesis
-    """
-        
-    # First, validate inputs 
-    validate_inputs(psis_mus, psis_loc, pis)
-
-    # Compute log likelihood under null (all factors same)
-    log_likelihood_H0 = likelihood_under_null(psis_mus, psis_loc, pis)
-         
-    # Compute ALBF 
-    albf = -log_likelihood_H0  # Convert to positive ALBF score
-    
-    # Handle numerical instabilities (ALBF can be non negative)
-    albf = torch.where(torch.abs(albf) < eps, torch.zeros_like(albf), albf)
-
-    # Convert -0.0 to 0 (what do these mean exactly?)
-    albf = torch.where(albf == -0.0, torch.tensor(0.0), albf)
-
-    # Add warning for extreme values
-    if torch.any(albf > 100):
-        warnings.warn("Very large ALBF values detected - possible numerical instability!?")
-        
-    return albf, log_likelihood_H0 
-
-def all_vs_one_differential_splicing_test(means, variances, pis, factor_index=0):
-    """
-    Perform an All-vs-1 differential splicing test comparing one factor to the combined effect of others.
-    
-    Args:
-        means: Tensor of means for all factors.
-        variances: Tensor of variances for all factors.
-        pis: Tensor of mixing proportions (if applicable).
-        factor_index: Index of the factor to compare against all others.
+        x: The value(s) to evaluate (Tensor)
+        mean: The mean of the Gaussian distribution (scalar)
+        std: The standard deviation of the Gaussian (scalar)
     
     Returns:
-        albf: The computed ALBF for the differential splicing test.
-        likelihood_H0: The likelihood under the null hypothesis.
+        log_pdf: The log probability density value (Tensor)
     """
-    # Get the mean and variance for the factor we're comparing (e.g., factor 1)
-    mu_1 = means[factor_index]
-    v_1 = variances[factor_index]
-    
-    # Calculate the combined mean and variance for all other factors (e.g., factors 2 through K)
-    mu_combined, v_combined = combined_mean_variance_exclude(means, variances, pis, exclude_index=factor_index)
-    
-    # Now, we treat this as a comparison between two groups: the single factor vs. the combined group
-    means_test = torch.stack([mu_1, mu_combined])
-    variances_test = torch.stack([v_1, v_combined])
-    pis_test = torch.tensor([0.5, 0.5], dtype=torch.float32, device=means.device)  # Equal weighting for the two groups
-    
-    # Compute ALBF and likelihood under the null hypothesis
-    albf, likelihood_H0 = compute_albf(means_test, variances_test, pis_test)
-    
-    return albf
+    var = std ** 2  # Convert std to variance
+    log_pdf = -0.5 * (torch.log(2 * torch.pi * var) + ((x - mean) ** 2 / var))
+    return log_pdf
 
-def all_vs_all_differential_splicing_test(means, variances, pis):
+
+def log_like_under_null(means, variances, pis):
     """
-    Perform All-vs-All differential splicing test using ALBF.
-    
-    Mathematical basis:
-    - H0: PSI distributions are the same across all factors
-    - H1: At least one factor has a different PSI distribution
-    - ALBF = -log(P(D|H0)) measures evidence against H0
+    Compute the log-likelihood under the null hypothesis (H0).
     
     Args:
-        means: Tensor[K, N] of K factors and N junctions
-        variances: Tensor[K, N] of corresponding variances
-        pis: Tensor[K] of mixing proportions
-        
+        means: Tensor of mean estimates for each component (shape: [K])
+        variances: Tensor of variance estimates for each component (shape: [K])
+        pis: Weights for each component (shape: [K])
+    
     Returns:
-        DataFrame with ALBF scores for each factor and junction
+        log_Pj_H0: Log-likelihood under the null hypothesis (scalar)
     """
-    n_factors = means.size(0)  # Number of factors (K)
-    results = []
+    combined_mean, combined_variance = combined_weighted_mean_variance(means, variances, pis)
+    
+    # Compute log probabilities at zero
+    log_prob_components = torch.sum(gaussian_log_pdf(torch.tensor(0.0), means, torch.sqrt(variances)))
+    log_prob_combined = gaussian_log_pdf(torch.tensor(0.0), combined_mean, torch.sqrt(combined_variance))
 
-    for i in range(n_factors):
-        albf = all_vs_one_differential_splicing_test(means, variances, pis, factor_index=i)
+    # Compute log-likelihood under null hypothesis
+    log_Pj_H0 = log_prob_components - log_prob_combined
+    return log_Pj_H0
 
-        # Iterate through each element of ALBF tensor to store individual ALBF values
-        for idx, albf_val in enumerate(albf):
-            result = {
-                'Factor': f'Factor {i+1}',  # Label the factor (1-based index)
-                'Junction_Index': idx,       # Index within the ALBF tensor
-                'ALBF': albf_val.item()
-            }
-            results.append(result)
+def compute_albf(psis_mus, psis_loc, pis):
+    """
+    Compute Approximate Log Bayes Factor (ALBF).
+    
+    ALBF = log P(H1) - log P(H0)
+    
+    - Positive ALBF: Evidence for H1 (differential splicing)
+    - Negative ALBF: Evidence for H0 (no differential splicing)
+    
+    Args:
+        psis_mus: Tensor of means for each component (shape: [K])
+        psis_loc: Tensor of variances for each component (shape: [K])
+        pis: Tensor of mixing proportions (shape: [K])
+    
+    Returns:
+        albf: Approximate Log Bayes Factor (scalar)
+        log_likelihood_H0: Log likelihood under null hypothesis (scalar)
+    """
 
-    # Create a DataFrame to store all results
-    markers_df = pd.DataFrame(results)
-    return markers_df
+    # Compute log-likelihood under the null hypothesis (H0)
+    log_likelihood_H0 = log_like_under_null(psis_mus, psis_loc, pis)
 
-def validate_inputs(means, variances, pis):
-    """Validate inputs for differential splicing analysis"""
-    if not torch.is_tensor(means) or not torch.is_tensor(variances):
-        raise TypeError("Means and variances must be PyTorch tensors")
-        
-    if means.shape != variances.shape:
-        raise ValueError("Means and variances must have same shape")
-        
-    if torch.any(variances < 0):
-        raise ValueError("Variances must be non-negative")
-        
-    if not torch.allclose(torch.sum(pis), torch.tensor(1.0)):
-        raise ValueError("Mixing proportions must sum to 1")
+    # Under H1, the posterior integrates to 1, so log P(H1) = 0
+    albf = -log_likelihood_H0
+    return albf, log_likelihood_H0
+
+
+
+
+

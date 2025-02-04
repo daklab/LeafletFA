@@ -27,6 +27,9 @@ sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src/beta-dirichlet-fa
 import factor_model
 reload(factor_model)
 
+import differential_splicing
+reload(differential_splicing)
+
 # Simulation source code
 sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/")
 import simulate_counts as sim 
@@ -311,17 +314,28 @@ def get_NMF(adata_input, K, output_dir, true_juncs_layer="cell_by_junction_matri
 def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir, K, report_file):
     
     # Compute ALBF
-    albf, l0 = differential_splicing.compute_albf(psis_mus, psis_loc, torch.tensor(pi))
-    l0 = l0.detach().cpu()
-    albf = albf.detach().cpu()
-    
-    print(albf.shape)
+    l0 = []
+    albf_values = []
+
+    # Reshape psis_mus and psis_loc to be (J, K) instead of (K, J)
+    psis_mus = psis_mus.T
+    psis_loc = psis_loc.T
+    J = psis_mus.shape[0]
+
+    for j in range(J):  # Iterate over all J junctions
+        albf, log_pj_h0 = differential_splicing.compute_albf(psis_mus[j], psis_loc[j], pi)
+        l0.append(log_pj_h0.item())
+        albf_values.append(albf.item())
+
+    l0 = torch.tensor(l0).detach().cpu()
+    albf_values = torch.tensor(albf_values).detach().cpu()
 
     # Prepare dataframes
-    albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
-    # albf_df = pd.DataFrame(albf, columns=["ALBF"])
+    # albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
+    albf_df = pd.DataFrame(albf_values.numpy().flatten(), columns=["ALBF"])
 
     albf_df["junction_id_index"] = range(albf_df.shape[0])
+    print(albf_df.head())
     
     psis_df = pd.DataFrame(psis.T)
     psis_df["junction_id_index"] = psis_df.index
@@ -486,7 +500,7 @@ def prepare_output_directory(proportion_negative, K_use, use_global_prior, input
     """Prepares the output directory with timestamp and relevant parameters."""
 
     # Generate a random number to ensure uniqueness (e.g., 5-digit random integer)
-    random_number = np.random.randint(10000, 99999)
+    random_number = np.random.randint(10, 100)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     cell_type_str = f"CellType_{cell_type_column}" if cell_type_column else "NoCellType"
@@ -626,10 +640,10 @@ def main():
 
     # Differential Splicing Analysis
     log_to_report(report_file, "Running differential splicing analysis.")
-    psis_mus = all_params[best_init]["AutoGuideList.0.loc"].reshape(K, latent_vars["psi"]["mean"].shape[1])
-    psis_loc = all_params[best_init]["AutoGuideList.0.scale"].reshape(K, latent_vars["psi"]["mean"].shape[1])
-    pi = latent_vars["pi"]["mean"]
-    assign_post = latent_vars["assign"]["mean"]
+    psis_mus = all_params[best_init]["AutoGuideList.0.loc"].reshape(K, latent_vars["psi"]["mean"].shape[1]) # K by J
+    psis_loc = all_params[best_init]["AutoGuideList.0.scale"].reshape(K, latent_vars["psi"]["mean"].shape[1]) # K by J
+    pi = latent_vars["pi"]["mean"] # shape (K,)
+    assign_post = latent_vars["assign"]["mean"] # shape (N, K)
 
     # If input_conc was None extract it from latent variables 
     if input_conc == None:
