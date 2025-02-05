@@ -1,100 +1,182 @@
-import warnings
 import numpy as np
 import torch 
-import torch.nn.functional as F
-import pandas as pd
-    
-def combined_weighted_mean_variance(means, variances, pis):
-    """
-    Compute combined mean and variance by weighting individual estimates by their precision.
-    This is not a mixture of Gaussians, but rather a precision-weighted combination where:
-    - More precise estimates (smaller variance) get more weight
-    - Estimates are weighted by both their precision and their mixing proportion
-    
-    Args:
-        means: Tensor of mean estimates for each component (shape: [K])
-        variances: Tensor of variance estimates for each component (shape: [K])
-        pis: Weights for each component (shape: [K])
-    
-    Returns:
-        combined_mean: The combined mean estimate (scalar)
-        combined_variance: The combined variance estimate (scalar)
-    """
-    precisions = 1.0 / variances  # Compute precisions
-    weighted_precisions = torch.tensor(pis) * precisions
+from scipy import stats
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-    combined_variance = 1.0 / torch.sum(weighted_precisions)  # Inverse sum of weighted precisions
-    combined_mean = combined_variance * torch.sum(weighted_precisions * means)  # Precision-weighted mean
+# Function for the logit transform
+def logit(p):
+    return torch.log(p / (1 - p))
 
+# Function for the inverse logit transform (sigmoid)
+def inverse_logit(z):
+    return 1 / (1 + torch.exp(-z))
+
+# Function to sample z from gaussian distribution using mu_kj and sigma_kj
+def sample_z(mu_kj, sigma_kj, num_sample=10):
+    return np.random.normal(mu_kj, sigma_kj, num_sample)
+
+def compute_combined_parameters(mu, variance, pi):
+    device = mu.device if hasattr(mu, 'device') else 'cpu'
+    mu = torch.tensor(mu, device=device) if isinstance(mu, np.ndarray) else mu.to(device)
+    variance = torch.tensor(variance, device=device) if isinstance(variance, np.ndarray) else variance.to(device)
+    pi = torch.tensor(pi, device=device) if isinstance(pi, np.ndarray) else pi.to(device)
+
+    variance = torch.clamp(variance.float(), min=1e-5)
+    mu, pi = mu.float(), pi.float()
+    
+    precisions = 1.0 / variance
+    weighted_precisions = pi * precisions
+    combined_precision = torch.sum(weighted_precisions)
+    combined_variance = 1.0 / combined_precision
+    combined_mean = combined_variance * torch.sum((pi * mu) / variance)
+    
     return combined_mean, combined_variance
 
+def gaussian_log_prob(x, mu, variance):
+    device = mu.device if hasattr(mu, 'device') else 'cpu'
+    x = torch.tensor(x, device=device) if isinstance(x, (float, int, np.ndarray)) else x.to(device)
+    variance = variance + 1e-10
+    return -0.5 * (np.log(2 * np.pi) + torch.log(variance) + ((x - mu) ** 2) / variance)
 
-def gaussian_log_pdf(x, mean, std):
+def compute_log_Pj_H0(mu_kj, variance_kj, pi_k):
     """
-    Compute the log probability density function (log-PDF) of a Gaussian distribution.
-
-    Args:
-        x: The value(s) to evaluate (Tensor)
-        mean: The mean of the Gaussian distribution (scalar)
-        std: The standard deviation of the Gaussian (scalar)
-    
-    Returns:
-        log_pdf: The log probability density value (Tensor)
-    """
-    var = std ** 2  # Convert std to variance
-    log_pdf = -0.5 * (torch.log(2 * torch.pi * var) + ((x - mean) ** 2 / var))
-    return log_pdf
-
-
-def log_like_under_null(means, variances, pis):
-    """
-    Compute the log-likelihood under the null hypothesis (H0).
-    
-    Args:
-        means: Tensor of mean estimates for each component (shape: [K])
-        variances: Tensor of variance estimates for each component (shape: [K])
-        pis: Weights for each component (shape: [K])
-    
-    Returns:
-        log_Pj_H0: Log-likelihood under the null hypothesis (scalar)
-    """
-    combined_mean, combined_variance = combined_weighted_mean_variance(means, variances, pis)
-    
-    # Compute log probabilities at zero
-    log_prob_components = torch.sum(gaussian_log_pdf(torch.tensor(0.0), means, torch.sqrt(variances)))
-    log_prob_combined = gaussian_log_pdf(torch.tensor(0.0), combined_mean, torch.sqrt(combined_variance))
-
-    # Compute log-likelihood under null hypothesis
-    log_Pj_H0 = log_prob_components - log_prob_combined
-    return log_Pj_H0
-
-def compute_albf(psis_mus, psis_loc, pis):
-    """
-    Compute Approximate Log Bayes Factor (ALBF).
-    
-    ALBF = log P(H1) - log P(H0)
-    
-    - Positive ALBF: Evidence for H1 (differential splicing)
-    - Negative ALBF: Evidence for H0 (no differential splicing)
-    
-    Args:
-        psis_mus: Tensor of means for each component (shape: [K])
-        psis_loc: Tensor of variances for each component (shape: [K])
-        pis: Tensor of mixing proportions (shape: [K])
-    
-    Returns:
-        albf: Approximate Log Bayes Factor (scalar)
-        log_likelihood_H0: Log likelihood under null hypothesis (scalar)
+    Compute log P_j(H0) with proper weighting of individual components
     """
 
-    # Compute log-likelihood under the null hypothesis (H0)
-    log_likelihood_H0 = log_like_under_null(psis_mus, psis_loc, pis)
+    # Convert inputs to tensors and ensure float type
+    device = mu_kj.device if hasattr(mu_kj, 'device') else 'cpu'
+    
+    mu_kj = torch.tensor(mu_kj, dtype=torch.float32, device=device) if isinstance(mu_kj, np.ndarray) else mu_kj.float().to(device)
+    variance_kj = torch.tensor(variance_kj, dtype=torch.float32, device=device) if isinstance(variance_kj, np.ndarray) else variance_kj.float().to(device)
+    pi_k = torch.tensor(pi_k, dtype=torch.float32, device=device) if isinstance(pi_k, np.ndarray) else pi_k.float().to(device)
+    
+    # Get combined parameters
+    combined_mean, combined_variance = compute_combined_parameters(mu_kj, variance_kj, pi_k)
+    
+    # Calculate weighted log probabilities at zero for each component (DOES THIS MAKE SENSE?! mathematically?)
+    log_pdfs_zero = gaussian_log_prob(torch.tensor(0.0), mu_kj, variance_kj)
+    weighted_sum_log_pdfs_zero = torch.sum(pi_k * log_pdfs_zero)
+    
+    # Calculate log probability at zero for combined distribution
+    combined_log_pdf_zero = gaussian_log_prob(torch.tensor(0.0), combined_mean, combined_variance)
+    
+    print(f"Log numerator: {weighted_sum_log_pdfs_zero}")
+    print(f"Log denominator: {combined_log_pdf_zero}")
+    
+    # Return weighted difference
+    return weighted_sum_log_pdfs_zero - combined_log_pdf_zero
 
-    # Under H1, the posterior integrates to 1, so log P(H1) = 0
-    albf = -log_likelihood_H0
-    return albf, log_likelihood_H0
+def compute_albf(mu_kj, variance_kj, pi_k):
+    device = mu_kj.device if hasattr(mu_kj, 'device') else 'cpu'
+   
+    # Convert to tensors and move to device
+    mu_kj = torch.from_numpy(mu_kj).to(device) if isinstance(mu_kj, np.ndarray) else mu_kj.to(device)
+    variance_kj = torch.from_numpy(variance_kj).to(device) if isinstance(variance_kj, np.ndarray) else variance_kj.to(device)
+    pi_k = torch.from_numpy(pi_k).to(device) if isinstance(pi_k, np.ndarray) else pi_k.to(device)
 
+    # Force to 1D
+    mu_kj = mu_kj.view(-1)
+    variance_kj = variance_kj.view(-1)
+    pi_k = pi_k.view(-1)
+    
+    log_Pj_H0 = compute_log_Pj_H0(mu_kj, variance_kj, pi_k)
+    albf = -log_Pj_H0
+    albf = torch.where(albf == -0.0, torch.tensor(0.0), albf)
+    
+    return albf.cpu().numpy(), log_Pj_H0.cpu()
 
+def plot_gaussian(means, variances):
+    """
+    Plots Gaussian distributions given lists of means and variances.
+    
+    Parameters:
+        means (list of float): List of mean values for the Gaussians.
+        variances (list of float): List of variance values for the Gaussians.
+    """
+    if len(means) != len(variances):
+        raise ValueError("Means and variances lists must have the same length.")
+    
+    print(f"The means are: {means}")
+    print(f"The variances are: {variances}")
 
+    # Compute standard deviations from variances
+    std_devs = np.sqrt(variances)
 
+    # Dynamically determine the x-range
+    x_min = min(means) - 3 * max(std_devs)
+    x_max = max(means) + 3 * max(std_devs)
 
+    # Whichever is absolute bigger number set range to be that value on both sides 
+    if abs(x_min) > abs(x_max):
+        x_max = abs(x_min)
+    else:
+        x_min = -abs(x_max)
+
+    x = np.linspace(x_min, x_max, 1000)
+    
+    # Plot Gaussian distributions
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for mu, sigma in zip(means, std_devs):
+        ax.plot(x, norm.pdf(x, mu, sigma))
+        # Sample z from the Gaussian distribution
+        z = np.random.normal(mu, sigma, 5)
+        # Get PSI values from z
+        psi_values = inverse_logit(torch.tensor(z))
+        print(f"The mean of the sampled PSI values is: {psi_values.mean()}")
+
+    ax.set_xlabel("x")
+    ax.set_ylabel("Density")
+    ax.set_title("Gaussian Distributions")
+    plt.show()
+
+def analyze_null_albf(df):
+    """
+    Analyze ALBF distribution for negative junctions
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing 'ALBF' and 'true_label' columns
+    
+    Returns
+    -------
+    dict
+        Dictionary containing null distribution parameters
+    """
+    # Get ALBF values for negative junctions
+    null_albf = df[df['true_label'] == 'negative']['ALBF']
+    
+    # Fit normal distribution to null ALBFs
+    mu, std = stats.norm.fit(null_albf)
+    
+    # Test for normality
+    _, norm_pval = stats.normaltest(null_albf)
+    
+    # Create visualization
+    plt.figure(figsize=(10, 6))
+    
+    # Plot histogram of null ALBF values
+    sns.histplot(null_albf, bins=30, color='blue', alpha=0.5, label='Observed')
+    
+    # Plot fitted normal distribution
+    x = np.linspace(null_albf.min(), null_albf.max(), 100)
+    plt.plot(x, stats.norm.pdf(x, mu, std) * len(null_albf) * (null_albf.max() - null_albf.min()) / 30,
+             'r-', label='Fitted Normal')
+    
+    plt.title(f'Distribution of ALBF Values for Negative Junctions\nμ={mu:.2f}, σ={std:.2f}, p={norm_pval:.2e}')
+    plt.xlabel('ALBF')
+    plt.ylabel('Count')
+    plt.legend()
+    
+    # Calculate percentiles for potential thresholds
+    percentiles = [90, 95, 99]
+    thresholds = np.percentile(null_albf, percentiles)
+    
+    return {
+        'mu': mu,
+        'std': std,
+        'normality_pvalue': norm_pval,
+        'thresholds': dict(zip(percentiles, thresholds))
+    }

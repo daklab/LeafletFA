@@ -13,8 +13,8 @@ SAVE_ANNDATA_VALUES=(False)
 repeats=1  # Repeat each combination 2 times
 
 max_count=100
-num_epochs=100
-lr=0.2
+num_epochs=500
+lr=0.1
 
 # Script path 
 analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulate_pipeline_wALBF.py

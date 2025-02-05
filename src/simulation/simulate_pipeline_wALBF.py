@@ -322,6 +322,9 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     psis_loc = psis_loc.T
     J = psis_mus.shape[0]
 
+    print(f"The first set of mus and locs for  the first junction are {psis_mus[0]} and {psis_loc[0]}")
+    print(f"The learned pi vector is {pi}")
+
     for j in range(J):  # Iterate over all J junctions
         albf, log_pj_h0 = differential_splicing.compute_albf(psis_mus[j], psis_loc[j], pi)
         l0.append(log_pj_h0.item())
@@ -460,6 +463,11 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     with open(os.path.join(output_dir, 'ALBF_report.txt'), 'w') as f:
         f.write(report)
 
+    # Add mus and locs to psis_df for every junction to keep raw values     
+    for k in range(K):         
+        psis_df[f"mu_{k}"] = psis_mus[:, k].cpu().numpy()
+        psis_df[f"loc_{k}"] = psis_loc[:, k].cpu().numpy()
+
     # Write psis_df to a CSV file
     psis_df.to_csv(os.path.join(output_dir, 'ALBF_scores.csv'), index=False) 
 
@@ -469,6 +477,9 @@ def plot_pi_barplot(pi, output_dir):
     pi_df = pd.DataFrame(pi, columns=["pi"])
     pi_df["Factor"] = "Factor" + pi_df.index.astype(str)
     pi_df = pi_df.sort_values(by="pi", ascending=False)
+
+    # Save pi_df to a CSV file
+    pi_df.to_csv(os.path.join(output_dir, 'pi_df.csv'), index=False)
 
     plt.figure(figsize=(6, 6))
     sns.barplot(x="Factor", y="pi", data=pi_df, palette="viridis")

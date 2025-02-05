@@ -2,26 +2,13 @@ import numpy as np
 from scipy.special import expit
 
 class EMDifferentialSplicing:
-    def __init__(self, albf_scores, max_iter=100, tolerance=1e-6, initial_p=0.5):
+    def __init__(self, albf_scores, max_iter=100, tolerance=1e-4, initial_p=0.5):
         """
         Initialize EM algorithm with log-transform of ALBF scores.
         """
-        self.albf_scores = np.array(albf_scores)
-        
-        # Take log(1 + ALBF) to handle large values better
-        log_scores = np.log1p(self.albf_scores)
-        
-        # Find median of log scores
-        median_log = np.median(log_scores)
-        
-        # Scale to make median map to 0.5 probability
-        # log(1) = 0 should map to probability 0.1
-        # median should map to 0.5
-        # log(max) should map to 0.9
-        scaled_scores = (log_scores - median_log)
-        
+        self.albf_scores = np.array(albf_scores)        
         # Convert to probabilities
-        self.b_j = np.clip(expit(scaled_scores), 1e-10, 1-1e-10)
+        self.b_j = np.clip(expit(self.albf_scores), 1e-10, 1-1e-10)
         
         self.max_iter = max_iter
         self.tolerance = tolerance
@@ -31,12 +18,7 @@ class EMDifferentialSplicing:
         # Print initial statistics
         print("Initial Statistics:")
         print(f"Original ALBF range: [{np.min(albf_scores):.2f}, {np.max(albf_scores):.2f}]")
-        print(f"Log ALBF range: [{np.min(log_scores):.2f}, {np.max(log_scores):.2f}]")
-        print(f"Log ALBF median: {median_log:.2f}")
-        print(f"Scaled range: [{np.min(scaled_scores):.2f}, {np.max(scaled_scores):.2f}]")
         print(f"b_j range: [{np.min(self.b_j):.4f}, {np.max(self.b_j):.4f}]")
-        hist = np.histogram(self.b_j, bins=10)[0]
-        print(f"b_j detailed distribution (0.0-1.0 in 0.1 steps): {hist}")
         
     def e_step(self):
         """
@@ -50,7 +32,7 @@ class EMDifferentialSplicing:
         log_odds_p = np.log(p_safe) - np.log(1 - p_safe)
         
         # Compute posterior probabilities
-        total_log_odds = np.clip(log_odds_b + log_odds_p, -100, 100)
+        total_log_odds = log_odds_b + log_odds_p
         q_s1 = np.clip(expit(total_log_odds), 1e-10, 1-1e-10)
         
         return q_s1
@@ -101,8 +83,6 @@ class EMDifferentialSplicing:
             print(f"p: {self.p:.6f}")
             print(f"log likelihood: {log_likelihood:.6f}")
             print(f"q_s1 range: [{np.min(q_s1):.6f}, {np.max(q_s1):.6f}]")
-            hist = np.histogram(q_s1, bins=10)[0]
-            print(f"q_s1 detailed distribution (0.0-1.0 in 0.1 steps): {hist}")
             
             # Check for convergence
             if iteration > 0:
