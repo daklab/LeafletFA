@@ -17,6 +17,25 @@ def inverse_logit(z):
 def sample_z(mu_kj, sigma_kj, num_sample=10):
     return np.random.normal(mu_kj, sigma_kj, num_sample)
 
+def plot_junc_dists(albf_scores, index_junc, pis):
+    mus = torch.tensor(albf_scores[["mu_0", "mu_1"]].iloc[index_junc].values)
+    variances = torch.tensor(albf_scores[["loc_0", "loc_1"]].iloc[index_junc].values)
+    print(f"The means are: {mus}")
+    print(f"The variances are: {variances}")
+
+    # compute combined mean and variance
+    combined_mean, combined_variance = compute_combined_parameters(mus, variances, pis)
+    print(f"The combined mean is: {combined_mean}")
+    print(f"The combined variance is: {combined_variance}")
+
+    # Make a list of original mus plus combined one and variances plus combined one to plot
+    mus_list = mus.tolist()
+    mus_list.append(combined_mean.item())
+    variances_list = variances.tolist()
+    variances_list.append(combined_variance.item())
+
+    plot_gaussian(mus_list, variances_list)
+    
 def compute_combined_parameters(mu, variance, pi):
     device = mu.device if hasattr(mu, 'device') else 'cpu'
     mu = torch.tensor(mu, device=device) if isinstance(mu, np.ndarray) else mu.to(device)
@@ -62,8 +81,8 @@ def compute_log_Pj_H0(mu_kj, variance_kj, pi_k):
     # Calculate log probability at zero for combined distribution
     combined_log_pdf_zero = gaussian_log_prob(torch.tensor(0.0), combined_mean, combined_variance)
     
-    print(f"Log numerator: {weighted_sum_log_pdfs_zero}")
-    print(f"Log denominator: {combined_log_pdf_zero}")
+    # print(f"Log numerator: {weighted_sum_log_pdfs_zero}")
+    # print(f"Log denominator: {combined_log_pdf_zero}")
     
     # Return weighted difference
     return weighted_sum_log_pdfs_zero - combined_log_pdf_zero

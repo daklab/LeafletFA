@@ -7,9 +7,10 @@ class EMDifferentialSplicing:
         Initialize EM algorithm with log-transform of ALBF scores.
         """
         self.albf_scores = np.array(albf_scores)        
-        # Convert to probabilities
-        self.b_j = np.clip(expit(self.albf_scores), 1e-10, 1-1e-10)
-        
+
+        # Center ALBF first then logit 
+        self.b_j = np.clip(expit(self.albf_scores - np.median(self.albf_scores)), 1e-10, 1-1e-10)  # Centering before sigmoid
+
         self.max_iter = max_iter
         self.tolerance = tolerance
         self.p = initial_p
@@ -28,9 +29,9 @@ class EMDifferentialSplicing:
         p_safe = np.clip(self.p, 0.1, 0.9)
         
         # Compute log odds
-        log_odds_b = np.log(self.b_j) - np.log(1 - self.b_j)
+        log_odds_b = np.log(np.clip(self.b_j, 1e-10, 1-1e-10)) - np.log(1 - np.clip(self.b_j, 1e-10, 1-1e-10))
         log_odds_p = np.log(p_safe) - np.log(1 - p_safe)
-        
+
         # Compute posterior probabilities
         total_log_odds = log_odds_b + log_odds_p
         q_s1 = np.clip(expit(total_log_odds), 1e-10, 1-1e-10)
@@ -47,6 +48,8 @@ class EMDifferentialSplicing:
         """
         Compute log likelihood.
         """
+        # s_j in likelihood is 1 if junction is differentially spliced or 0 otherwise
+        # should sample it using q_s1 and bernoulli distribution
         return np.sum(q_s1 * np.log(self.b_j) + (1 - q_s1) * np.log(1 - self.b_j))
     
     def fit(self):

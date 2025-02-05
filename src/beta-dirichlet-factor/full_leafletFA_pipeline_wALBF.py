@@ -330,43 +330,38 @@ def get_NMF(adata_input, K, output_dir, true_juncs_layer="Junction_Counts", true
     # Return the silhouette score for evaluation
     return NMF_silhouette
 
-def compute_and_plot_albf(psis_mus, psis_loc, psis, pi, output_dir):
+def compute_and_plot_albf(psis_mus, psis_loc, psis, pi, K):
     
     # Compute ALBF
-    albf, l0 = differential_splicing.compute_albf(psis_mus, psis_loc + 1e-9, torch.tensor(pi))
-    l0 = l0.detach().cpu()
-    albf = albf.detach().cpu()
-    
-    # Prepare dataframes
-    albf_df = pd.DataFrame(albf, columns=["ALBF"])
+    l0 = []
+    albf_values = []
+
+    # Reshape psis_mus and psis_loc to be (J, K) instead of (K, J)
+    psis_mus = psis_mus.T
+    psis_loc = psis_loc.T
+    J = psis_mus.shape[0]
+
+    print(f"The first set of mus and locs for  the first junction are {psis_mus[0]} and {psis_loc[0]}")
+    print(f"The learned pi vector is {pi}")
+
+    for j in range(J):  # Iterate over all J junctions
+        albf, log_pj_h0 = differential_splicing.compute_albf(psis_mus[j], psis_loc[j], pi)
+        l0.append(log_pj_h0.item())
+        albf_values.append(albf.item())
+
+    l0 = torch.tensor(l0).detach().cpu()
+    albf_values = torch.tensor(albf_values).detach().cpu()
+    albf_df = pd.DataFrame(albf_values.numpy().flatten(), columns=["ALBF"])
     albf_df["junction_id_index"] = range(albf_df.shape[0])
     
     psis_df = pd.DataFrame(psis.T)
     psis_df["junction_id_index"] = psis_df.index
-    psis_df = psis_df.merge(albf_df, on=["junction_id_index"])   
+    psis_df = psis_df.merge(albf_df, on=["junction_id_index"])
 
-    # Save ALBF histogram plot to output directory
-    plt.figure(figsize=(8, 6))
-    plt.hist(albf_df["ALBF"], bins=50, color='blue', alpha=0.7, edgecolor='black')
-    plt.title("Histogram of ALBF values", fontsize=16)
-    plt.xlabel("ALBF", fontsize=14)
-    plt.ylabel("Frequency", fontsize=14)
-    plt.grid(True)
-
-    # Save the plot
-    histogram_path = os.path.join(output_dir, 'albf_histogram.png')
-    plt.savefig(histogram_path)
-    plt.close()
-
-    # Run All-vs-All differential splicing test
-    print("Running All-vs-All differential splicing test...", flush=True)
-    all_vs_all_df = differential_splicing.all_vs_all_differential_splicing_test(psis_mus, psis_loc, pi)
-
-    # Save All-vs-All test results to a CSV file
-    all_vs_all_output_path = os.path.join(output_dir, 'all_vs_all_results.csv')
-    all_vs_all_df.to_csv(all_vs_all_output_path, index=False)
-
-    print(f"All-vs-All differential splicing results saved to {all_vs_all_output_path}", flush=True)
+    # Add mus and locs to psis_df for every junction to keep raw values     
+    for k in range(K):         
+        psis_df[f"mu_{k}"] = psis_mus[:, k].cpu().numpy()
+        psis_df[f"loc_{k}"] = psis_loc[:, k].cpu().numpy()
 
     return psis_df
 
@@ -604,18 +599,6 @@ def main():
     waypoints_use = args.waypoints_use
     brain_only = args.brain_only
 
-    # Read in the intron cluster file 
-    print("Reading in obtained intron cluster (ATSE file!)", flush=True)
-    intron_clusts = pd.read_csv(ATSE_file, sep="}")
-
-    # Ensure columns are present before proceeding
-    if "gene_id" in intron_clusts.columns and "gene_name" in intron_clusts.columns:
-        # Drop duplicates to create a unique list of genes
-        genes = intron_clusts[["gene_id", "gene_name"]].drop_duplicates()
-    else:
-        print("Warning: 'gene_id' or 'gene_name' column not found in ATSE file.", flush=True)
-        genes = pd.DataFrame()  # Empty DataFrame as fallback
-
     if brain_only:
         print(f"Running model only on brain cells!", flush=True)
     else:
@@ -629,23 +612,8 @@ def main():
     log_to_report(report_file, f"Loading anndata file from {input_path}")
     adata = load_adata(input_path)
 
-    if "gene_id" in intron_clusts.columns and "gene_name" in intron_clusts.columns:
-        adata.var = pd.merge(adata.var, genes[['gene_id', 'gene_name']], how='left', on='gene_id')
-
     # Load sparse tensor model input files (need to improve this input processing)
     log_to_report(report_file, f"Loading sparse torch tensors as inputs to the model!")
-
-    # Define the path to save/load tensor files
-    path_tosaveto = '/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/'
-
-    # Determine which file names to use based on brain_only flag
-    if brain_only:
-        full_y_tensor_filename = 'full_y_tensor_brain_only.pt'
-        full_total_counts_tensor_filename = 'full_total_counts_tensor_brain_only.pt'
-    else:
-        full_y_tensor_filename = 'full_y_tensor.pt'
-        full_total_counts_tensor_filename = 'full_total_counts_tensor.pt'
-
     device = float_type["device"]
 
     adata.layers["Cluster_Counts"] = coo_matrix(adata.layers["cell_by_cluster_matrix"])
@@ -662,7 +630,6 @@ def main():
     # Convert the data of the sparse matrix to torch tensor
     ycount_array = np.array(adata.layers["Junction_Counts"].data)
     ycount = torch.tensor(ycount_array, **float_type)
-   
     torch.cuda.empty_cache()
 
     # Create the ycount sparse matrix (Junction counts)
@@ -676,7 +643,6 @@ def main():
     # Extract the cluster layer (total counts)
     coo2 = adata.layers["Cluster_Counts"]
     total_counts_tensor = torch.tensor(coo2.data, **float_type)
-    
     torch.cuda.empty_cache()
     
     # Create the tcount sparse matrix (Total counts)
@@ -750,8 +716,9 @@ def main():
 
     # Get metrics from ALBF
     log_to_report(report_file, "Running differential splicing analysis.")
-    psis_df = compute_and_plot_albf(pruned_psis_mus, pruned_psis_loc, pruned_psi_learned, pruned_pi, output_dir)
+    psis_df = compute_and_plot_albf(pruned_psis_mus, pruned_psis_loc, pruned_psi_learned, pruned_pi, K)
     psis_df.rename(columns={i: f"cell_state_{i}" for i in range(new_K)}, inplace=True)
+   
     # Save ALBF DataFrame
     save_albf_to_csv(psis_df, output_dir)
     
@@ -761,47 +728,25 @@ def main():
     # Calculate silhouette score
     silhouette_avg, dbi, embedding = plot_umap(pruned_assign_post, adata, output_dir)
     plot_pi_barplot(pruned_pi, output_dir)
-    
-    # plot_clustermap(pruned_assign_post, adata, output_dir)
-    
+        
     print(silhouette_avg, dbi, flush=True)
-
-    # plot_umap_by_category(embedding, adata, "cell_type_grouped", output_dir, "UMAP colored by cell_type_grouped", "umap_cell_type_grouped.png")
-    # plot_umap_by_category(embedding, adata, "subtissue_clean", output_dir, "UMAP colored by Subtissue", "umap_subtissue.png")
-    # plot_umap_by_category(embedding, adata, "age", output_dir, "UMAP colored by Age", "umap_age.png")
-    # plot_umap_by_category(embedding, adata, "mouse.id", output_dir, "UMAP colored by Mouse ID", "umap_mouse.png")
-    # plot_umap_by_category(embedding, adata, "sex", output_dir, "UMAP colored by sex", "sex_mouse.png")
-
     plot_umap_by_category(embedding, adata, cell_type_column, output_dir, f"UMAP colored by {cell_type_column}", f"umap_{cell_type_column}.png")
 
     log_to_report(report_file, "Running multinomial logistic regression using learned PHI and known cell annotations.")
-    # age_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'age')
     age_accuracy = "NA"
 
     # Log accuracy or save it to a file
-    # print(f"Multinomial Logistic Regression Accuracy: {age_accuracy}")
-    # subtissue_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'subtissue_clean')
     subtissue_accuracy = "NA"
     
     # Log accuracy or save it to a file
-    # print(f"Multinomial Logistic Regression Accuracy: {subtissue_accuracy}")
     cell_type_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, cell_type_column)
     
     # Log accuracy or save it to a file
     print(f"Multinomial Logistic Regression Accuracy: {cell_type_accuracy}")
     
     # Perform logistic regression for mouse.id
-    #mouse_id_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'mouse.id')
-    #print(f"Multinomial Logistic Regression Accuracy for Mouse ID: {mouse_id_accuracy}")
     mouse_id_accuracy = "NA"
-
-    # Perform logistic regression for sex
-    # sex_accuracy = multinomial_logistic_regression(adata, pruned_assign_post, new_K, output_dir, 'sex')
-    # print(f"Multinomial Logistic Regression Accuracy for Sex: {sex_accuracy}")
     sex_accuracy = "NA"
-
-    # Get silhouette score from NMF 
-    # silhouette_NMF = get_NMF(adata, K=K, output_dir=output_dir)
     silhouette_NMF = "NA" 
 
     if waypoints_use:
