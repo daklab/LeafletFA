@@ -267,13 +267,8 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
     metadata_matched = metadata_matched.reset_index()
 
     # Prepare junction metadata (var) from intron_clusts
-    # Check if 'gene_id' column is present, then include it; otherwise, skip it
     columns_to_include = ['junction_id', 'event_id', 'total_score', 'splice_motif', 'label_5_prime',
-       'label_3_prime']
-
-    # Add 'gene_id' to columns if it exists in intron_clusts
-    if 'gene_id' in intron_clusts.columns:
-        columns_to_include.insert(1, 'gene_id')  # Insert 'gene_id' at the correct position if present
+       'label_3_prime', 'gene_id']
 
     # Create a copy of the selected columns
     junction_var = intron_clusts[columns_to_include].copy()

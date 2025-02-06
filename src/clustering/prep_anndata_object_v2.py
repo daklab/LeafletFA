@@ -267,23 +267,23 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
     metadata_matched = metadata_matched.reset_index()
 
     # Prepare junction metadata (var) from intron_clusts
-    # Check if 'gene_id' column is present, then include it; otherwise, skip it
-    columns_to_include = ['junction_id', 'event_id', 'total_score', 'splice_motif', 'label_5_prime',
-       'label_3_prime', 'annotation_status', 'gene_name', 'gene_id', 'num_junctions', 'total_score', 'splice_motif', 'position_off_5_prime', 'position_off_3_prime']
+    columns_to_include = [
+        'junction_id', 'event_id', 'splice_motif', 'label_5_prime', 'label_3_prime',
+        'annotation_status', 'gene_name', 'gene_id', 'num_junctions',
+        'position_off_5_prime', 'position_off_3_prime', 'total_score'  # Keep only one 'total_score'
+    ]
 
-    # Add 'gene_id' to columns if it exists in intron_clusts
-    if 'gene_id' in intron_clusts.columns:
-        columns_to_include.insert(1, 'gene_id')  # Insert 'gene_id' at the correct position if present
-
-    # Create a copy of the selected columns
+    # Rename 'total_score' -> 'CountJuncs'
     junction_var = intron_clusts[columns_to_include].copy()
     junction_var.rename(columns={'total_score': 'CountJuncs'}, inplace=True)
 
-    # Reorder the junction metadata to match the order of relevant_junction_ids in cell_by_junction_matrix
+    # Ensure no duplicate column names exist
+    if junction_var.columns.duplicated().any():
+        raise ValueError(f"Duplicate columns found in var: {list(junction_var.columns[junction_var.columns.duplicated()])}")
+
+    # Reorder and assign metadata
     junctions = list(junc_idx.keys())  # Use the junction IDs in order
     junction_var = junction_var.set_index('junction_id').reindex(junctions)
-
-    # Add junction_id_index to junction_var
     junction_var = junction_var.reset_index()
     junction_var['junction_id_index'] = junction_var['junction_id'].map(junc_idx)
 
