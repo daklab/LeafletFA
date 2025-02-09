@@ -9,7 +9,8 @@ class EMDifferentialSplicing:
         self.albf_scores = np.array(albf_scores)        
 
         # Center ALBF first then logit 
-        self.b_j = np.clip(expit(self.albf_scores - np.median(self.albf_scores)), 1e-10, 1-1e-10)  # Centering before sigmoid
+        # self.b_j = np.clip(expit(self.albf_scores), 1e-10, 1-1e-10)  # clip to avoid log(0) and log(1)
+        self.b_j = np.clip(expit(self.albf_scores - np.mean(self.albf_scores)), 1e-10, 1-1e-10)
 
         self.max_iter = max_iter
         self.tolerance = tolerance
@@ -32,6 +33,9 @@ class EMDifferentialSplicing:
         log_odds_b = np.log(np.clip(self.b_j, 1e-10, 1-1e-10)) - np.log(1 - np.clip(self.b_j, 1e-10, 1-1e-10))
         log_odds_p = np.log(p_safe) - np.log(1 - p_safe)
 
+        # normalize log odds? 
+        # log_odds_b = np.log(self.b_j / (1 - self.b_j)) - np.mean(np.log(self.b_j / (1 - self.b_j)))
+
         # Compute posterior probabilities
         total_log_odds = log_odds_b + log_odds_p
         q_s1 = np.clip(expit(total_log_odds), 1e-10, 1-1e-10)
@@ -42,8 +46,11 @@ class EMDifferentialSplicing:
         """
         M-step: Update the prior probability p with tight bounds around 0.5.
         """
-        return np.clip(np.mean(q_s1), 0.1, 0.9)
-    
+
+        # try a less aggressive update of p,? does this make sense? 
+        # mixes the prior probability p with the mean of the posterior probabilities to try and prevent it from jumping to 1 
+        return np.clip(0.5 * self.p + 0.5 * np.mean(q_s1), 0.1, 0.9)
+       
     def compute_log_likelihood(self, q_s1):
         """
         Compute log likelihood.

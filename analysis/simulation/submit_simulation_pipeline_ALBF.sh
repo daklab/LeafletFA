@@ -13,7 +13,7 @@ SAVE_ANNDATA_VALUES=(False)
 repeats=1  # Repeat each combination 2 times
 
 max_count=100
-num_epochs=500
+num_epochs=1000
 lr=0.1
 
 # Script path 
@@ -21,9 +21,9 @@ analysis_script=/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/simulat
 
 # Anndata file input file path 
 input_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/recomb_paper/ATSE_Anndata_Object_with_initializations_brain_only_20241018_134852.h5ad
-ATSE_file=$input_file #doesn't matter not actually using this
+ATSE_file=/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/recomb_paper/tabula_senis_test_intron_clusters_50_500000_10_20240927_single_cell.gz
 
-# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/0204
+# cd /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/
 
 # Initialize a counter
 count=0
@@ -67,7 +67,7 @@ python $analysis_script --input_path $input_file \
   --ATSE_file $ATSE_file \
   --K_use ${K_use} \
   --input_conc_prior ${input_conc_prior} \
-  --num_inits 2 \
+  --num_inits 10 \
   --lr ${lr} \
   --num_epochs ${num_epochs} \
   --cell_type_column ${cell_type_column} \

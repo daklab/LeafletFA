@@ -81,9 +81,6 @@ def compute_log_Pj_H0(mu_kj, variance_kj, pi_k):
     # Calculate log probability at zero for combined distribution
     combined_log_pdf_zero = gaussian_log_prob(torch.tensor(0.0), combined_mean, combined_variance)
     
-    # print(f"Log numerator: {weighted_sum_log_pdfs_zero}")
-    # print(f"Log denominator: {combined_log_pdf_zero}")
-    
     # Return weighted difference
     return weighted_sum_log_pdfs_zero - combined_log_pdf_zero
 

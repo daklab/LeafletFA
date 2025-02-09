@@ -311,6 +311,22 @@ def get_NMF(adata_input, K, output_dir, true_juncs_layer="cell_by_junction_matri
     # Return the silhouette score for evaluation
     return NMF_silhouette
 
+def compute_entropy_perplexity(psis_df):
+    # Normalize each row to obtain probability distribution
+    prob_matrix = psis_df.div(psis_df.sum(axis=1), axis=0)
+    
+    # Compute entropy
+    entropy = -np.nansum(prob_matrix * np.log(prob_matrix), axis=1)
+    
+    # Compute perplexity
+    perplexity = np.exp(entropy)
+    
+    # Store results in DataFrame
+    result_df = psis_df.copy()
+    result_df["entropy"] = entropy
+    result_df["perplexity"] = perplexity
+    return result_df
+
 def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir, K, report_file):
     
     # Compute ALBF
@@ -336,14 +352,18 @@ def compute_and_plot_albf(adata_input, psis_mus, psis_loc, psis, pi, output_dir,
     # Prepare dataframes
     # albf_df = pd.DataFrame(albf.flatten(), columns=["ALBF"])
     albf_df = pd.DataFrame(albf_values.numpy().flatten(), columns=["ALBF"])
-
     albf_df["junction_id_index"] = range(albf_df.shape[0])
-    print(albf_df.head())
-    
+    print(f"Finished computing ALBF scores for {albf_df.shape[0]} junctions!")
+
     psis_df = pd.DataFrame(psis.T)
+    # Compute entropy and perplexity for each junction 
+    print(f"Computing entropy and perplexity for {psis_df.shape[0]} junctions using the inferred PSI !")
+    psis_df = compute_entropy_perplexity(psis_df)
+    print(f"Finished computing entropy and perplexity for {psis_df.shape[0]} junctions!")
     psis_df["junction_id_index"] = psis_df.index
     psis_df = psis_df.merge(albf_df, on=["junction_id_index"])
-    
+
+    # Get back the true labels and ATSE assignments    
     juncs_clusts_labs = adata_input.var[["junction_id_index", "difference", "true_label", "Cluster"]]
     psis_df = psis_df.merge(juncs_clusts_labs)
     
@@ -655,7 +675,17 @@ def main():
     psis_loc = all_params[best_init]["AutoGuideList.0.scale"].reshape(K, latent_vars["psi"]["mean"].shape[1]) # K by J
     pi = latent_vars["pi"]["mean"] # shape (K,)
     assign_post = latent_vars["assign"]["mean"] # shape (N, K)
+    a = latent_vars["a"]["mean"]
+    b = latent_vars["b"]["mean"]
 
+    # save a and b params to a pickle file
+    a_b_params = {"a": a, "b": b}
+    a_b_params_path = os.path.join(output_dir, "a_b_params.pkl")
+    with open(a_b_params_path, "wb") as f:
+        pickle.dump(a_b_params, f)
+
+    print(f"Saved a and b parameters to {a_b_params_path}")
+    
     # If input_conc was None extract it from latent variables 
     if input_conc == None:
         input_conc = latent_vars["bb_conc"]["mean"]
