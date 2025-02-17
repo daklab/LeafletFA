@@ -8,43 +8,37 @@
 #   - sample from the guide (posterior)
 #   - extract the latent variables
 
+import os
+import random
+import datetime
+import logging
+
+import numpy as np
+import torch
 import pyro
 import pyro.distributions as dist
-from pyro.infer import SVI, Trace_ELBO
-import torch
-print (torch.__version__)
-print (torch.version.cuda)
+from torch.distributions import constraints, Distribution
 from torch.optim import Adam
-from pyro.optim import MultiStepLR
-from pyro.optim import ClippedAdam
-
-import matplotlib.pyplot as plt
-import random
-import logging
-logging.basicConfig(format='%(message)s', level=logging.INFO)
-from pyro.infer import Predictive
-
-import datetime
-from torch.distributions import Distribution
-Distribution.set_default_validate_args(False)
-
-import os
-
-import logging
-import matplotlib.pyplot as plt
-import torch
-import pyro
-import random
-import datetime
-import numpy as np
+from pyro.optim import MultiStepLR, ClippedAdam
+from pyro.infer import SVI, Trace_ELBO, Predictive
+from pyro.infer.autoguide import (
+    AutoGuideList, AutoDelta, AutoDiagonalNormal
+)
+from pyro.infer.autoguide.initialization import init_to_value, init_to_uniform
 from pyro import poutine
 from pyro.poutine import trace as p_trace
-import pyro.distributions as dist
-from torch.distributions import constraints
-# import the AutoGuideList class from the pyro.infer.autoguide module
-from pyro.infer.autoguide import AutoGuideList, AutoDelta, AutoDiagonalNormal
-from pyro.infer.autoguide.initialization import init_to_value
-from pyro.infer.autoguide.initialization import init_to_uniform
+import matplotlib.pyplot as plt
+
+# Configure logging
+logging.basicConfig(format="%(message)s", level=logging.INFO)
+
+# Disable default argument validation for distributions
+Distribution.set_default_validate_args(False)
+
+# Print Torch and CUDA version info
+print(f"Torch Version: {torch.__version__}")
+print(f"CUDA Version: {torch.version.cuda}")
+
 
 def convertr(hyperparam, name):
     """
@@ -211,15 +205,7 @@ def model(y, total_counts, K, use_global_prior=True, input_conc_prior=None):
         assign = torch.clamp(assign, min=1e-8)
         assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
 
-    # Assert that assign has no NaN, Inf, or negative values
-    # assert torch.isfinite(assign).all(), "assign contains NaN or infinite values!"
-    # assert torch.all(assign >= 0), "Assign has negative values!"
-    # assert torch.allclose(assign.sum(dim=1), torch.tensor(1.0, dtype=torch.float32)), f"assign rows do not sum to 1: {assign.sum(dim=1)}"
-
     pred = torch.mm(assign, psi)
-
-    # Assert pred contains no NaN/Inf values
-    # assert torch.isfinite(pred).all(), "pred contains NaN or infinite values!"
 
     # Move pred to CUDA if available
     if torch.cuda.is_available():
@@ -237,11 +223,6 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
     to ensure numerical stability and early stopping to prevent overfitting.
     """
-
-    # scheduler = MultiStepLR({'optimizer': Adam,
-    #                         'optim_args': {'lr': lr},
-    #                         'milestones': [20, 50, 80, 100, 120, 150, 200, 250],
-    #                         'gamma': 0.1})
 
     # Initialize learning rate and decay factor
     initial_lr = lr
@@ -273,10 +254,6 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
     epochs_since_improvement = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
-
-    # Move tensors to the appropriate device
-    # y, total_counts = y.to(device), total_counts.to(device)
     
     # Convert input_conc_prior to tensor if it's a float and move it to the device
     if isinstance(input_conc_prior, float):
@@ -290,7 +267,6 @@ def fit(y, total_counts, K, use_global_prior, input_conc_prior, guide, patience=
 
         # Call SVI step passing the input_conc_prior dynamically
         loss = svi.step(y, total_counts, K, use_global_prior, input_conc_prior)
-
         losses.append(loss)
 
         # Check for improvement based on min_delta and update best loss and epochs_since_improvement.

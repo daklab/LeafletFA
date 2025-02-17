@@ -79,10 +79,6 @@ def log_to_report(report_file, text):
     report_file.write(text + '\n')
     print(text)
 
-def load_adata(input_path):
-    """Loads an AnnData object from the specified path."""
-    return ad.read_h5ad(input_path)
-
 def average_pairwise_correlation(corrs):
     # Use tril_indices to access the lower triangle excluding the diagonal
     i, j = np.tril_indices_from(corrs, k=-1)
@@ -610,10 +606,9 @@ def main():
 
     # Load data and set K
     log_to_report(report_file, f"Loading anndata file from {input_path}")
-    adata = load_adata(input_path)
+    adata = ad.read_h5ad(input_path)
 
     # Load sparse tensor model input files (need to improve this input processing)
-    log_to_report(report_file, f"Loading sparse torch tensors as inputs to the model!")
     device = float_type["device"]
 
     adata.layers["Cluster_Counts"] = coo_matrix(adata.layers["cell_by_cluster_matrix"])

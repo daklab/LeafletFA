@@ -1,13 +1,10 @@
 import numpy as np 
 import pandas as pd
-
 from tqdm import tqdm
 from scipy.sparse import coo_matrix
 from scipy.sparse import csr_matrix
-
 import anndata as ad
 import scanpy as sc
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -217,147 +214,39 @@ def calculate_centered_psi(junction_counts, cluster_counts, rho=0.1):
     
     return Y_sparse
 
-def plot_UMAP_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
+def plot_PCA_with_waypoints(adata, waypoints_dict, color_by='tissue', n_waypoints=20, 
+                            save_plot=False,
+                            waypoint_color='red', first_waypoint_color='blue', size=10):
     """
-    Plots the UMAP components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'), 
-    and overlays the specified number of waypoints. The legends are placed outside the plots.
+    Plots PCA with cells colored by a specified annotation (e.g., 'tissue', 'cell_type') 
+    and overlays waypoints on top.
     """
-    
-    fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
 
-    # Step 1: Plot UMAP colored by 'age'
-    sc.pl.umap(adata, color=color_by, size=size, ax=axes[0], show=False, alpha=0.5)  # UMAP with 'age'
-    
-    # Step 2: Plot UMAP colored by the second annotation (default is 'tissue')
-    sc.pl.umap(adata, color=second_color, size=size, ax=axes[1], show=False, alpha=0.5)  # UMAP with second annotation
-    
-    # Extract UMAP coordinates
-    umap_coords = adata.obsm['X_umap']
-    
-    # Perform max-min sampling to get waypoints (if waypoints have not been computed beforehand)
+    # Check if waypoints exist
     waypoints = waypoints_dict.get(n_waypoints)
     if waypoints is None:
         raise ValueError(f"No waypoints found for {n_waypoints}. Please check your waypoints_dict.")
-
-    # Get the coordinates for the selected waypoints
-    waypoint_coords = umap_coords[waypoints]
-    
-    # Step 3: Overlay the waypoints on both subplots
-    axes[0].scatter(waypoint_coords[1:, 0], waypoint_coords[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[0].scatter(waypoint_coords[0, 0], waypoint_coords[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
-
-    axes[1].scatter(waypoint_coords[1:, 0], waypoint_coords[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[1].scatter(waypoint_coords[0, 0], waypoint_coords[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
-
-    # Step 4: Add legends outside the plots
-    axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
-    axes[1].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
-
-    # Add titles
-    axes[0].set_title(f'UMAP Colored by Age with {n_waypoints} Waypoints')
-    axes[1].set_title(f'UMAP Colored by {second_color.capitalize()} with {n_waypoints} Waypoints')
-
-    # Adjust the layout to make space for legends
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    # Show the plot
-    plt.show()
-    plt.close()
-
-def plot_tSNE_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
-    """
-    Plots the t-SNE components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'),
-    and overlays the specified number of waypoints. The legends are placed outside the plots.
-    """
-    
-    fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
-
-    # Step 1: Plot t-SNE colored by 'age'
-    sc.pl.tsne(adata, color=color_by, size=15, ax=axes[0], show=False, alpha=0.5)  # t-SNE with 'age'
-    
-    # Step 2: Plot t-SNE colored by the second annotation (default is 'tissue')
-    sc.pl.tsne(adata, color=second_color, size=15, ax=axes[1], show=False, alpha=0.5)  # t-SNE with second annotation
-    
-    # Extract t-SNE coordinates
-    tsne_coords = adata.obsm['X_tsne']
-    
-    # Perform max-min sampling to get waypoints (if waypoints have not been computed beforehand)
-    waypoints = waypoints_dict.get(n_waypoints)
-    if waypoints is None:
-        raise ValueError(f"No waypoints found for {n_waypoints}. Please check your waypoints_dict.")
-
-    # Get the coordinates for the selected waypoints
-    waypoint_coords_tsne = tsne_coords[waypoints]
-    
-    # Step 3: Overlay the waypoints on both subplots
-    axes[0].scatter(waypoint_coords_tsne[1:, 0], waypoint_coords_tsne[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[0].scatter(waypoint_coords_tsne[0, 0], waypoint_coords_tsne[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
-
-    axes[1].scatter(waypoint_coords_tsne[1:, 0], waypoint_coords_tsne[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[1].scatter(waypoint_coords_tsne[0, 0], waypoint_coords_tsne[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
-
-    # Step 4: Add legends outside the plots
-    axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
-    axes[1].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
-
-    # Add titles
-    axes[0].set_title(f't-SNE Colored by Age with {n_waypoints} Waypoints')
-    axes[1].set_title(f't-SNE Colored by {second_color.capitalize()} with {n_waypoints} Waypoints')
-
-    # Adjust the layout to make space for legends
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    # Show the plot
-    plt.show()
-    plt.close()
-
-def plot_PCA_with_waypoints(adata, waypoints_dict, color_by='age', n_waypoints=20, waypoint_color='red', first_waypoint_color='blue', size=10, second_color='tissue'):
-    """
-    Plots the PCA components with 'age' and another specified annotation (e.g., 'tissue', 'cell_type'), 
-    and overlays the specified number of waypoints. The legends are placed outside the plots.
-    """
-    
-    fig, axes = plt.subplots(1, 2, figsize=(15, 7))  # Create two subplots for 'age' and the second annotation
-
-    # Step 1: Plot PCA colored by 'age'
-    sc.pl.pca(adata, color=color_by, size=size, ax=axes[0], show=False)  # PCA with 'age'
-    
-    # Step 2: Plot PCA colored by the second annotation (default is 'tissue')
-    sc.pl.pca(adata, color=second_color, size=size, ax=axes[1], show=False)  # PCA with second annotation
     
     # Extract PCA coordinates
     pca_coords = adata.obsm['X_pca']
-    
-    # Perform max-min sampling to get waypoints (if waypoints have not been computed beforehand)
-    waypoints = waypoints_dict.get(n_waypoints)
-    if waypoints is None:
-        raise ValueError(f"No waypoints found for {n_waypoints}. Please check your waypoints_dict.")
-
-    # Get the coordinates for the selected waypoints
     waypoint_coords_pca = pca_coords[waypoints]
 
-    # Step 3: Overlay the waypoints on both subplots
-    axes[0].scatter(waypoint_coords_pca[1:, 0], waypoint_coords_pca[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[0].scatter(waypoint_coords_pca[0, 0], waypoint_coords_pca[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
+    # Create scatter plot
+    sc.pl.pca(adata, color=color_by, size=size, show=False)  # Standard PCA plot
 
-    axes[1].scatter(waypoint_coords_pca[1:, 0], waypoint_coords_pca[1:, 1], s=20, color=waypoint_color, label=f'{n_waypoints} Waypoints', edgecolor='black')
-    axes[1].scatter(waypoint_coords_pca[0, 0], waypoint_coords_pca[0, 1], s=50, color=first_waypoint_color, label='First Waypoint', edgecolor='black')
+    # Overlay waypoints
+    plt.scatter(waypoint_coords_pca[1:, 0], waypoint_coords_pca[1:, 1], s=40, 
+                color=waypoint_color, edgecolors='black', label=f'{n_waypoints} Waypoints')
 
-    # Step 4: Add legends outside the plots
-    axes[0].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
-    axes[1].legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), fancybox=True, shadow=True, ncol=1)
+    plt.scatter(waypoint_coords_pca[0, 0], waypoint_coords_pca[0, 1], s=80, 
+                color=first_waypoint_color, edgecolors='black', label='First Waypoint')
 
-    # Add titles
-    axes[0].set_title(f'PCA Colored by Age with {n_waypoints} Waypoints')
-    axes[1].set_title(f'PCA Colored by {second_color.capitalize()} with {n_waypoints} Waypoints')
-
-    # Adjust the layout to make space for legends
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-
-    # Save the plot to a PDF file
-    filename = f"PCA_with_waypoints_{n_waypoints}_waypoints.pdf"
-    plt.savefig(filename, format='pdf')
-
-    # Show the plot
+    # Add legend
+    plt.legend()
     plt.show()
-    plt.close()
+
+    # Save and show plot
+    if save_plot:
+        filename = f"PCA_with_waypoints_{n_waypoints}_waypoints.pdf"
+        plt.savefig(filename, format='pdf')
+    

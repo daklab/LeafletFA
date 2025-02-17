@@ -123,4 +123,3 @@ transcript_data = ja.fetch_transcripts_and_annotations(db, unique_transcripts)
 region_start, region_end = ja.determine_region_boundaries(splice_junctions)
 ja.plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start, region_end, base_width=8, trans_height=0.5, show_usage=False, show_junc_lines=True)
 
-print(p[p["event_id"] == atse_event])

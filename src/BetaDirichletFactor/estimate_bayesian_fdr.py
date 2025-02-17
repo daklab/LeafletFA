@@ -9,8 +9,8 @@ class EMDifferentialSplicing:
         self.albf_scores = np.array(albf_scores)        
 
         # Center ALBF first then logit 
-        # self.b_j = np.clip(expit(self.albf_scores), 1e-10, 1-1e-10)  # clip to avoid log(0) and log(1)
-        self.b_j = np.clip(expit(self.albf_scores - np.mean(self.albf_scores)), 1e-10, 1-1e-10)
+        self.b_j = np.clip(expit(self.albf_scores), 1e-10, 1-1e-10)  # clip to avoid log(0) and log(1)
+        # self.b_j = np.clip(expit(self.albf_scores - np.mean(self.albf_scores)), 1e-10, 1-1e-10)
 
         self.max_iter = max_iter
         self.tolerance = tolerance
