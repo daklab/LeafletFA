@@ -10,6 +10,41 @@ import sys
 import pdb
 import scipy.sparse as sp
 
+def preprocess_adata(adata, cell_type_column, cluster_layer="Cluster_Counts"):
+    """
+    Preprocesses the AnnData object by filtering unevenly distributed splicing events (ATSEs).
+    
+    If a cell type column is specified, the function filters out junctions that have
+    low expression across the cell types.
+    """
+    if cell_type_column is not None:
+        
+        print(f"Filtering ATSEs to remove those very unevenly distributed across cell types!")
+        cluster_counts = adata.layers[cluster_layer]
+        cell_types = adata.obs[cell_type_column].values
+        unique_cell_types = np.unique(cell_types)
+        unique_clusters = adata.var_names
+
+        expression_counts = pd.DataFrame(0, index=unique_cell_types, columns=unique_clusters)
+        for cell_type in tqdm(unique_cell_types):
+            cells_in_type = (cell_types == cell_type)
+            counts_in_type = cluster_counts.toarray()[cells_in_type, :].sum(axis=0)
+            expression_counts.loc[cell_type] = counts_in_type
+
+        non_zero_counts = (expression_counts >= 5).sum(axis=0)
+        threshold = len(expression_counts) * 0.2
+        filtered_clusters = non_zero_counts[non_zero_counts > threshold].index
+
+        filtered_expression_counts = expression_counts[filtered_clusters]
+        juncs_keep = list(filtered_expression_counts)
+        adata_filtered = adata[:, juncs_keep].copy()
+        adata_filtered.var['junction_id_index'] = np.arange(adata_filtered.n_vars)
+        adata_filtered.var_names = adata_filtered.var['junction_id_index'].astype(str)
+        return adata_filtered
+    else:
+        print("No cell type column specified. Skipping filtering of ATSEs.")
+        return adata.copy()
+    
 # write function that takes in Cluster name 
 def check_SS_cluster(juncs_c):
         
@@ -20,7 +55,7 @@ def check_SS_cluster(juncs_c):
 
     # if num rows in juncs_c is 3 then return cluster name 
     if len(juncs_c == 3):       
-        cluster_name = juncs_c["Cluster"].iloc[0]
+        cluster_name = juncs_c["event_id"].iloc[0]
         return cluster_name
     else:
         pass
@@ -67,7 +102,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     cluster_counts_coo = coo_matrix(cluster_counts)
     
     # Number of intron clusters 
-    num_clusters = len(adata_input.var.Cluster.unique())
+    num_clusters = len(adata_input.var.event_id.unique())
 
     # Determine the number of negatives and positives
     num_negative = int(proportion_negative * num_clusters)
@@ -88,17 +123,17 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     print("Number of positive labels (1):", count_positives)
 
     # Make a mapping of Cluster ID to cluster_labels
-    cluster_labels_dict = dict(zip(adata_input.var.Cluster.unique(), cluster_labels))
+    cluster_labels_dict = dict(zip(adata_input.var.event_id.unique(), cluster_labels))
     
     # initiate empty dataframe cell_type_psi_df to which we will append the simulated PSI values for each junction in each cell type
     cell_type_psi_df = pd.DataFrame()
 
-    for clust in tqdm(adata_input.var.Cluster.unique()):
+    for clust in tqdm(adata_input.var.event_id.unique()):
         
         clust_label = cluster_labels_dict[clust]
 
         # Get junctions in cluster and order them by start and end 
-        juncs_c = adata_input.var[adata_input.var["Cluster"] == clust].sort_values(by=['start', 'end'])
+        juncs_c = adata_input.var[adata_input.var["event_id"] == clust].sort_values(by=['start', 'end'])
 
         # Ensure exactly 3 junctions are present
         if len(juncs_c) != 3:
@@ -144,7 +179,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
         probs_df["junction_id_index"] = juncs_c.index
         probs_df["junction_id"] = juncs_c["junction_id"].values
         probs_df["sample_label"] = sample_label
-        probs_df["Cluster"] = juncs_c["Cluster"].values[0]
+        probs_df["event_id"] = juncs_c["event_id"].values[0]
         cell_type_psi_df = pd.concat([cell_type_psi_df, probs_df])
 
     cell_type_psi_df.junction_id_index = cell_type_psi_df.junction_id_index.astype(int)
@@ -174,11 +209,11 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
     ).sample().cpu().numpy()  # Ensure compatibility with numpy
 
     # Group by cluster and normalize junction counts within each cell-cluster pair
-    cluster_info = adata_input.var[["Cluster", "junction_id_index"]]
+    cluster_info = adata_input.var[["event_id", "junction_id_index"]]
 
-    for cluster_id in tqdm(cluster_info["Cluster"].unique(), desc="Processing clusters"):
+    for cluster_id in tqdm(cluster_info["event_id"].unique(), desc="Processing ATSEs"):
         # Get the junction indices for this cluster
-        junction_indices = cluster_info[cluster_info["Cluster"] == cluster_id]["junction_id_index"].values
+        junction_indices = cluster_info[cluster_info["event_id"] == cluster_id]["junction_id_index"].values
 
         # Create a mask for the current cluster based on the junction indices
         cluster_mask = np.isin(cluster_counts_coo.col, junction_indices)
@@ -203,7 +238,7 @@ def simulate_junc_counts(adata_input, psi_prior_shape1=0.5, psi_prior_shape2=0.5
 
 def quick_clust_plot(clust, adata_input):
 
-    simple_data_junc = adata_input.var[adata_input.var.Cluster == clust]
+    simple_data_junc = adata_input.var[adata_input.var.event_id == clust]
     junc_indices = simple_data_junc["junction_id_index"].values
 
     # Get cell specific junction usage ratios 
@@ -211,7 +246,7 @@ def quick_clust_plot(clust, adata_input):
 
     junc_data_dense = junc_data.toarray() if hasattr(junc_data, 'toarray') else junc_data
 
-    junc_df = pd.DataFrame(junc_data_dense, index = adata_input.obs.index, columns=simple_data_junc["junction_id_index"])
+    junc_df = pd.DataFrame(junc_data_dense, index = adata_input.obs["cell_id_index"], columns=simple_data_junc["junction_id_index"])
     junc_df["cell_id_index"] = junc_df.index 
     junc_df = junc_df.melt(id_vars="cell_id_index" , var_name="junction_id_index", value_name="junc_ratio")
 
@@ -230,8 +265,11 @@ def quick_clust_plot(clust, adata_input):
 
     sns.violinplot(data=junc_df, x="junc_ratio", y="cell_type", hue="junction_id_index")
     plt.title(f"{junc_df.true_label[0]}")
+    num_nz_cells = junc_df.cell_id_index.nunique()
+    print("Number of non-zero cells:", num_nz_cells)
+    return junc_df
 
-def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.5, cell_type_column=None, gen_model_input=False):
+def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.5, cell_type_column=None):
     
     """Load, filter, and simulate data, returning tensors for the model.
     
@@ -240,13 +278,13 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
     """
 
     # Group by 'Cluster' and count 'junction_id'
-    cluster_junc_counts =  adata_input.var.groupby(["Cluster"]).agg({"junction_id": "count"}).reset_index()
+    cluster_junc_counts =  adata_input.var.groupby(["event_id"]).agg({"junction_id": "count"}).reset_index()
 
     # Filter clusters with exactly 3 junctions
     clusts_keep = cluster_junc_counts[cluster_junc_counts["junction_id"] == 3]
 
     # Filter 'var' in the AnnData object based on the clusters to keep
-    adata_input = adata_input[:, adata_input.var["Cluster"].isin(clusts_keep["Cluster"])].copy()
+    adata_input = adata_input[:, adata_input.var["event_id"].isin(clusts_keep["event_id"])].copy()
 
     # Extract 'chr', 'start', and 'end' from 'junction_id' using .loc to avoid SettingWithCopyWarning
     adata_input.var.loc[:, "chr"] = adata_input.var["junction_id"].str.split("_").str[0]
@@ -258,7 +296,7 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
 
    # Reset the junction_id_index column to maintain consistency
     print(f"The number of unique junctions included in the simulation data is: {len(adata_input.var.junction_id.unique())}")
-    print(f"The number of unique clusters included in the simulation data is: {len(adata_input.var.Cluster.unique())}")
+    print(f"The number of unique clusters included in the simulation data is: {len(adata_input.var.event_id.unique())}")
 
     # Reset the junction_id_index column to match new reset index order 
     adata_input.var.reset_index(drop=True, inplace=True)
@@ -266,13 +304,13 @@ def simulate_and_prepare_data(adata_input, K, float_type, proportion_negative=0.
 
     clusters_SS = []
 
-    for cluster, juncs_c in tqdm( adata_input.var.groupby("Cluster")):
+    for cluster, juncs_c in tqdm( adata_input.var.groupby("event_id")):
         result = check_SS_cluster(juncs_c)
         if result:
             clusters_SS.append(result)
 
     # Subset the data to just clusters that contain exon skipping events 
-    adata_input = adata_input[:, adata_input.var["Cluster"].isin(clusters_SS)].copy()
+    adata_input = adata_input[:, adata_input.var["event_id"].isin(clusters_SS)].copy()
     
     # Reset the junction_id_index column after subsetting
     adata_input.var["junction_id_index"] = range(len(adata_input.var))

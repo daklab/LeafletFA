@@ -22,6 +22,7 @@ from pyro import poutine
 from pyro.poutine import block
 from pyro.infer.autoguide.initialization import init_to_value
 from scipy.sparse import coo_matrix
+from torch.utils.data import Dataset, DataLoader
 
 # Configure logging
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -32,6 +33,32 @@ Distribution.set_default_validate_args(False)
 # Print Torch and CUDA version info
 print(f"Torch Version: {torch.__version__}")
 print(f"CUDA Version: {torch.version.cuda}")
+
+#### FIX THE SAMPLING OF PSI VALUES WHEN PRUNNING!!! 
+
+class LeafletFADataset(Dataset):
+    def __init__(self, y_matrix, total_counts_matrix, device):
+        """
+        Custom PyTorch Dataset for batching the splicing data.
+
+        Parameters:
+        - y_matrix (torch.sparse_coo_tensor): Sparse tensor of junction counts.
+        - total_counts_matrix (torch.sparse_coo_tensor): Sparse tensor of total counts.
+        - device (str): Device to store the tensors.
+        """
+        self.y_matrix = y_matrix.coalesce()  # Convert to COO format to access indices & values
+        self.total_counts_matrix = total_counts_matrix.coalesce()
+        self.device = device
+
+    def __len__(self):
+        return self.y_matrix.shape[0]  # Number of cells
+
+    def __getitem__(self, idx):
+        """ Returns a subset of rows (cells) as a mini-batch """
+        y_row = self.y_matrix[idx].to_dense()  # Convert the sparse row to a dense tensor
+        total_counts_row = self.total_counts_matrix[idx].to_dense()
+        
+        return y_row.to(self.device), total_counts_row.to(self.device)
 
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
@@ -685,8 +712,18 @@ class LeafletFA:
         self.psis_loc = psis_loc_pruned
         self.psis_scale = psis_scale_pruned
 
-        psi_learned_pruned = self.psi[:, pruned_indices]
+        psi_learned_pruned = self.psi[pruned_indices, :]
         self.psi_learned = psi_learned_pruned
+
+        # Need to also prune the sampled PSI values from the guide 
+        pruned_psi_samples = self.all_samples["psi"][:, pruned_indices, :]
+        self.psi_samples = pruned_psi_samples
+
+        # Get a mean and std of the pruned psi samples for every factor-junction
+        psi_samples_mean = pruned_psi_samples.mean(dim=0)
+        psi_samples_std = pruned_psi_samples.std(dim=0)
+        self.psi_samples_mean = psi_samples_mean
+        self.psi_samples_std = psi_samples_std
 
         if self.junc_specific_prior:
             pruned_a = self.a[pruned_indices]

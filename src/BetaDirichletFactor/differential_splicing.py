@@ -5,6 +5,8 @@ from scipy.stats import norm
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd 
+from sklearn.metrics import silhouette_score
+from scipy.stats import chi2
 
 # Function for the logit transform
 def logit(p):
@@ -164,19 +166,18 @@ def plot_gaussian(means, variances):
 
 def compute_z_score_dss(psis_loc, psis_scale, pi_k, junction_ids):
     """
-    Compute z-score based differential splicing score comparing each factor
+    Compute factor specific z-score based differential splicing score comparing each factor
     to the overall weighted mean, and calculate corresponding p-values.
     
     Parameters:
-    - psis_loc: Location parameters from VI (mean of PSI), shape (K x J)
-    - psis_scale: Scale parameters from VI (standard error of PSI), shape (K x J)
-    - pi_k: Factor contributions vector, shape (K,)
-    - junction_ids: List/array of junction identifiers, shape (J,)
+    - psis_loc: Location parameters from gaussian variational param (mean of PSI), shape (K x J)
+    - psis_scale: Scale parameters from gaussian variational param (standard error of PSI), shape (K x J)
+    - pi_k: Latent factor contributions vector, shape (K,)
+    - junction_ids: List of junction indices, shape (J,)
     
     Returns:
     - pd.DataFrame: Z-scores and p-values with shape (J x 2K), indexed by junction_ids
     """
-    from scipy.stats import chi2
 
     # Convert to numpy if they're torch tensors
     if hasattr(psis_loc, 'detach'):
@@ -191,6 +192,7 @@ def compute_z_score_dss(psis_loc, psis_scale, pi_k, junction_ids):
     print(f"The shape of var_jk is: {var_jk.shape}")
     
     # Compute overall weighted mean μ_j for each junction
+    psis_loc = np.clip(psis_loc, 0.0001, 0.9999)
     mu_j = np.dot(pi_k, psis_loc) # (J,)
     print(f"The length of mu_j is: {len(mu_j)}")
 
@@ -201,26 +203,33 @@ def compute_z_score_dss(psis_loc, psis_scale, pi_k, junction_ids):
     # Compute z-scores
     K = len(pi_k)
     z_scores = np.zeros_like(psis_loc) # (K x J)
-    
+
+    var_jk = np.maximum(var_jk, 1e-4)  # Prevents near-zero variance
+    var_mu_j = np.maximum(var_mu_j, 1e-4)
+
+    print("Min variance value:", np.min(var_jk + var_mu_j))
+    print("Median variance value:", np.median(var_jk + var_mu_j))
+    print("Max variance value:", np.max(var_jk + var_mu_j))
+    print("Max absolute difference (μ_{jk} - μ_j):", np.max(np.abs(psis_loc - mu_j)))
+
+    # Calculate z-scores for each factor comparing to overall weighted mean
     for k in range(K):
-        standard_error = np.sqrt(var_jk[k, :] + var_mu_j)  # (J,)
+        standard_error = np.sqrt(var_jk[k, :] + var_mu_j + 1e-6) # (J,)
         z_scores[k, :] = (psis_loc[k, :] - mu_j) / standard_error  # (J,)
     
     # Transpose to get (J x K) shape and convert to DataFrame
     z_scores = z_scores.T
     
-    # Calculate p-values
+    # Calculate p-values using chi-square distribution
     chi_square_stats = z_scores ** 2
     p_values = 1 - chi2.cdf(chi_square_stats, df=1)
 
     # Create DataFrame with proper column names
     z_columns = [f"factor_{k}" for k in range(K)]
     p_columns = [f"factor_{k}_pvalue" for k in range(K)]
-    # Convert junction_ids to strings if they aren't already
-    junction_ids = pd.Index(junction_ids).astype(str)
+    junction_ids = pd.Index(junction_ids).astype(str) # Convert junction_ids to strings to match Anndata index
     
-    # Convert junction_ids to strings if they aren't already
-        # Combine z-scores and p-values
+    # Combine z-scores and p-values
     df = pd.DataFrame(
         np.hstack([z_scores, p_values]),
         index=junction_ids,
@@ -229,50 +238,95 @@ def compute_z_score_dss(psis_loc, psis_scale, pi_k, junction_ids):
         
     return df
 
-def compute_confidence_weighted_fw_dss(df, pi_k):
+def calculate_silhouette_score(assign_post, cell_types):
+    """Calculates silhouette score for the factor assignments."""
+    return silhouette_score(assign_post, cell_types)
+
+def compute_junction_perplexity(adata, leafletfa_sj_dss_key):
     """
-    Compute Confidence-Weighted Factor-Weighted Differential Splicing Score (FW-DSS) 
+    Computes the perplexity for each junction based on its Z-scores across factors.
 
     Parameters:
-    - df (pd.DataFrame): DataFrame containing 'mu_k' and 'var_k' for each factor.
-    - pi_k (np.array): Factor contributions (size K).
+    - adata: AnnData object containing inferred Z-scores for junctions.
+    - leafletfa_sj_dss_key: The key in `adata.varm` that stores Z-scores.
 
     Returns:
-    - pd.Series: FW-DSS scores for each junction.
+    - A DataFrame with junctions and their corresponding perplexity values.
     """
-    # Number of factors (K)
-    K = len(pi_k)
+
+    # Extract Z-scores (convert to NumPy for efficiency)
+    z_scores_matrix = adata.varm[leafletfa_sj_dss_key].iloc[:, :].values  # Shape (num_junctions, num_factors)
     
-    # Extract column names dynamically
-    mu_cols = [f"loc_{k}" for k in range(K)]
-    var_cols = [f"scale_{k}" for k in range(K)]  # Assuming 'loc_k' represents posterior variance
+    # Convert Z-scores into probability-like values using softmax
+    z_scores_exp = np.exp(z_scores_matrix - np.max(z_scores_matrix, axis=1, keepdims=True))  # Normalize for stability
+    probabilities = z_scores_exp / np.sum(z_scores_exp, axis=1, keepdims=True)
 
-    # Convert to numpy arrays for efficient computation
-    mu_jk = df[mu_cols].to_numpy()  # (J x K) matrix of mean junction usage per factor
-    var_jk = df[var_cols].to_numpy()  # (J x K) matrix of variances
+    # Compute Shannon entropy
+    entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10), axis=1)  # Small epsilon to avoid log(0)
+    
+    # Compute perplexity
+    perplexity = 2 ** entropy
 
-    # Compute population-wide mean for each junction
-    mu_pop_j = np.dot(mu_jk, pi_k)  # ends up being a vector of size J
+    # Store results in DataFrame
+    perplexity_df = pd.DataFrame({
+        "Junction": adata.var_names,  # Junction names from AnnData
+        "Perplexity": perplexity
+    })
+    return perplexity_df
 
-    # Compute Confidence-Weighted FW-DSS:
-    confidence_weighted_variance = np.sum(pi_k * ((mu_jk - mu_pop_j[:, None])**2) / (1 + var_jk), axis=1)
+def get_factor_markers(adata, leafletfa_sj_dss_key="SJ_DSS", pval_thresh=0.05, top_n=30):
+    """
+    Identifies significant junction markers for each factor based on absolute Z-scores, 
+    filtering by p-value and incorporating perplexity scores.
 
-    # We need to motivate the 1 here in the denominator... instead what we should do 
-    # is make this more like a z-score more natural... 
-    # we have z_jk = mu_jk - mu_j / standard error on (mu_jk - mu_j)
-    # where standard error is sqrt(var_jk + var_j)
+    Parameters:
+    - adata: AnnData object containing inferred Z-scores and p-values for junctions.
+    - leafletfa_sj_dss_key: The key in `adata.varm` that stores Z-scores and p-values.
+    - pval_thresh: Threshold for statistical significance (default: 0.05).
+    - top_n: Number of top-scoring junctions per factor to report.
 
-    # Return as pandas Series
-    return pd.Series(confidence_weighted_variance, index=df.index, name="FW-DSS")
+    Returns:
+    - DataFrame with columns: Factor, Junction, Z-score, P-value, and Weighted Perplexity.
+    """
+    factor_markers = []
+    K = adata.varm[leafletfa_sj_dss_key].shape[1]/2
+    # Ensure perplexity is available
+    if "perplexity" not in adata.var:
+        raise ValueError("Perplexity values are missing in `adata.var`. Run compute_junction_perplexity first.")
 
-#def compute_DS(): 
+    for factor in range(int(K)): 
+        print(f"Processing factor {factor}...")
+        factor_name = f"factor_{factor}"
+        pval_name = f"{factor_name}_pvalue"
 
-    # for every factor, extract cell PHI values for that factor and correspondign PSI values for junctions in that factor 
-    # multiple them to get the expected PSI value for that junction in that factor across all cells
-    # then take the rest K-1 factors and do the same thing and get the expected PSI value for that junction in that factor across all cells
+        if factor_name not in adata.varm[leafletfa_sj_dss_key].columns or pval_name not in adata.varm[leafletfa_sj_dss_key].columns:
+            raise ValueError(f"Missing {factor_name} or {pval_name} in adata.varm[{leafletfa_sj_dss_key}].")
 
-    # Then the effect sizes will be the differences between these two expected PSI values across conditions 
-    # This will be a way to finding splice junction markers for each factor 
+        # Extract Z-scores and p-values
+        z_scores = adata.varm[leafletfa_sj_dss_key][factor_name].values
+        pvals = adata.varm[leafletfa_sj_dss_key][pval_name].values
+        perplexity = adata.var["perplexity"].values
 
+        # Create a DataFrame for sorting and filtering
+        df = pd.DataFrame({
+            "Junction": adata.var_names,
+            "Z-score": z_scores,
+            "P-value": pvals,
+            "Perplexity": perplexity
+        })
 
+        # Filter for significant p-values
+        df = df[df["P-value"] < pval_thresh]
 
+        if df.empty:
+            continue  # Skip if no significant markers for this factor
+
+        # Sort by Z-score (values greater than 0 first... lookig for enrichment) and select top markers
+        df = df.reindex(df["Z-score"].sort_values(ascending=False).index).head(top_n)
+        df["Factor"] = factor_name  # Add factor label
+
+        factor_markers.append(df)
+
+    # Combine results into a single DataFrame
+    result_df = pd.concat(factor_markers, ignore_index=True)
+    return result_df
