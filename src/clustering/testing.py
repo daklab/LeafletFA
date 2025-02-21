@@ -104,7 +104,7 @@ output_file = os.path.join(output_path, atse_file)
 atse_analyzer.save_atse_file(ATSE_lablled, filtered_junctions, output_file)
 # 
 # # Visualize random ATSEs
-# p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-01-29_test_atse_file.txt.gz", sep="\t")
+p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-01-29_test_atse_file.txt.gz", sep="\t")
 db = gffutils.FeatureDB("gencodeVM19", keep_order=True)
 atse_event = p.sample(1)["event_id"].values[0]
 juncs = p[p["event_id"]==atse_event]

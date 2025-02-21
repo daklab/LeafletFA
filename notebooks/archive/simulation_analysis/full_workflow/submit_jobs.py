@@ -4,7 +4,7 @@ import datetime
 
 # Define where to save outputs 
 # Should be directory in which model params are saved
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-19/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-02-19"
 
 # Load parameter list from JSON file
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")
@@ -20,16 +20,17 @@ os.makedirs(log_dir, exist_ok=True)
 
 # Slurm job script template
 job_script_template = """#!/bin/bash
-#SBATCH --job-name=leaflet_{job_id}
-#SBATCH --output={log_dir}/leaflet_{job_id}.out
-#SBATCH --error={log_dir}/leaflet_{job_id}.err
-#SBATCH --time=3-00:00:00
+#SBATCH --job-name=SIMLEAF_{job_id}
+#SBATCH --output={log_dir}/leafletSIM_{job_id}.out
+#SBATCH --error={log_dir}/leafletSIM_{job_id}.err
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=600G
-#SBATCH --partition=bigmem
+#SBATCH --mem=200G
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 
 # Run Python script
-python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/LeafletFA_tutorial/run_leaflet.py {param_id}
+python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/archive/simulation_analysis/full_workflow/run_simulation_and_leaflet.py {param_id}
 """
 
 # Generate and submit jobs

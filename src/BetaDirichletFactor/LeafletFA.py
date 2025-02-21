@@ -716,8 +716,10 @@ class LeafletFA:
         self.psi_learned = psi_learned_pruned
 
         # Need to also prune the sampled PSI values from the guide 
-        pruned_psi_samples = self.all_samples["psi"][:, pruned_indices, :]
+        pruned_psi_samples = self.all_samples["psi"][:, pruned_indices, :] # samples x K x junctions
         self.psi_samples = pruned_psi_samples
+        pruned_phi_samples = self.all_samples["assign"][:, :, pruned_indices] # samples x cells x K
+        self.phi_samples = pruned_phi_samples
 
         # Get a mean and std of the pruned psi samples for every factor-junction
         psi_samples_mean = pruned_psi_samples.mean(dim=0)

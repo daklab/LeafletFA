@@ -7,6 +7,12 @@ import seaborn as sns
 import pandas as pd 
 from sklearn.metrics import silhouette_score
 from scipy.stats import chi2
+from tqdm import tqdm
+from typing import Tuple, Dict
+from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import precision_recall_curve, auc
+import sys 
+import os 
 
 # Function for the logit transform
 def logit(p):
@@ -242,91 +248,268 @@ def calculate_silhouette_score(assign_post, cell_types):
     """Calculates silhouette score for the factor assignments."""
     return silhouette_score(assign_post, cell_types)
 
-def compute_junction_perplexity(adata, leafletfa_sj_dss_key):
-    """
-    Computes the perplexity for each junction based on its Z-scores across factors.
-
-    Parameters:
-    - adata: AnnData object containing inferred Z-scores for junctions.
-    - leafletfa_sj_dss_key: The key in `adata.varm` that stores Z-scores.
-
-    Returns:
-    - A DataFrame with junctions and their corresponding perplexity values.
-    """
-
-    # Extract Z-scores (convert to NumPy for efficiency)
-    z_scores_matrix = adata.varm[leafletfa_sj_dss_key].iloc[:, :].values  # Shape (num_junctions, num_factors)
+def analyze_differential_splicing(leaflet_model, 
+                            factor_idx = 0, 
+                            fdr_threshold: float=0.05, 
+                            dist_sd: float=0.5,
+                            min_effect_size: float=None,
+                            eps = 1e-10):
     
-    # Convert Z-scores into probability-like values using softmax
-    z_scores_exp = np.exp(z_scores_matrix - np.max(z_scores_matrix, axis=1, keepdims=True))  # Normalize for stability
-    probabilities = z_scores_exp / np.sum(z_scores_exp, axis=1, keepdims=True)
+    # Get posterior samples (sampled from variational distribution / guide)
+    psi_samples = leaflet_model.psi_samples  # [n_samples, K, J]
+    phi_samples = leaflet_model.phi_samples  # [n_samples, C, K]
 
-    # Compute Shannon entropy
-    entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10), axis=1)  # Small epsilon to avoid log(0)
-    
-    # Compute perplexity
-    perplexity = 2 ** entropy
+    # Convert to numpy if they're torch tensors
+    if hasattr(psi_samples, 'detach'):
+        psi_samples = psi_samples.detach().cpu().numpy()
+    if hasattr(phi_samples, 'detach'):
+        phi_samples = phi_samples.detach().cpu().numpy()
 
-    # Store results in DataFrame
-    perplexity_df = pd.DataFrame({
-        "Junction": adata.var_names,  # Junction names from AnnData
-        "Perplexity": perplexity
+    n_samples, n_cells, n_factors = phi_samples.shape
+    _, _, n_junctions = psi_samples.shape
+
+    # Initialize array to store effect sizes
+    effect_sizes = np.zeros((n_samples, n_junctions))
+
+    for s in tqdm(range(n_samples)):
+        phi_s = phi_samples[s]  # [C, K]
+        psi_s = psi_samples[s]  # [K, J]
+
+        # Calculate factor k usage
+        factor_usage = phi_s[:, factor_idx].reshape(-1, 1) * psi_s[factor_idx, :]  # (C, J)
+
+        # Calculate other factors usage
+        other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
+        if len(other_factor_indices) == 1:
+            k = other_factor_indices[0]
+            other_usage = phi_s[:, k].reshape(-1, 1) * psi_s[k, :]  # (C, J)
+        else:
+            other_usage = sum(
+                phi_s[:, k].reshape(-1, 1) * psi_s[k, :] for k in other_factor_indices
+            )  # (C, J)
+
+        # Compute cell-wise effect sizes first and then aggregate:
+        effect_sizes[s] = np.mean(factor_usage - other_usage, axis=0)
+
+    # Calculate overall effect size and variance / aggregates posterior samples
+    beta = np.mean(effect_sizes, axis=0)
+    beta_vars = np.var(effect_sizes, axis=0)
+
+    # Estimate delta if not provided (use posterior variance for robustness)
+    # aka : call a junction significantly DS if the effect 
+    # size is at least half a standard deviation away from the mean of beta... 
+    if min_effect_size is None:
+        min_effect_size = dist_sd * np.std(beta)
+
+    print(f"Calculating probailities for effect size > {min_effect_size}...")
+    # Calculate probabilities using effect sizes
+    prob_greater = np.mean(np.abs(effect_sizes) > min_effect_size, axis=0)
+    prob_lessoreq = 1 - prob_greater
+
+    # Compute posterior expected False Discovery Proportion (FDP)
+    sorted_idx = np.argsort(-prob_greater)
+    sorted_probs = prob_greater[sorted_idx]
+
+    # Calculate FDR 
+    fdrs = np.cumsum(1 - sorted_probs) / (np.arange(len(sorted_probs)) + 1)
+    max_discoveries = np.where(fdrs <= fdr_threshold)[0]
+    n_significant = len(max_discoveries) if len(max_discoveries) > 0 else 0
+
+    # Define significant junctions
+    significant = np.zeros(n_junctions, dtype=bool)
+    if n_significant > 0:
+        significant[sorted_idx[:n_significant]] = True
+
+    # Apply effect size threshold
+    significant = significant & (np.abs(beta) > min_effect_size)
+    print(f"Found {n_significant} significant junctions with effect size > {min_effect_size} at FDR < {fdr_threshold}")
+
+    # Construct results dictionary
+    results_dict = {
+        'effect_sizes': beta,
+        'effect_size_vars': beta_vars,
+        'prob_greater': prob_greater,
+        'prob_lessoreq': prob_lessoreq,
+        'significant': significant,
+        'delta': min_effect_size,
+        'fdr_curve': fdrs,
+        'n_significant': n_significant
+    }
+
+    # Create results DataFrame
+    results_df = pd.DataFrame({
+        'junction_idx': np.arange(n_junctions),
+        'effect_size': beta,
+        'effect_size_std': np.sqrt(beta_vars),
+        'prob_greater': prob_greater,
+        'prob_lessoreq': prob_lessoreq,
+        'significant': significant,
+        'delta': min_effect_size
     })
-    return perplexity_df
 
-def get_factor_markers(adata, leafletfa_sj_dss_key="SJ_DSS", pval_thresh=0.05, top_n=30):
+    return results_dict, results_df
+
+def analyze_all_factors(
+    leaflet_model,
+    min_effect_size: float = None,
+    dist_sd: float = 0.5,
+    fdr_threshold: float = 0.05
+) -> Dict[int, Tuple[Dict[str, np.ndarray], pd.DataFrame]]:
     """
-    Identifies significant junction markers for each factor based on absolute Z-scores, 
-    filtering by p-value and incorporating perplexity scores.
+    Analyze differential splicing for all factors.
+    Note: For K=2 factors, only analyzes factor 0 vs 1 to avoid redundancy.
+    
+    Args:
+        leaflet_model: LeafletFA model object
+        n_samples: Number of bootstrap samples
+        min_effect_size: Minimum effect size threshold
+        fdr_threshold: FDR threshold
+    
+    Returns:
+        Dictionary mapping factor index to (results_dict, results_df) tuple
+    """
+    n_factors = leaflet_model.psi_learned.shape[0]
+    results = {}
+    
+    # For K=2, only analyze factor 0 vs 1
+    if n_factors == 2:
+        results[0] = analyze_differential_splicing(
+            leaflet_model,
+            factor_idx=0,
+            min_effect_size=min_effect_size,
+            fdr_threshold=fdr_threshold
+        )
+    else:
+        # For K>2, analyze each factor vs others
+        print(f"Analyzing differential splicing for {n_factors} factors...")
+        for k in range(n_factors):
+            print(f"Finding DS junctions in factor {k} vs. all others")
+            results[k] = analyze_differential_splicing(
+                leaflet_model,
+                factor_idx=k,
+                min_effect_size=min_effect_size,
+                fdr_threshold=fdr_threshold, 
+                dist_sd=dist_sd
+            )
+    return results
 
-    Parameters:
-    - adata: AnnData object containing inferred Z-scores and p-values for junctions.
-    - leafletfa_sj_dss_key: The key in `adata.varm` that stores Z-scores and p-values.
-    - pval_thresh: Threshold for statistical significance (default: 0.05).
-    - top_n: Number of top-scoring junctions per factor to report.
+def calibration_test(leaflet_model, true_positive_junctions, min_effect_size=None, fdr_thresholds=[0.01, 0.05, 0.1, 0.2]):
+    """
+    Tests calibration of the Bayesian FDR control by comparing expected vs. observed FDR.
+
+    Args:
+        leaflet_model: LeafletFA model object.
+        true_positive_junctions (set): Indices of true differentially spliced junctions (for empirical FDR calculation).
+        fdr_thresholds (list): List of FDR thresholds to test.
 
     Returns:
-    - DataFrame with columns: Factor, Junction, Z-score, P-value, and Weighted Perplexity.
+        DataFrame with expected vs. observed FDR values.
     """
-    factor_markers = []
-    K = adata.varm[leafletfa_sj_dss_key].shape[1]/2
-    # Ensure perplexity is available
-    if "perplexity" not in adata.var:
-        raise ValueError("Perplexity values are missing in `adata.var`. Run compute_junction_perplexity first.")
+    results = []
 
-    for factor in range(int(K)): 
-        print(f"Processing factor {factor}...")
-        factor_name = f"factor_{factor}"
-        pval_name = f"{factor_name}_pvalue"
+    for fdr in fdr_thresholds:
+        print(f"Running with FDR threshold: {fdr}")
+        results_dict, results_df = analyze_differential_splicing(leaflet_model, fdr_threshold=fdr, min_effect_size=min_effect_size)
 
-        if factor_name not in adata.varm[leafletfa_sj_dss_key].columns or pval_name not in adata.varm[leafletfa_sj_dss_key].columns:
-            raise ValueError(f"Missing {factor_name} or {pval_name} in adata.varm[{leafletfa_sj_dss_key}].")
+        # Extract discovered junctions
+        discovered_junctions = set(results_df[results_df['significant']].junction_idx)
 
-        # Extract Z-scores and p-values
-        z_scores = adata.varm[leafletfa_sj_dss_key][factor_name].values
-        pvals = adata.varm[leafletfa_sj_dss_key][pval_name].values
-        perplexity = adata.var["perplexity"].values
+        # Compute observed FDR
+        false_positives = discovered_junctions - true_positive_junctions
+        observed_fdr = len(false_positives) / max(len(discovered_junctions), 1)  # Avoid division by zero
 
-        # Create a DataFrame for sorting and filtering
-        df = pd.DataFrame({
-            "Junction": adata.var_names,
-            "Z-score": z_scores,
-            "P-value": pvals,
-            "Perplexity": perplexity
-        })
+        # Store results
+        results.append({'FDR_threshold': fdr, 'Observed_FDR': observed_fdr, 'Total Discoveries': len(discovered_junctions)})
 
-        # Filter for significant p-values
-        df = df[df["P-value"] < pval_thresh]
+    # Convert to DataFrame
+    df_results = pd.DataFrame(results)
 
-        if df.empty:
-            continue  # Skip if no significant markers for this factor
+    # Plot expected vs. observed FDR
+    plt.figure(figsize=(6, 5))
+    plt.plot(df_results['FDR_threshold'], df_results['FDR_threshold'], '--', label="Ideal Calibration (y=x)")
+    plt.scatter(df_results['FDR_threshold'], df_results['Observed_FDR'], color='red', label="Observed FDR")
+    plt.xlabel("Expected FDR Threshold")
+    plt.ylabel("Observed FDR")
+    plt.legend()
+    plt.title("FDR Calibration Test")
+    plt.show()
 
-        # Sort by Z-score (values greater than 0 first... lookig for enrichment) and select top markers
-        df = df.reindex(df["Z-score"].sort_values(ascending=False).index).head(top_n)
-        df["Factor"] = factor_name  # Add factor label
+    return df_results
 
-        factor_markers.append(df)
 
-    # Combine results into a single DataFrame
-    result_df = pd.concat(factor_markers, ignore_index=True)
-    return result_df
+def plot_precision_recall_curve(adata_input, results_df, output_dir=None):
+    """
+    Plots a Precision-Recall (PR) curve for differential splicing analysis.
+    
+    Args:
+        adata_input: AnnData object containing true labels in `adjusted_true_label`.
+        results_df: DataFrame containing posterior probabilities (`prob_greater`) from `analyze_differential_splicing`.
+
+    Returns:
+        Plots the PR curve.
+    """
+    # Ensure labels are binary (1 = True DS, 0 = Not DS)
+    true_labels = (adata_input.var["adjusted_true_label"] == "positive").astype(int).values
+
+    # Use posterior probability as score
+    predicted_scores = results_df["prob_greater"].values
+
+    # Compute precision, recall, and thresholds
+    precision, recall, thresholds = precision_recall_curve(true_labels, predicted_scores)
+
+    # Compute area under PR curve (AUC-PR)
+    auc_pr = auc(recall, precision)
+
+    # Plot Precision-Recall curve
+    plt.figure(figsize=(7, 5))
+    plt.plot(recall, precision, marker='.', label=f'PR Curve (AUC = {auc_pr:.2f})')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve for Differential Splicing')
+    plt.legend()
+    plt.grid()
+    
+    if output_dir is not None:
+        plt.savefig(os.path.join(output_dir, "precision_recall_curve.png"))
+    
+    plt.show()
+    return precision, recall, auc_pr
+
+def plot_roc_curve(adata_input, results_df, output_dir=None):
+    """
+    Plots a Receiver Operating Characteristic (ROC) curve for differential splicing analysis.
+
+    Args:
+        adata_input: AnnData object containing true labels in `adjusted_true_label`.
+        results_df: DataFrame containing posterior probabilities (`prob_greater`) from `analyze_differential_splicing`.
+
+    Returns:
+        Plots the ROC curve and prints the AUC.
+    """
+    # Ensure labels are binary (1 = True DS, 0 = Not DS)
+    true_labels = (adata_input.var["adjusted_true_label"] == "positive").astype(int).values
+
+    # Use posterior probability as score
+    predicted_scores = results_df["prob_greater"].values
+
+    # Compute ROC curve
+    fpr, tpr, thresholds = roc_curve(true_labels, predicted_scores)
+
+    # Compute area under ROC curve (AUC-ROC)
+    auc_roc = auc(fpr, tpr)
+
+    # Plot ROC curve
+    plt.figure(figsize=(7, 5))
+    plt.plot(fpr, tpr, marker='.', label=f'ROC Curve (AUC = {auc_roc:.2f})')
+    plt.plot([0, 1], [0, 1], linestyle='--', color='grey')  # Random chance line
+    plt.xlabel('False Positive Rate (FPR)')
+    plt.ylabel('True Positive Rate (TPR)')
+    plt.title('ROC Curve for Differential Splicing')
+    plt.legend()
+    plt.grid()
+
+    if output_dir is not None:
+        plt.savefig(os.path.join(output_dir, "roc_curve.png"))
+
+    plt.show()  # Display plot after saving
+    return fpr, tpr, auc_roc

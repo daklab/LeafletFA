@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import anndata as ad
 import scanpy as sc 
 import json
+import pickle
+import lzma
 
 # Ensure CUDA is available and if not use CPU
 import torch
@@ -49,10 +51,11 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-17/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-19/"
 
 # Get parameter set ID from command line
 param_id = int(sys.argv[1])
+print(f"Loading parameter set {param_id}...")
 
 # Load parameters
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")
@@ -66,10 +69,12 @@ params["input_conc"] = None if params["input_conc"] is None else torch.tensor(np
 # Define output directory
 output_dir = os.path.join(base_output_dir, f"run_{param_id}")
 os.makedirs(output_dir, exist_ok=True)
+print(f"All outputs will be saved in {output_dir}")
 
 # Load Anndata file
 # ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/BRAIN_ONLY/02112025/TMS_Anndata_ATSE_counts_with_waypoints_20250211_171237.h5ad"
 ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/ALL_CELLS/022025/TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad"
+
 print(f"Loading Anndata file: {ATSE_anndata_file}")
 adata = ad.read_h5ad(ATSE_anndata_file)
 
@@ -81,11 +86,12 @@ leaflet_model = LeafletFA.LeafletFA(
     waypoints_use=params["waypoints_use"], 
     input_conc_prior=params["input_conc"], 
     num_epochs=params["num_epochs"], 
-    print_epochs=10, 
-    ELBO_num_particles=5, 
-    lr=0.5, 
+    print_epochs=5, 
+    ELBO_num_particles=params["ELBO_num_particles"], 
+    lr=params["lr"], 
     gamma=0.05, 
-    num_samples=500, output_dir=output_dir
+    num_samples=params["num_samples"], 
+    output_dir=output_dir
 )
 
 # Train model
@@ -120,11 +126,11 @@ sc.tl.umap(adata)
 umap_save_path = os.path.join(output_dir, f"UMAP_K{params['K']}.png")
 
 # Set figure parameters (size, dpi, font settings)
-with plt.rc_context({'figure.figsize': (7, 7), 'savefig.dpi': 300}):  
+with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):  
     sc.pl.umap(
         adata, 
         color=["cell_type_grouped", "age"], 
-        wspace=0.8, 
+        wspace=0.95, 
         show=False  # Don't show interactive plot
     )
     plt.savefig(umap_save_path, bbox_inches="tight")  # Save with tight bounding box
@@ -136,22 +142,14 @@ pi_df["factor_K"] = pi_df.index+1
 pi_df.to_csv(os.path.join(output_dir, "factor_assignment_probabilities.csv"), index=False)
 print(f"Saved factor assignment probabilities to {os.path.join(output_dir, 'factor_assignment_probabilities.csv')}")
 
-# Compute and save factor markers
-SJ_DSS = ds.compute_z_score_dss(leaflet_model.psis_loc, leaflet_model.psis_scale, leaflet_model.pi, adata.var_names)
-adata.varm["SJ_DSS"] = SJ_DSS
-adata.var["perplexity"] = ds.compute_junction_perplexity(adata, leafletfa_sj_dss_key="SJ_DSS")["Perplexity"].values
-
-factor_markers_df = ds.get_factor_markers(adata, leafletfa_sj_dss_key="SJ_DSS", pval_thresh=0.05, top_n=100)
-factor_markers_df.to_csv(os.path.join(output_dir, "factor_markers.csv"), index=False)
-print(f"Saved factor markers to {os.path.join(output_dir, 'factor_markers.csv')}")
-
 # Create a dataframe to store results
 results_df = pd.DataFrame([{
     "param_id": param_id,
     "K": params["K"],
     "junc_specific_prior": params["junc_specific_prior"],
     "waypoints_use": params["waypoints_use"],
-    "input_conc": "inf" if params["input_conc"] is not None else "None",
+    "best_elbo": leaflet_model.best_elbo,
+    "input_conc": leaflet_model.bb_conc,
     "num_epochs": params["num_epochs"],
     "num_inits": params["num_inits"],
     "cell_type_silhouette": cell_tye_silhouette,
@@ -159,11 +157,24 @@ results_df = pd.DataFrame([{
     "avg_corr": avg_corr,
     "median_corr": median_corr,
     "min_corr": min_corr,
+    "lr": params["lr"],
+    "num_samples": params["num_samples"],
+    "ELBO_num_particles": params["ELBO_num_particles"],
     "pruned_K": len(leaflet_model.pi)  # Number of factors retained after pruning
 }])
 
 # Save results dataframe
 results_file = os.path.join(output_dir, "run_summary.csv")
 results_df.to_csv(results_file, index=False)
-
 print(f"Saved run summary to {results_file}")
+
+# Save leafletfa model object 
+model_file = os.path.join(output_dir, "leafletfa_model.pkl.xz")
+
+# Save the trained LeafletFA model (without the adata object)
+leaflet_model.adata = None
+
+with lzma.open(model_file, "wb") as f:
+    pickle.dump(leaflet_model, f)
+
+print(f"Model saved to {model_file}")
