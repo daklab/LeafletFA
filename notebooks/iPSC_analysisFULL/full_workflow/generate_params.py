@@ -8,7 +8,7 @@ import pandas as pd
 
 # Define output directory
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/"
+base_output_dir = "/gpfs/commons/projects/knowles_singlecell_splicing/PRJEB14362/LeafletFA/ATSEs/022025/output/LeafletFA_model/"
 
 # Create output directory if it doesn't exist with today's date inside base_output_dir
 today = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -18,15 +18,15 @@ print(f"All outputs will be saved in {base_output_dir}")
 
 # Define parameter grid
 param_grid = {
-    "input_conc": [None, "inf"],  # 'inf' will be converted to torch.tensor(np.inf)
-    "junc_specific_prior": [True, False],
+    "input_conc": [None, 'inf'],  # 'inf' will be converted to torch.tensor(np.inf)
+    "junc_specific_prior": [True],
     "K": [30, 100],
-    "waypoints_use": [True, False],
+    "waypoints_use": [True],
     "num_inits": [1],
-    "ELBO_num_particles": [10],
+    "ELBO_num_particles": [5],
     "num_samples": [100],
-    "lr": [0.1, 0.5, 0.8],
-    "num_epochs": [100, 500]
+    "lr": [0.95],
+    "num_epochs": [300]
 }
 
 # Generate all parameter combinations

@@ -271,27 +271,33 @@ def analyze_differential_splicing(leaflet_model,
     # Initialize array to store effect sizes
     effect_sizes = np.zeros((n_samples, n_junctions))
 
+    print(f"Calculating estimated effect sizes for factor {factor_idx}...across {n_samples} samples")
     for s in tqdm(range(n_samples)):
         phi_s = phi_samples[s]  # [C, K]
         psi_s = psi_samples[s]  # [K, J]
 
         # Calculate factor k usage
+        print(f"Getting factor usage for factor {factor_idx}...")
         factor_usage = phi_s[:, factor_idx].reshape(-1, 1) * psi_s[factor_idx, :]  # (C, J)
 
         # Calculate other factors usage
+        print(f"Getting usage for other factors...")
         other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
         if len(other_factor_indices) == 1:
             k = other_factor_indices[0]
             other_usage = phi_s[:, k].reshape(-1, 1) * psi_s[k, :]  # (C, J)
         else:
             other_usage = sum(
-                phi_s[:, k].reshape(-1, 1) * psi_s[k, :] for k in other_factor_indices
+                phi_s[:, k].reshape(-1, 1) * psi_s[k, :] 
+                for k in tqdm(other_factor_indices, desc="Processing Other Factors")
             )  # (C, J)
 
         # Compute cell-wise effect sizes first and then aggregate:
         effect_sizes[s] = np.mean(factor_usage - other_usage, axis=0)
+        print(f"Done getting effect sizes for sample {s}")
 
     # Calculate overall effect size and variance / aggregates posterior samples
+    print(f"Calculating mean and variance of effect sizes...")
     beta = np.mean(effect_sizes, axis=0)
     beta_vars = np.var(effect_sizes, axis=0)
 
@@ -433,9 +439,7 @@ def calibration_test(leaflet_model, true_positive_junctions, min_effect_size=Non
     plt.legend()
     plt.title("FDR Calibration Test")
     plt.show()
-
     return df_results
-
 
 def plot_precision_recall_curve(adata_input, results_df, output_dir=None):
     """
@@ -513,3 +517,133 @@ def plot_roc_curve(adata_input, results_df, output_dir=None):
 
     plt.show()  # Display plot after saving
     return fpr, tpr, auc_roc
+
+# ------ new function testing 
+
+import numpy as np
+import pandas as pd
+from joblib import Parallel, delayed
+import joblib
+from tqdm import tqdm
+
+def compute_effect_size(s, phi_samples, psi_samples, factor_idx, n_factors):
+    """
+    Computes effect size for a single sample.
+    """
+
+    print(f"Starting effect size calculation for sample {s}...")
+    phi_s = phi_samples[s]  # [C, K]
+    psi_s = psi_samples[s]  # [K, J]
+
+    # Calculate factor k usage
+    factor_usage = phi_s[:, factor_idx].reshape(-1, 1) * psi_s[factor_idx, :]  # (C, J)
+
+    # Calculate other factors usage
+    other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
+    if len(other_factor_indices) == 1:
+        k = other_factor_indices[0]
+        other_usage = phi_s[:, k].reshape(-1, 1) * psi_s[k, :]  # (C, J)
+    else:
+        other_usage = np.einsum('ck,kj->cj', phi_s[:, other_factor_indices], psi_s[other_factor_indices, :])
+
+    # Compute mean effect size across cells
+    return np.mean(factor_usage - other_usage, axis=0)
+
+def analyze_differential_splicing(leaflet_model, 
+                                  factor_idx=0, 
+                                  fdr_threshold=0.05, 
+                                  dist_sd=0.5,
+                                  min_effect_size=None,
+                                  eps=1e-10,
+                                  batch_size=10,  # Process samples in batches
+                                  n_jobs=4):  # Limit parallel jobs
+    """
+    Analyze differential splicing for a given factor using parallel processing.
+    """
+
+    # Get posterior samples (sampled from variational distribution / guide)
+    psi_samples = leaflet_model.psi_samples  # [n_samples, K, J]
+    phi_samples = leaflet_model.phi_samples  # [n_samples, C, K]
+
+    # Convert to numpy if they're torch tensors
+    if hasattr(psi_samples, 'detach'):
+        psi_samples = psi_samples.detach().cpu().numpy()
+    if hasattr(phi_samples, 'detach'):
+        phi_samples = phi_samples.detach().cpu().numpy()
+
+    n_samples, n_cells, n_factors = phi_samples.shape
+    _, _, n_junctions = psi_samples.shape
+
+    print(f"Calculating estimated effect sizes for factor {factor_idx}... across {n_samples} samples")
+
+    effect_sizes = np.zeros((n_samples, n_junctions), dtype=np.float32)
+
+    # Process samples in batches to prevent memory overload
+    for batch_start in tqdm(range(0, n_samples, batch_size), desc="Processing Batches"):
+        batch_end = min(batch_start + batch_size, n_samples)
+        batch_indices = list(range(batch_start, batch_end))
+
+        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M")(
+            delayed(compute_effect_size)(s, phi_samples, psi_samples, factor_idx, n_factors) 
+            for s in batch_indices
+        )
+
+        effect_sizes[batch_start:batch_end, :] = np.array(results, dtype=np.float32)
+
+    print(f"Completed effect size calculation for factor {factor_idx}.")
+
+    # Calculate overall effect size and variance / aggregates posterior samples
+    print(f"Calculating mean and variance of effect sizes...")
+    beta = np.mean(effect_sizes, axis=0)
+    beta_vars = np.var(effect_sizes, axis=0)
+
+    # Estimate delta if not provided (use posterior variance for robustness)
+    if min_effect_size is None:
+        min_effect_size = dist_sd * np.std(beta)
+
+    print(f"Calculating probabilities for effect size > {min_effect_size}...")
+    prob_greater = np.mean(np.abs(effect_sizes) > min_effect_size, axis=0)
+    prob_lessoreq = 1 - prob_greater
+
+    # Compute posterior expected False Discovery Proportion (FDP)
+    sorted_idx = np.argsort(-prob_greater)
+    sorted_probs = prob_greater[sorted_idx]
+
+    # Calculate FDR
+    fdrs = np.cumsum(1 - sorted_probs) / (np.arange(len(sorted_probs)) + 1)
+    max_discoveries = np.where(fdrs <= fdr_threshold)[0]
+    n_significant = len(max_discoveries) if len(max_discoveries) > 0 else 0
+
+    # Define significant junctions
+    significant = np.zeros(n_junctions, dtype=bool)
+    if n_significant > 0:
+        significant[sorted_idx[:n_significant]] = True
+
+    # Apply effect size threshold
+    significant = significant & (np.abs(beta) > min_effect_size)
+    print(f"Found {n_significant} significant junctions with effect size > {min_effect_size} at FDR < {fdr_threshold}")
+
+    # Construct results dictionary
+    results_dict = {
+        'effect_sizes': beta,
+        'effect_size_vars': beta_vars,
+        'prob_greater': prob_greater,
+        'prob_lessoreq': prob_lessoreq,
+        'significant': significant,
+        'delta': min_effect_size,
+        'fdr_curve': fdrs,
+        'n_significant': n_significant
+    }
+
+    # Create results DataFrame
+    results_df = pd.DataFrame({
+        'junction_idx': np.arange(n_junctions),
+        'effect_size': beta,
+        'effect_size_std': np.sqrt(beta_vars),
+        'prob_greater': prob_greater,
+        'prob_lessoreq': prob_lessoreq,
+        'significant': significant,
+        'delta': min_effect_size
+    })
+
+    return results_dict, results_df

@@ -64,7 +64,7 @@ importlib.reload(sim)
 
 # %%
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-02-19"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-02-22"
 
 # Get parameter set ID from command line
 param_id = int(sys.argv[1])
@@ -227,9 +227,10 @@ if K > 2:
 adata_input.var = pd.concat([adata_input.var, factor_psi_df], axis=1)
 
 # Calculate pearson and spearman correlation
-pearson_corr = stats.pearsonr(adata_input.var["imputed_diff"], adata_input.var["difference"])[0]
-spearman_corr = stats.spearmanr(adata_input.var["imputed_diff"], adata_input.var["difference"])[0]
-print(f"Spearman correlation between imputed and true difference: {spearman_corr}")
+pearson_corr_impdiff = stats.pearsonr(adata_input.var["imputed_diff"], adata_input.var["difference"])[0]
+spearman_corr_impdfiff = stats.spearmanr(adata_input.var["imputed_diff"], adata_input.var["difference"])[0]
+print(f"Pearson correlation between imputed and true difference: {pearson_corr_impdiff}")
+print(f"Spearman correlation between imputed and true difference: {spearman_corr_impdfiff}")
 
 # Plot scatterplot correlation between imputed difference and true difference 
 plt.figure(figsize=(6, 6))
@@ -238,7 +239,7 @@ plt.xlabel("Imputed Difference")
 plt.ylabel("True Difference")
 
 # Add rounded spearman_corr to title 
-plt.title(f"Imputed vs True Difference in PSI (Spearman: {round(spearman_corr, 2)})")
+plt.title(f"Imputed vs True Difference in PSI (Spearman: {round(spearman_corr_impdfiff, 2)})")
 # Save to output_dir
 plt.savefig(os.path.join(output_dir, "imputed_vs_true_diff.png"))
 
@@ -313,10 +314,10 @@ if K == 2:
     plt.savefig(os.path.join(output_dir, "imputed_vs_true_diff.png"))
 
     # Calculate pearson and spearman correlation
-    pearson_corr = stats.pearsonr(adata_input.var["abs_effect_size"], adata_input.var["difference"])[0]
-    spearman_corr = stats.spearmanr(adata_input.var["abs_effect_size"], adata_input.var["difference"])[0]
-    print(f"Pearson correlation between abs_effect_size and true difference: {pearson_corr}")
-    print(f"Spearman correlation between abs_effect_size and true difference: {spearman_corr}")
+    pearson_corr_es = stats.pearsonr(adata_input.var["abs_effect_size"], adata_input.var["difference"])[0]
+    spearman_corr_es = stats.spearmanr(adata_input.var["abs_effect_size"], adata_input.var["difference"])[0]
+    print(f"Pearson correlation between abs_effect_size and true difference: {pearson_corr_es}")
+    print(f"Spearman correlation between abs_effect_size and true difference: {spearman_corr_es}")
 
     xlabel = "Estimated Effect Size B_j"
     ylabel = "Frequency"
@@ -336,7 +337,9 @@ if K == 2:
     # Add precision, recall, auc_pr, fpr, tpr, auc_roc to classification_metrics.csv
     classification_metrics = pd.DataFrame([{
         "auc_pr": auc_pr,
-        "auc_roc": auc_roc
+        "auc_roc": auc_roc, 
+        "pearson_corr_es": pearson_corr_es,
+        "spearman_corr_es": spearman_corr_es,
     }])
 
     classification_metrics_file = os.path.join(output_dir, "classification_metrics.csv")
@@ -361,6 +364,8 @@ results_df = pd.DataFrame([{
     "lr": params["lr"],
     "ELBO_num_particles": params["ELBO_num_particles"],
     "num_samples": params["num_samples"],
+    "spearman_corr_impdfiff": spearman_corr_impdfiff,
+    "pearson_corr_impdiff": pearson_corr_impdiff,
     "proportion_negative": params["proportion_negative"],
     "pruned_K": len(leaflet_model.pi)  # Number of factors retained after pruning
 }])

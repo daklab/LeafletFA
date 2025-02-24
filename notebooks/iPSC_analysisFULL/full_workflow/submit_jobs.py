@@ -4,7 +4,7 @@ import datetime
 
 # Define where to save outputs 
 # Should be directory in which model params are saved
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-19/"
+base_output_dir = "/gpfs/commons/projects/knowles_singlecell_splicing/PRJEB14362/LeafletFA/ATSEs/022025/output/LeafletFA_model/2025-02-23/"
 
 # Load parameter list from JSON file
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")
@@ -28,9 +28,18 @@ job_script_template = """#!/bin/bash
 #SBATCH --mem=600G
 #SBATCH --partition=bigmem
 
-# Run Python script
-python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/LeafletFA_tutorial/run_leaflet.py {param_id}
+# Set Python to run in unbuffered mode to ensure real-time output
+export PYTHONUNBUFFERED=1
+
+# Run Python script with proper output handling
+python -u /gpfs/commons/home/kisaev/Leaflet-private/notebooks/iPSC_analysisFULL/full_workflow/run_leaflet.py {param_id} 2>&1
+
+# Optional: Add timestamp at the end of the job
+echo "Job completed at: $(date)"
 """
+
+# Run Python script
+#python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/LeafletFA_tutorial/run_leaflet.py {param_id}
 
 # Generate and submit jobs
 for i, params in enumerate(param_list):
@@ -52,4 +61,4 @@ for i, params in enumerate(param_list):
     # Remove the job script
     os.remove(job_file)
 
-print(f"Submitted {len(param_list)} jobs to Slurm.")
+print(f"\nSubmitted {len(param_list)} jobs to Slurm.")

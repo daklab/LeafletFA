@@ -22,7 +22,7 @@ from pyro import poutine
 from pyro.poutine import block
 from pyro.infer.autoguide.initialization import init_to_value
 from scipy.sparse import coo_matrix
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 
 # Configure logging
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -34,9 +34,10 @@ Distribution.set_default_validate_args(False)
 print(f"Torch Version: {torch.__version__}")
 print(f"CUDA Version: {torch.version.cuda}")
 
+
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
-                 waypoints_use=True,
+                 waypoints_use=True, batch_size=4096,
                  eps = 1e-6, alpha_hyper = 5.0, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
                  ELBO_num_particles=1, patience=5, min_delta=0.01, num_samples=10, loss_plot=True, output_dir=None):
         """
@@ -48,6 +49,7 @@ class LeafletFA:
         - junc_specific_prior (bool): Whether to learn a global prior over junctions.
         - input_conc_prior: Concentration prior (can be either 'None' or 'torch.tensor(np.inf)').
         - waypoints_use (bool): Whether to use waypoints for initialization.
+        - batch_size (int): Batch size for training.
         - eps (float): Small value to prevent numerical issues.
         - alpha_hyper (float): Hyperparameter for the Dirichlet prior on Pi.
         - lr (float): Learning rate.
@@ -69,6 +71,7 @@ class LeafletFA:
         self.junc_specific_prior = junc_specific_prior
         self.input_conc_prior = input_conc_prior
         self.waypoints_use = waypoints_use
+        self.batch_size = batch_size
         self.eps = eps
         self.alpha_hyper = alpha_hyper
         self.lr = lr
@@ -176,21 +179,10 @@ class LeafletFA:
         self.total_counts = full_total_counts_tensor
 
     def model(self, y=None, total_counts=None, K=None, junc_specific_prior=None, input_conc_prior=None):
-
         """
         Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
-
-        Parameters:
-        - y (torch.Tensor): Sparse tensor of observed junction counts.
-        - total_counts (torch.Tensor): Sparse tensor of total intron cluster counts.
-        - K (int): Number of factors representing cell states.
-        - junc_specific_prior (bool): Whether to use junction-specific priors.
-        - input_conc_prior (float, torch.Tensor, or None): Prior for the concentration parameter.
-
-        Returns:
-        - None (Pyro automatically tracks distributions)
+        Modified to use a single plate context for cell-level operations.
         """
-        
         # If arguments are None, use self values
         if y is None:
             y = self.y
@@ -203,30 +195,41 @@ class LeafletFA:
         if input_conc_prior is None:
             input_conc_prior = self.input_conc_prior
 
-        N, P = self.y.shape # Cells, junctions
+        N, P = self.y.shape  # Total dataset size
 
-        # Sample input_conc from the prior provided during initialization 
+        # Sample input_conc from the prior
         input_conc = self.convertr(input_conc_prior, "bb_conc")
 
-        # Learnable priors for Gamma shape and rate
-        a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))  # Learn shape
-        a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))  # Learn rate
+        # Sample global parameters
+        a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))
+        a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))
         b_shape = pyro.sample("b_shape", dist.Gamma(1.0, 1.0))
         b_rate = pyro.sample("b_rate", dist.Gamma(1.0, 1.0))
 
-        # Sample psi from a Beta distribution
+        # Sample junction-specific parameters
         if junc_specific_prior:
-            # junction-specific shape parameters sampled from Gamma priors 
-            a = pyro.sample("a", dist.Gamma(a_shape, a_rate).expand([P]).to_event(1))
-            b = pyro.sample("b", dist.Gamma(b_shape, b_rate).expand([P]).to_event(1))
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2)) 
-            psi = psi.to(dtype=torch.float32)
+            with pyro.plate("junctions", P):
+                a = pyro.sample("a", dist.Gamma(a_shape, a_rate))
+                b = pyro.sample("b", dist.Gamma(b_shape, b_rate))
+
+            # Expand a and b for broadcasting with factors
+            a_expanded = a.unsqueeze(0).expand(K, -1)  # Shape: [K, P]
+            b_expanded = b.unsqueeze(0).expand(K, -1)  # Shape: [K, P]
+
+            # Sample psi using the expanded parameters
+            with pyro.plate("factors", K):
+                psi = pyro.sample("psi", 
+                                dist.Beta(a_expanded+self.eps, b_expanded+self.eps).to_event(1))
         else:
-            # single shape parameters for all junctions sampled from Gamma priors
-            a = pyro.sample("a", dist.Gamma(a_shape, a_rate))  
-            b = pyro.sample("b", dist.Gamma(b_shape, b_rate))  
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2))
-            psi = psi.to(dtype=torch.float32)
+            # Single shape parameters for all junctions
+            a = pyro.sample("a", dist.Gamma(a_shape, a_rate))
+            b = pyro.sample("b", dist.Gamma(b_shape, b_rate))
+
+            with pyro.plate("factors", K):
+                psi = pyro.sample("psi", 
+                                dist.Beta(a+self.eps, b+self.eps).expand([P]).to_event(1))
+
+        psi = psi.to(dtype=torch.float32)
 
         # Assert that 'psi' has no NaN or negative values
         if not torch.isfinite(psi).all():
@@ -234,31 +237,24 @@ class LeafletFA:
 
         # Sample Pi prior from a Dirichlet distribution
         pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * self.alpha_hyper / K))
-        
-        # Assert that pi sums to 1 and contains no NaN/inf values
+
+        # Validate pi
         assert torch.isfinite(pi).all(), "pi contains NaN or infinite values!"
         assert torch.allclose(pi.sum(), torch.tensor(1.0, dtype=torch.float)), f"pi does not sum to 1: {pi.sum()}"
 
-        # Sample concentration value that scales the pi vector (higher values lead to more uniform pi)
+        # Sample concentration value
         conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
-        conc = torch.clamp(conc, min=1e-6, max=1e6) # Prevent numerical issues
+        conc = torch.clamp(conc, min=1e-6, max=1e6)
 
-        # Sample the factor assignments for cells 
-        assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1)).to(dtype=torch.float32)
+        # **Mini-Batch Training**
+        with pyro.plate("cells", size=N, subsample_size=y.shape[0], dim=-2) as batch_idx:
+            assign = pyro.sample("assign", dist.Dirichlet(pi * conc))
+            pred = torch.matmul(assign, psi)
 
-        # Ensure no negative values in assign 
-        if torch.any(assign < self.eps):
-            assign = assign + self.eps
-            assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
-
-        # Get the predicted success probabilities for each junction
-        pred = torch.matmul(assign, psi).to(self.device)
-
-        # Compute the log probability of the observed data under either a Binomial or Beta-Binomial likelihood 
-        log_prob = self.log_prob_calc(y, total_counts, pred, input_conc) 
-        assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
-        pyro.factor("obs", log_prob) 
-
+            # Compute log probability
+            log_prob = self.log_prob_calc(y, total_counts, pred, input_conc)
+            pyro.factor("obs", log_prob)  # No scale factor needed
+            
     def log_prob_calc(self, y, total_counts, pred, input_conc):
         """
         Compute the log probability of observed data under either a binomial or beta-binomial distribution,
@@ -309,17 +305,36 @@ class LeafletFA:
 
         # Calculate the learning rate decary factor per step 
         lrd = self.gamma ** (1 / self.num_epochs)
-        scheduler = ClippedAdam({'lr': self.lr, 'lrd': lrd}) 
-        loss = Trace_ELBO(num_particles=self.ELBO_num_particles) 
-        # SVI the step function minimizes the negative ELBO
+        scheduler = ClippedAdam({'lr': self.lr, 'lrd': lrd, 'clip_norm': 10.0,
+                                 'weight_decay': 0.01}) 
+
+        # Initialize loss with retention
+        loss = Trace_ELBO(num_particles=self.ELBO_num_particles, 
+                          retain_graph=True) 
+        
+        # Initialize SVI
         svi = SVI(self.model, guide, scheduler, loss)
 
-        pyro.clear_param_store() # Clear previous optimizations
+        # Clear parameter store
+        pyro.clear_param_store() 
 
-        # Initialize early stopping variables
-        losses = []
+        # Ensure tensors are on correct device
+        self.y = self.y.to(self.device)
+        self.total_counts = self.total_counts.to(self.device)
+    
+        # Create dataset and dataloader
+        dataset = LeafletFADataset(self.y, self.total_counts, self.device)
+        train_loader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=False,  # Keep order for sparse tensors
+            collate_fn=sparse_collate)
+
+        # Initialize tracking variables
+        train_losses = []
         best_loss = float('inf')
         epochs_since_improvement = 0
+        num_batches = len(train_loader)
 
         # Convert input_conc_prior to tensor if it's a float and move it to the device
         if isinstance(self.input_conc_prior, float):
@@ -327,31 +342,34 @@ class LeafletFA:
         elif isinstance(self.input_conc_prior, torch.Tensor):
             self.input_conc_prior = self.input_conc_prior.to(self.device)
 
-        print(f"Training in progress for {self.num_epochs} epochs!")
+        # Add this before training starts:
+        print("Data dimensions and sparsity:")
+        print(f"y matrix shape: {self.y.shape}")
+        print(f"y matrix nnz: {self.y._values().size(0)}")
+        print(f"Sparsity: {self.y._values().size(0) / (self.y.shape[0] * self.y.shape[1]):.3%}")
+
+        print(f"Starting training for {self.num_epochs} epochs")
+        print(f"Number of batches per epoch: {num_batches}")
+        print(f"Batch size: {self.batch_size}")
+        print(f"Device: {self.device}")
+        loss_history = []
 
         for epoch in range(self.num_epochs):
+            epoch_loss = 0.0
 
-            # Call SVI step with dynamic passing of input_conc_prior
-            loss = svi.step(self.y, self.total_counts, self.K, self.junc_specific_prior, self.input_conc_prior)
-            losses.append(loss)
+            for y_batch, total_counts_batch, batch_indices in train_loader:
+                batch_loss = svi.step(y_batch, total_counts_batch, self.K, self.junc_specific_prior, self.input_conc_prior)
 
-            # Check for early stopping
-            if best_loss-loss > self.min_delta:
-                best_loss = loss
-                epochs_since_improvement = 0
-            else:
-                epochs_since_improvement += 1
+                # Normalize loss
+                batch_loss = batch_loss * (batch_indices.size(0) / self.num_cells)
+                epoch_loss += batch_loss
 
-            # Early stopping if no improvement in 'patience' epochs 
-            if epochs_since_improvement >= self.patience:
-                print(f"Early stopping at epoch {epoch} with loss: {loss}")
-                break
+            loss_history.append(epoch_loss)
 
             if epoch % self.print_epochs == 0:
-                print(f"Epoch {epoch}: Loss = {loss}")
+                print(f"Epoch {epoch+1}: Train ELBO = {epoch_loss:.2f}")
 
-        print(f"Training completed after {epoch + 1} epochs.")
-        return losses
+        return loss_history
 
     def collect_samples(self, guide):
 
@@ -384,6 +402,9 @@ class LeafletFA:
             # Ensure the tensor is on CPU before converting to numpy
             if values_tensor.is_cuda:
                 values_tensor = values_tensor.cpu()
+
+            # Convert to float before computing mean and std
+            values_tensor = values_tensor.float()
 
             stats[name] = {
                 'mean': torch.mean(values_tensor, dim=0).numpy(),
@@ -651,7 +672,7 @@ class LeafletFA:
         print(f"Extracting PSI variational parameters...")
         self.get_psi_variational_params(initialization)
 
-        print(f"Extracting the learned beta-binomial concentration (if applicable)...")
+        print(f"Extracting the learned beta-binomial concentration (is applicable)...")
         self.get_bb_conc(initialization)
 
         print(f"Extracting the latent representation, C x K matrix of factor activities...")
@@ -705,4 +726,84 @@ class LeafletFA:
         print(f"Upating K to {len(pruned_indices)} in the LeafletFA object.")
         self.K = len(pruned_indices)
 
+def sparse_collate(batch):
+    """
+    Custom collate function for DataLoader to handle sparse tensors while maintaining order.
+    This ensures batch rows retain their original dataset indices.
+    """
+    y_batch, total_counts_batch, indices_batch = zip(*batch)  # Unpack batch elements
+
+    # Convert batch indices to a tensor
+    indices_batch = torch.tensor(indices_batch, dtype=torch.long)
+
+    # Convert each sparse tensor to a format we can batch properly
+    y_indices_list = []
+    y_values_list = []
+    total_counts_indices_list = []
+    total_counts_values_list = []
+
+    for y, tc in zip(y_batch, total_counts_batch):
+        y_indices_list.append(y._indices())
+        y_values_list.append(y._values())
+
+        total_counts_indices_list.append(tc._indices())
+        total_counts_values_list.append(tc._values())
+
+    # Manually create a batched sparse tensor
+    y_batched = torch.sparse_coo_tensor(
+        torch.cat(y_indices_list, dim=1),  # Concatenate all indices properly
+        torch.cat(y_values_list),  # Concatenate values
+        (len(batch), y_batch[0].shape[1])  # Maintain correct shape
+    ).coalesce()
+
+    total_counts_batched = torch.sparse_coo_tensor(
+        torch.cat(total_counts_indices_list, dim=1),
+        torch.cat(total_counts_values_list),
+        (len(batch), total_counts_batch[0].shape[1])
+    ).coalesce()
+
+    return y_batched, total_counts_batched, indices_batch  # Return indices to track cell order
+
+
+class LeafletFADataset(Dataset):
+    def __init__(self, y_matrix, total_counts_matrix, device):
+        self.y_matrix = y_matrix.coalesce()
+        self.total_counts_matrix = total_counts_matrix.coalesce()
+        self.device = device
+        self.cell_indices = torch.arange(y_matrix.shape[0], device=device)
         
+        # Pre-compute indices for faster access
+        self.y_indices = self.y_matrix._indices()
+        self.y_values = self.y_matrix._values()
+        self.tc_indices = self.total_counts_matrix._indices()
+        self.tc_values = self.total_counts_matrix._values()
+        
+    def __len__(self):
+        return self.y_matrix.shape[0]
+    
+    def __getitem__(self, idx):
+        """Optimized single cell data extraction."""
+        # Use pre-computed indices
+        row_mask = self.y_indices[0] == idx
+        y_col_indices = self.y_indices[1, row_mask]
+        y_values = self.y_values[row_mask]
+        
+        y_selected = torch.sparse_coo_tensor(
+            indices=torch.stack([torch.zeros_like(y_col_indices), y_col_indices]),
+            values=y_values,
+            size=(1, self.y_matrix.shape[1]),
+            device=self.device
+        )
+        
+        row_mask_tc = self.tc_indices[0] == idx
+        tc_col_indices = self.tc_indices[1, row_mask_tc]
+        tc_values = self.tc_values[row_mask_tc]
+        
+        total_counts_selected = torch.sparse_coo_tensor(
+            indices=torch.stack([torch.zeros_like(tc_col_indices), tc_col_indices]),
+            values=tc_values,
+            size=(1, self.total_counts_matrix.shape[1]),
+            device=self.device
+        )
+        
+        return y_selected, total_counts_selected, self.cell_indices[idx]

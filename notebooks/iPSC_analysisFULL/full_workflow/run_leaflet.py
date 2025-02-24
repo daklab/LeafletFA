@@ -51,7 +51,7 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-19/"
+base_output_dir = "/gpfs/commons/projects/knowles_singlecell_splicing/PRJEB14362/LeafletFA/ATSEs/022025/output/LeafletFA_model/2025-02-23/"
 
 # Get parameter set ID from command line
 param_id = int(sys.argv[1])
@@ -72,13 +72,14 @@ os.makedirs(output_dir, exist_ok=True)
 print(f"All outputs will be saved in {output_dir}")
 
 # Load Anndata file
-# ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/BRAIN_ONLY/02112025/TMS_Anndata_ATSE_counts_with_waypoints_20250211_171237.h5ad"
-ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/ALL_CELLS/022025/TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad"
+ATSE_anndata_file="/gpfs/commons/projects/knowles_singlecell_splicing/PRJEB14362/LeafletFA/ATSEs/022025/anndatas/iPSC_human_Anndata_ATSE_counts_with_waypoints_20250214_171021.h5ad"
 
 print(f"Loading Anndata file: {ATSE_anndata_file}")
 adata = ad.read_h5ad(ATSE_anndata_file)
+print(f"Anndata file loaded successfully.")
 
 # Initialize model
+print("Initializing LeafletFA model...")
 leaflet_model = LeafletFA.LeafletFA(
     adata=adata, 
     K=params["K"], 
@@ -86,7 +87,7 @@ leaflet_model = LeafletFA.LeafletFA(
     waypoints_use=params["waypoints_use"], 
     input_conc_prior=params["input_conc"], 
     num_epochs=params["num_epochs"], 
-    print_epochs=5, 
+    print_epochs=1, 
     ELBO_num_particles=params["ELBO_num_particles"], 
     lr=params["lr"], 
     gamma=0.05, 
@@ -95,10 +96,14 @@ leaflet_model = LeafletFA.LeafletFA(
 )
 
 # Train model
+print("Training LeafletFA model...")
 leaflet_model.from_anndata()
 leaflet_model.train(num_initializations=params["num_inits"])
+
+print("Training complete, extracting results...")
 leaflet_model.get_all_variables()
 # Prune K! 
+print("Pruning K...")
 leaflet_model.prune_K()
 
 # Calculate correlations between initializations if more than 2 
@@ -111,11 +116,9 @@ else:
 # Save latent variables
 adata.obsm[f"X_leafletFA_K{params['K']}"] = leaflet_model.assign_post
 
-cell_tye_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.obs.cell_type_grouped.values)
-age_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.obs.age.values)
+cell_tye_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.obs.day.values)
 
-print(f"Silhouette score for cell types: {cell_tye_silhouette}")
-print(f"Silhouette score for age: {age_silhouette}")
+print(f"Silhouette score for day: {cell_tye_silhouette}")
 
 # Compute UMAP
 print(f"Computing UMAP for K={params['K']}...")
@@ -129,8 +132,8 @@ umap_save_path = os.path.join(output_dir, f"UMAP_K{params['K']}.png")
 with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):  
     sc.pl.umap(
         adata, 
-        color=["cell_type_grouped", "age"], 
-        wspace=0.95, 
+        color=["day"], 
+        wspace=0.9, 
         show=False  # Don't show interactive plot
     )
     plt.savefig(umap_save_path, bbox_inches="tight")  # Save with tight bounding box
@@ -153,7 +156,6 @@ results_df = pd.DataFrame([{
     "num_epochs": params["num_epochs"],
     "num_inits": params["num_inits"],
     "cell_type_silhouette": cell_tye_silhouette,
-    "age_silhouette": age_silhouette,
     "avg_corr": avg_corr,
     "median_corr": median_corr,
     "min_corr": min_corr,
@@ -170,9 +172,12 @@ print(f"Saved run summary to {results_file}")
 
 # Save leafletfa model object 
 model_file = os.path.join(output_dir, "leafletfa_model.pkl.xz")
-
 # Save the trained LeafletFA model (without the adata object)
 leaflet_model.adata = None
+# Remove tensors also 
+leaflet_model.y = None
+leaflet_model.total_counts = None
+print(f"Saving model to {model_file}")
 
 with lzma.open(model_file, "wb") as f:
     pickle.dump(leaflet_model, f)
