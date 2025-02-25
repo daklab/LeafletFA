@@ -14,10 +14,6 @@ import concurrent.futures
 import os
 
 def merge_dictionaries(dict1, dict2):
-    """
-    Merge two nested dictionaries.
-    If a key does not exist in dict1, initialize it before adding.
-    """
     for key, subdict in dict2.items():
         if key not in dict1:
             dict1[key] = {}  # Initialize sub-dictionary if it doesn't exist

@@ -14,391 +14,209 @@ from sklearn.metrics import precision_recall_curve, auc
 import sys 
 import os 
 
-# Function for the logit transform
-def logit(p):
-    return torch.log(p / (1 - p))
-
-# Function for the inverse logit transform (sigmoid)
-def inverse_logit(z):
-    return 1 / (1 + torch.exp(-z))
-
-# Function to sample z from gaussian distribution using mu_kj and sigma_kj
-def sample_z(mu_kj, sigma_kj, num_sample=10):
-    return np.random.normal(mu_kj, sigma_kj, num_sample)
-
-def plot_junc_dists(scores, index_junc, pis):
-    """
-    Plot Gaussian distributions for splice junctions.
-
-    Parameters:
-    - scores: DataFrame with columns `mu_k` and `loc_k` (for each k)
-    - index_junc: Index of the junction to plot
-    - pis: List or tensor of mixing proportions
-    """
-    K = len(pis)  # Number of factors
-
-    # Extract dynamically based on K
-    mu_cols = [f"mu_{k}" for k in range(K)]
-    var_cols = [f"loc_{k}" for k in range(K)]  # Assuming loc_k represents std deviation, not variance
-
-    # Extract means and variances, ensuring conversion to float
-    mus = torch.tensor(scores.loc[index_junc, mu_cols].to_numpy(dtype=np.float32), dtype=torch.float32)
-    std_devs = torch.tensor(scores.loc[index_junc, var_cols].to_numpy(dtype=np.float32), dtype=torch.float32)
-
-    # Convert std deviations to variances (assuming loc_k is standard deviation)
-    variances = std_devs ** 2  
-
-    # Compute combined mean and variance
-    combined_mean, combined_variance = compute_combined_parameters(mus, variances, pis)
-    
-    print(f"The combined mean is: {combined_mean}")
-    print(f"The combined variance is: {combined_variance}")
-
-    # Append combined values for plotting
-    mus_list = mus.tolist() + [combined_mean.item()]
-    variances_list = variances.tolist() + [combined_variance.item()]
-    plot_gaussian(mus_list, variances_list)
-    
-def compute_combined_parameters(mu, variance, pi):
-    device = mu.device if hasattr(mu, 'device') else 'cpu'
-    mu = torch.tensor(mu, device=device) if isinstance(mu, np.ndarray) else mu.to(device)
-    variance = torch.tensor(variance, device=device) if isinstance(variance, np.ndarray) else variance.to(device)
-    pi = torch.tensor(pi, device=device) if isinstance(pi, np.ndarray) else pi.to(device)
-
-    variance = torch.clamp(variance.float(), min=1e-5)
-    mu, pi = mu.float(), pi.float()
-    
-    precisions = 1.0 / variance
-    weighted_precisions = pi * precisions
-    combined_precision = torch.sum(weighted_precisions)
-    combined_variance = 1.0 / combined_precision
-    combined_mean = combined_variance * torch.sum((pi * mu) / variance)
-    
-    return combined_mean, combined_variance
-
-def gaussian_log_prob(x, mu, variance):
-    device = mu.device if hasattr(mu, 'device') else 'cpu'
-    x = torch.tensor(x, device=device) if isinstance(x, (float, int, np.ndarray)) else x.to(device)
-    variance = variance + 1e-10
-    return -0.5 * (np.log(2 * np.pi) + torch.log(variance) + ((x - mu) ** 2) / variance)
-
-def compute_log_Pj_H0(mu_kj, variance_kj, pi_k):
-    """
-    Compute log P_j(H0) with proper weighting of individual components
-    """
-
-    # Convert inputs to tensors and ensure float type
-    device = mu_kj.device if hasattr(mu_kj, 'device') else 'cpu'
-    
-    mu_kj = torch.tensor(mu_kj, dtype=torch.float32, device=device) if isinstance(mu_kj, np.ndarray) else mu_kj.float().to(device)
-    variance_kj = torch.tensor(variance_kj, dtype=torch.float32, device=device) if isinstance(variance_kj, np.ndarray) else variance_kj.float().to(device)
-    pi_k = torch.tensor(pi_k, dtype=torch.float32, device=device) if isinstance(pi_k, np.ndarray) else pi_k.float().to(device)
-    
-    # Get combined parameters
-    combined_mean, combined_variance = compute_combined_parameters(mu_kj, variance_kj, pi_k)
-    
-    # Calculate weighted log probabilities at zero for each component (DOES THIS MAKE SENSE?! mathematically?)
-    log_pdfs_zero = gaussian_log_prob(torch.tensor(0.0), mu_kj, variance_kj)
-    weighted_sum_log_pdfs_zero = torch.sum(pi_k * log_pdfs_zero)
-    
-    # Calculate log probability at zero for combined distribution
-    combined_log_pdf_zero = gaussian_log_prob(torch.tensor(0.0), combined_mean, combined_variance)
-    
-    # Return weighted difference
-    return weighted_sum_log_pdfs_zero - combined_log_pdf_zero
-
-def compute_albf(mu_kj, variance_kj, pi_k):
-    device = mu_kj.device if hasattr(mu_kj, 'device') else 'cpu'
-   
-    # Convert to tensors and move to device
-    mu_kj = torch.from_numpy(mu_kj).to(device) if isinstance(mu_kj, np.ndarray) else mu_kj.to(device)
-    variance_kj = torch.from_numpy(variance_kj).to(device) if isinstance(variance_kj, np.ndarray) else variance_kj.to(device)
-    pi_k = torch.from_numpy(pi_k).to(device) if isinstance(pi_k, np.ndarray) else pi_k.to(device)
-
-    # Force to 1D
-    mu_kj = mu_kj.view(-1)
-    variance_kj = variance_kj.view(-1)
-    pi_k = pi_k.view(-1)
-    
-    log_Pj_H0 = compute_log_Pj_H0(mu_kj, variance_kj, pi_k)
-    albf = -log_Pj_H0
-    albf = torch.where(albf == -0.0, torch.tensor(0.0), albf)
-    
-    return albf.cpu().numpy(), log_Pj_H0.cpu()
-
-def plot_gaussian(means, variances):
-    """
-    Plots Gaussian distributions given lists of means and variances.
-    
-    Parameters:
-        means (list of float): List of mean values for the Gaussians.
-        variances (list of float): List of variance values for the Gaussians.
-    """
-    if len(means) != len(variances):
-        raise ValueError("Means and variances lists must have the same length.")
-    
-    print(f"The means are: {means}")
-    print(f"The variances are: {variances}")
-
-    # Compute standard deviations from variances
-    std_devs = np.sqrt(variances)
-
-    # Dynamically determine the x-range
-    x_min = min(means) - 3 * max(std_devs)
-    x_max = max(means) + 3 * max(std_devs)
-
-    # Whichever is absolute bigger number set range to be that value on both sides 
-    if abs(x_min) > abs(x_max):
-        x_max = abs(x_min)
-    else:
-        x_min = -abs(x_max)
-
-    x = np.linspace(x_min, x_max, 1000)
-    
-    # Plot Gaussian distributions
-    fig, ax = plt.subplots(figsize=(6, 6))
-    for mu, sigma in zip(means, std_devs):
-        ax.plot(x, norm.pdf(x, mu, sigma))
-        # Sample z from the Gaussian distribution
-        z = np.random.normal(mu, sigma, 5)
-        # Get PSI values from z
-        psi_values = inverse_logit(torch.tensor(z))
-        print(f"The mean of the sampled PSI values is: {psi_values.mean()}")
-
-    ax.set_xlabel("x")
-    ax.set_ylabel("Density")
-    ax.set_title("Gaussian Distributions")
-    plt.show()
-
-def compute_z_score_dss(psis_loc, psis_scale, pi_k, junction_ids):
-    """
-    Compute factor specific z-score based differential splicing score comparing each factor
-    to the overall weighted mean, and calculate corresponding p-values.
-    
-    Parameters:
-    - psis_loc: Location parameters from gaussian variational param (mean of PSI), shape (K x J)
-    - psis_scale: Scale parameters from gaussian variational param (standard error of PSI), shape (K x J)
-    - pi_k: Latent factor contributions vector, shape (K,)
-    - junction_ids: List of junction indices, shape (J,)
-    
-    Returns:
-    - pd.DataFrame: Z-scores and p-values with shape (J x 2K), indexed by junction_ids
-    """
-
-    # Convert to numpy if they're torch tensors
-    if hasattr(psis_loc, 'detach'):
-        psis_loc = psis_loc.detach().cpu().numpy()
-        psis_scale = psis_scale.detach().cpu().numpy()
-    
-    if hasattr(pi_k, 'detach'):
-        pi_k = pi_k.detach().cpu().numpy()
-    
-    # Compute variances
-    var_jk = psis_scale ** 2 # (K x J)
-    print(f"The shape of var_jk is: {var_jk.shape}")
-    
-    # Compute overall weighted mean μ_j for each junction
-    psis_loc = np.clip(psis_loc, 0.0001, 0.9999)
-    mu_j = np.dot(pi_k, psis_loc) # (J,)
-    print(f"The length of mu_j is: {len(mu_j)}")
-
-    # # Compute variance of weighted mean
-    var_mu_j = np.sum((pi_k[:, None]**2) * var_jk, axis=0) # sum over K to get (J,)
-    print(f"The length of var_mu_j is: {len(var_mu_j)}")
-    
-    # Compute z-scores
-    K = len(pi_k)
-    z_scores = np.zeros_like(psis_loc) # (K x J)
-
-    var_jk = np.maximum(var_jk, 1e-4)  # Prevents near-zero variance
-    var_mu_j = np.maximum(var_mu_j, 1e-4)
-
-    print("Min variance value:", np.min(var_jk + var_mu_j))
-    print("Median variance value:", np.median(var_jk + var_mu_j))
-    print("Max variance value:", np.max(var_jk + var_mu_j))
-    print("Max absolute difference (μ_{jk} - μ_j):", np.max(np.abs(psis_loc - mu_j)))
-
-    # Calculate z-scores for each factor comparing to overall weighted mean
-    for k in range(K):
-        standard_error = np.sqrt(var_jk[k, :] + var_mu_j + 1e-6) # (J,)
-        z_scores[k, :] = (psis_loc[k, :] - mu_j) / standard_error  # (J,)
-    
-    # Transpose to get (J x K) shape and convert to DataFrame
-    z_scores = z_scores.T
-    
-    # Calculate p-values using chi-square distribution
-    chi_square_stats = z_scores ** 2
-    p_values = 1 - chi2.cdf(chi_square_stats, df=1)
-
-    # Create DataFrame with proper column names
-    z_columns = [f"factor_{k}" for k in range(K)]
-    p_columns = [f"factor_{k}_pvalue" for k in range(K)]
-    junction_ids = pd.Index(junction_ids).astype(str) # Convert junction_ids to strings to match Anndata index
-    
-    # Combine z-scores and p-values
-    df = pd.DataFrame(
-        np.hstack([z_scores, p_values]),
-        index=junction_ids,
-        columns=z_columns + p_columns
-    )
-        
-    return df
-
 def calculate_silhouette_score(assign_post, cell_types):
     """Calculates silhouette score for the factor assignments."""
     return silhouette_score(assign_post, cell_types)
 
-def analyze_differential_splicing(leaflet_model, 
-                            factor_idx = 0, 
-                            fdr_threshold: float=0.05, 
-                            dist_sd: float=0.5,
-                            min_effect_size: float=None,
-                            eps = 1e-10):
+# TO-DO: INSTEAD OF DOING DS BETWEEN FACTORS, DO DS BETWEEN CELL TYPES
+# JUST LOOK AT FACTOR ACTITIES VIA PHI AND PSI FOR PHI[CELL_TYPE, FACTOR] AND PSI[FACTOR, JUNCTION]
+# VERSUS PHI[CELL_TYPE, FACTOR] AND PSI[FACTOR, JUNCTION] FOR ALL OTHER CELL TYPES
+
+def compute_junction_effect_size(psi_samples, phi_samples, factor_idx, junction_idx, min_effect_size=0.1):
+    """
+    Computes the effect size for a given junction across all samples and summarizes statistics.
+
+    Args:
+        psi_samples (torch.Tensor): Tensor of shape [S, K, J] representing sample-factor-junction usage.
+        phi_samples (torch.Tensor): Tensor of shape [S, C, K] representing sample-cell-factor assignments.
+        factor_idx (int): Index of the factor of interest.
+        junction_idx (int): Index of the junction of interest.
+        min_effect_size (float, optional): Threshold for significance. Default is 0.1.
+
+    Returns:
+        dict: Summary statistics of effect size for the given junction.
+    """
+
+    # Get the number of factors
+    n_factors = phi_samples.shape[2]
+
+    # Indices of all other factors
+    other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
+
+    # Extract phi and psi for the factor of interest
+    phi_j_factor = phi_samples[:, :, factor_idx]  # Shape: [S, C]
+    psi_j_factor = psi_samples[:, factor_idx, junction_idx]  # Shape: [S]
+
+    # Extract phi and psi for all other factors
+    phi_j_nonfactor = phi_samples[:, :, other_factor_indices]  # Shape: [S, C, K-1]
+    psi_j_nonfactor = psi_samples[:, other_factor_indices, junction_idx]  # Shape: [S, K-1]
+
+    # Compute contributions from the factor of interest
+    result_factor = phi_j_factor * psi_j_factor.unsqueeze(1)  # Shape: [S, C]
+
+    # Compute sum of contributions from all other factors
+    result_nonfactor = (phi_j_nonfactor * psi_j_nonfactor.unsqueeze(1)).sum(dim=2)  # Shape: [S, C]
+
+    # Save factor and nonfactor mean values
+    factor_mean = result_factor.mean()
+    nonfactor_mean = result_nonfactor.mean()
     
-    # Get posterior samples (sampled from variational distribution / guide)
-    psi_samples = leaflet_model.psi_samples  # [n_samples, K, J]
-    phi_samples = leaflet_model.phi_samples  # [n_samples, C, K]
+    # get average cell usgae across samples [C]
+    result_factor_avg = result_factor.mean(dim=0)
+    result_nonfactor_avg = result_nonfactor.mean(dim=0)
 
-    # Convert to numpy if they're torch tensors
-    if hasattr(psi_samples, 'detach'):
-        psi_samples = psi_samples.detach().cpu().numpy()
-    if hasattr(phi_samples, 'detach'):
-        phi_samples = phi_samples.detach().cpu().numpy()
+    # Compute cell-wise effect sizes
+    # effect_size_per_cell = result_factor - result_nonfactor  # Shape: [S, C]
+    
+    # This prevents the effect size from being dominated by non-factor contributions.
+    effect_size_per_cell = (result_factor - result_nonfactor) / (result_nonfactor + 1e-6)
 
-    n_samples, n_cells, n_factors = phi_samples.shape
-    _, _, n_junctions = psi_samples.shape
+    # Compute effect size per sample (average across cells)
+    effect_size_per_sample = effect_size_per_cell.mean(dim=1)  # Shape: [S]
 
-    # Initialize array to store effect sizes
-    effect_sizes = np.zeros((n_samples, n_junctions))
+    # Compute summary statistics across samples
+    effect_size_mean = effect_size_per_sample.mean()
+    effect_size_var = effect_size_per_sample.var()
 
-    print(f"Calculating estimated effect sizes for factor {factor_idx}...across {n_samples} samples")
-    for s in tqdm(range(n_samples)):
-        phi_s = phi_samples[s]  # [C, K]
-        psi_s = psi_samples[s]  # [K, J]
-
-        # Calculate factor k usage
-        print(f"Getting factor usage for factor {factor_idx}...")
-        factor_usage = phi_s[:, factor_idx].reshape(-1, 1) * psi_s[factor_idx, :]  # (C, J)
-
-        # Calculate other factors usage
-        print(f"Getting usage for other factors...")
-        other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
-        if len(other_factor_indices) == 1:
-            k = other_factor_indices[0]
-            other_usage = phi_s[:, k].reshape(-1, 1) * psi_s[k, :]  # (C, J)
-        else:
-            other_usage = sum(
-                phi_s[:, k].reshape(-1, 1) * psi_s[k, :] 
-                for k in tqdm(other_factor_indices, desc="Processing Other Factors")
-            )  # (C, J)
-
-        # Compute cell-wise effect sizes first and then aggregate:
-        effect_sizes[s] = np.mean(factor_usage - other_usage, axis=0)
-        print(f"Done getting effect sizes for sample {s}")
-
-    # Calculate overall effect size and variance / aggregates posterior samples
-    print(f"Calculating mean and variance of effect sizes...")
-    beta = np.mean(effect_sizes, axis=0)
-    beta_vars = np.var(effect_sizes, axis=0)
-
-    # Estimate delta if not provided (use posterior variance for robustness)
-    # aka : call a junction significantly DS if the effect 
-    # size is at least half a standard deviation away from the mean of beta... 
-    if min_effect_size is None:
-        min_effect_size = dist_sd * np.std(beta)
-
-    print(f"Calculating probailities for effect size > {min_effect_size}...")
-    # Calculate probabilities using effect sizes
-    prob_greater = np.mean(np.abs(effect_sizes) > min_effect_size, axis=0)
+    # Compute probability of effect size being greater than the threshold
+    prob_greater = (torch.abs(effect_size_per_sample) > min_effect_size).float().mean()
+    num_greater = (torch.abs(effect_size_per_sample) > min_effect_size).float().sum()
     prob_lessoreq = 1 - prob_greater
 
-    # Compute posterior expected False Discovery Proportion (FDP)
+    # Return results in a dictionary
+    return {
+        'factor_idx': factor_idx,
+        'junction_idx': junction_idx,
+        'effect_size': effect_size_mean.item(),
+        'effect_size_var': effect_size_var.item(),
+        'prob_greater': prob_greater.item(),
+        'num_greater': num_greater.item(),
+        'prob_lessoreq': prob_lessoreq.item(),
+        'factor_mean': factor_mean.item(),
+        'nonfactor_mean': nonfactor_mean.item(),
+        'result_factor_avg': result_factor_avg.cpu().numpy(),
+        'result_nonfactor_avg': result_nonfactor_avg.cpu().numpy()
+    }
+
+def compute_junctions_significance(effect_sizes, fdr_threshold, min_effect_size=0.1):
+    """
+    Computes significant junctions based on effect size probabilities and false discovery rate (FDR).
+
+    Args:
+        effect_sizes (pd.DataFrame): DataFrame containing results from compute_junction_effect_size.
+        fdr_threshold (float): False discovery rate threshold.
+        min_effect_size (float, optional): Minimum effect size threshold for significance. Default is 0.1.
+
+    Returns:
+        pd.DataFrame: DataFrame containing significant junctions and FDR calculations.
+    """
+
+    # Ensure required columns exist
+    required_cols = ['prob_greater', 'effect_size', 'effect_size_var', 'junction_idx']
+    for col in required_cols:
+        if col not in effect_sizes.columns:
+            raise ValueError(f"Missing column '{col}' in effect_sizes DataFrame.")
+
+    # Extract values
+    prob_greater = effect_sizes['prob_greater'].values
+    beta = effect_sizes['effect_size'].values
+    beta_vars = effect_sizes['effect_size_var'].values
+    n_junctions = len(effect_sizes)
+
+    # Sort indices based on decreasing probability
     sorted_idx = np.argsort(-prob_greater)
     sorted_probs = prob_greater[sorted_idx]
 
-    # Calculate FDR 
+    # Compute FDR using cumulative false discovery proportion
     fdrs = np.cumsum(1 - sorted_probs) / (np.arange(len(sorted_probs)) + 1)
+    
+    # Identify significant junctions based on FDR threshold
     max_discoveries = np.where(fdrs <= fdr_threshold)[0]
     n_significant = len(max_discoveries) if len(max_discoveries) > 0 else 0
 
-    # Define significant junctions
+    # Initialize boolean array for significance
     significant = np.zeros(n_junctions, dtype=bool)
+
+    # Apply FDR threshold first
     if n_significant > 0:
         significant[sorted_idx[:n_significant]] = True
 
-    # Apply effect size threshold
+    # Apply effect size threshold separately
     significant = significant & (np.abs(beta) > min_effect_size)
+
+    # Count number of significant junctions
+    n_significant = np.sum(significant)
+
     print(f"Found {n_significant} significant junctions with effect size > {min_effect_size} at FDR < {fdr_threshold}")
 
-    # Construct results dictionary
-    results_dict = {
-        'effect_sizes': beta,
-        'effect_size_vars': beta_vars,
+    # Construct results DataFrame
+    results_df = pd.DataFrame({
+        'factor_idx': effect_sizes['factor_idx'].values,
+        'junction_idx': effect_sizes['junction_idx'].values,
+        'junction_id_index': effect_sizes['junction_idx'].values,
+        'effect_size': beta,
+        'abs_effect_size': np.abs(beta),
+        'effect_size_var': beta_vars,
+        'num_greater': effect_sizes.get('num_greater', np.nan).values,  # Handles missing columns
         'prob_greater': prob_greater,
-        'prob_lessoreq': prob_lessoreq,
+        'prob_lessoreq': effect_sizes.get('prob_lessoreq', np.nan).values,
         'significant': significant,
         'delta': min_effect_size,
+        'factor_mean': effect_sizes.get('factor_mean', np.nan).values,
+        'nonfactor_mean': effect_sizes.get('nonfactor_mean', np.nan).values,
         'fdr_curve': fdrs,
-        'n_significant': n_significant
-    }
-
-    # Create results DataFrame
-    results_df = pd.DataFrame({
-        'junction_idx': np.arange(n_junctions),
-        'effect_size': beta,
-        'effect_size_std': np.sqrt(beta_vars),
-        'prob_greater': prob_greater,
-        'prob_lessoreq': prob_lessoreq,
-        'significant': significant,
-        'delta': min_effect_size
+        'n_significant': n_significant, 
+        'result_factor_avg': effect_sizes['result_factor_avg'].values,
+        'result_nonfactor_avg': effect_sizes['result_nonfactor_avg'].values
     })
 
-    return results_dict, results_df
+    return results_df
 
 def analyze_all_factors(
-    leaflet_model,
+    psi_samples,
+    phi_samples,
+    top_junctions, 
     min_effect_size: float = None,
     dist_sd: float = 0.5,
     fdr_threshold: float = 0.05
 ) -> Dict[int, Tuple[Dict[str, np.ndarray], pd.DataFrame]]:
     """
     Analyze differential splicing for all factors.
-    Note: For K=2 factors, only analyzes factor 0 vs 1 to avoid redundancy.
-    
-    Args:
-        leaflet_model: LeafletFA model object
-        n_samples: Number of bootstrap samples
-        min_effect_size: Minimum effect size threshold
-        fdr_threshold: FDR threshold
-    
+    Allows selection of top differentially spliced (DS) junctions.
+
     Returns:
-        Dictionary mapping factor index to (results_dict, results_df) tuple
+        Dictionary mapping factor index to (results_dict, results_df) tuple.
     """
-    n_factors = leaflet_model.psi_learned.shape[0]
+    n_factors = phi_samples.shape[2]
     results = {}
-    
-    # For K=2, only analyze factor 0 vs 1
-    if n_factors == 2:
-        results[0] = analyze_differential_splicing(
-            leaflet_model,
-            factor_idx=0,
-            min_effect_size=min_effect_size,
-            fdr_threshold=fdr_threshold
-        )
-    else:
-        # For K>2, analyze each factor vs others
-        print(f"Analyzing differential splicing for {n_factors} factors...")
-        for k in range(n_factors):
-            print(f"Finding DS junctions in factor {k} vs. all others")
-            results[k] = analyze_differential_splicing(
-                leaflet_model,
-                factor_idx=k,
-                min_effect_size=min_effect_size,
-                fdr_threshold=fdr_threshold, 
-                dist_sd=dist_sd
+
+    print(f"Analyzing differential splicing for {n_factors} factors...")
+
+    for k in range(n_factors):
+        print(f"Finding DS junctions in factor {k} vs. all others")
+        top_fact_juncs = [] 
+        factor_idx = k 
+        for j in tqdm(top_junctions):
+            results_dict = compute_junction_effect_size(
+                psi_samples, phi_samples, factor_idx, j, min_effect_size=min_effect_size
             )
+            top_fact_juncs.append(results_dict)
+
+        # Convert to DataFrame
+        top_fact_juncs_df = pd.DataFrame(top_fact_juncs)
+
+        # Compute significance
+        top_fact_juncs_df_SIG = compute_junctions_significance(top_fact_juncs_df, fdr_threshold, min_effect_size)
+
+        print(f"Done calculations for factor {k}")
+
+        # Store results
+        results[k] = (top_fact_juncs, top_fact_juncs_df_SIG)
+
     return results
 
+
+# TO-DO: FIX THE CALIBRATION TEST TO WORK WITH THE NEW ANALYSIS FUNCTION
 def calibration_test(leaflet_model, true_positive_junctions, min_effect_size=None, fdr_thresholds=[0.01, 0.05, 0.1, 0.2]):
     """
     Tests calibration of the Bayesian FDR control by comparing expected vs. observed FDR.
@@ -517,133 +335,3 @@ def plot_roc_curve(adata_input, results_df, output_dir=None):
 
     plt.show()  # Display plot after saving
     return fpr, tpr, auc_roc
-
-# ------ new function testing 
-
-import numpy as np
-import pandas as pd
-from joblib import Parallel, delayed
-import joblib
-from tqdm import tqdm
-
-def compute_effect_size(s, phi_samples, psi_samples, factor_idx, n_factors):
-    """
-    Computes effect size for a single sample.
-    """
-
-    print(f"Starting effect size calculation for sample {s}...")
-    phi_s = phi_samples[s]  # [C, K]
-    psi_s = psi_samples[s]  # [K, J]
-
-    # Calculate factor k usage
-    factor_usage = phi_s[:, factor_idx].reshape(-1, 1) * psi_s[factor_idx, :]  # (C, J)
-
-    # Calculate other factors usage
-    other_factor_indices = [k for k in range(n_factors) if k != factor_idx]
-    if len(other_factor_indices) == 1:
-        k = other_factor_indices[0]
-        other_usage = phi_s[:, k].reshape(-1, 1) * psi_s[k, :]  # (C, J)
-    else:
-        other_usage = np.einsum('ck,kj->cj', phi_s[:, other_factor_indices], psi_s[other_factor_indices, :])
-
-    # Compute mean effect size across cells
-    return np.mean(factor_usage - other_usage, axis=0)
-
-def analyze_differential_splicing(leaflet_model, 
-                                  factor_idx=0, 
-                                  fdr_threshold=0.05, 
-                                  dist_sd=0.5,
-                                  min_effect_size=None,
-                                  eps=1e-10,
-                                  batch_size=10,  # Process samples in batches
-                                  n_jobs=4):  # Limit parallel jobs
-    """
-    Analyze differential splicing for a given factor using parallel processing.
-    """
-
-    # Get posterior samples (sampled from variational distribution / guide)
-    psi_samples = leaflet_model.psi_samples  # [n_samples, K, J]
-    phi_samples = leaflet_model.phi_samples  # [n_samples, C, K]
-
-    # Convert to numpy if they're torch tensors
-    if hasattr(psi_samples, 'detach'):
-        psi_samples = psi_samples.detach().cpu().numpy()
-    if hasattr(phi_samples, 'detach'):
-        phi_samples = phi_samples.detach().cpu().numpy()
-
-    n_samples, n_cells, n_factors = phi_samples.shape
-    _, _, n_junctions = psi_samples.shape
-
-    print(f"Calculating estimated effect sizes for factor {factor_idx}... across {n_samples} samples")
-
-    effect_sizes = np.zeros((n_samples, n_junctions), dtype=np.float32)
-
-    # Process samples in batches to prevent memory overload
-    for batch_start in tqdm(range(0, n_samples, batch_size), desc="Processing Batches"):
-        batch_end = min(batch_start + batch_size, n_samples)
-        batch_indices = list(range(batch_start, batch_end))
-
-        results = Parallel(n_jobs=n_jobs, backend="loky", max_nbytes="1M")(
-            delayed(compute_effect_size)(s, phi_samples, psi_samples, factor_idx, n_factors) 
-            for s in batch_indices
-        )
-
-        effect_sizes[batch_start:batch_end, :] = np.array(results, dtype=np.float32)
-
-    print(f"Completed effect size calculation for factor {factor_idx}.")
-
-    # Calculate overall effect size and variance / aggregates posterior samples
-    print(f"Calculating mean and variance of effect sizes...")
-    beta = np.mean(effect_sizes, axis=0)
-    beta_vars = np.var(effect_sizes, axis=0)
-
-    # Estimate delta if not provided (use posterior variance for robustness)
-    if min_effect_size is None:
-        min_effect_size = dist_sd * np.std(beta)
-
-    print(f"Calculating probabilities for effect size > {min_effect_size}...")
-    prob_greater = np.mean(np.abs(effect_sizes) > min_effect_size, axis=0)
-    prob_lessoreq = 1 - prob_greater
-
-    # Compute posterior expected False Discovery Proportion (FDP)
-    sorted_idx = np.argsort(-prob_greater)
-    sorted_probs = prob_greater[sorted_idx]
-
-    # Calculate FDR
-    fdrs = np.cumsum(1 - sorted_probs) / (np.arange(len(sorted_probs)) + 1)
-    max_discoveries = np.where(fdrs <= fdr_threshold)[0]
-    n_significant = len(max_discoveries) if len(max_discoveries) > 0 else 0
-
-    # Define significant junctions
-    significant = np.zeros(n_junctions, dtype=bool)
-    if n_significant > 0:
-        significant[sorted_idx[:n_significant]] = True
-
-    # Apply effect size threshold
-    significant = significant & (np.abs(beta) > min_effect_size)
-    print(f"Found {n_significant} significant junctions with effect size > {min_effect_size} at FDR < {fdr_threshold}")
-
-    # Construct results dictionary
-    results_dict = {
-        'effect_sizes': beta,
-        'effect_size_vars': beta_vars,
-        'prob_greater': prob_greater,
-        'prob_lessoreq': prob_lessoreq,
-        'significant': significant,
-        'delta': min_effect_size,
-        'fdr_curve': fdrs,
-        'n_significant': n_significant
-    }
-
-    # Create results DataFrame
-    results_df = pd.DataFrame({
-        'junction_idx': np.arange(n_junctions),
-        'effect_size': beta,
-        'effect_size_std': np.sqrt(beta_vars),
-        'prob_greater': prob_greater,
-        'prob_lessoreq': prob_lessoreq,
-        'significant': significant,
-        'delta': min_effect_size
-    })
-
-    return results_dict, results_df
