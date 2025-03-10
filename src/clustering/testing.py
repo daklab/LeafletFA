@@ -34,7 +34,7 @@ print(f"Number of junction files going in to the analysis: {len(junction_files)}
 min_intron = 50
 max_intron = 500000
 min_junc_reads = 20 
-min_num_cells_wjunc = 5
+min_num_cells_wjunc = 2
 batch_size = 32
 num_workers = 10
 
@@ -50,7 +50,7 @@ reader = JunctionReader(batch_size=batch_size,
                         num_workers=num_workers)
 
 # For testing, sample 100 junction files
-junction_files = junction_files.sample(100)
+junction_files = junction_files.sample(50)
 
 # Process and filter junctions
 # Note: if you have a large number of junctions (e.g. > 1000),
@@ -104,7 +104,7 @@ output_file = os.path.join(output_path, atse_file)
 atse_analyzer.save_atse_file(ATSE_lablled, filtered_junctions, output_file)
 # 
 # # Visualize random ATSEs
-p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-01-29_test_atse_file.txt.gz", sep="\t")
+p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-03-03_test_atse_file.txt.gz", sep="\t")
 db = gffutils.FeatureDB("gencodeVM19", keep_order=True)
 atse_event = p.sample(1)["event_id"].values[0]
 juncs = p[p["event_id"]==atse_event]

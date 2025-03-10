@@ -284,11 +284,11 @@ class JunctionAnalyzer:
                 featuretype="transcript"
             ))
 
-            # Cache exon data
+            # Cache exon data and transcript data 
             exon_cache = {t.id: list(self.db.children(t, featuretype="exon", order_by="start"))
                          for t in transcripts}
 
-            # Get gene info for transcripts
+            # Get gene info and transcripts
             gene_info = {}
             for t in transcripts:
                 gene = list(self.db.parents(t, featuretype="gene"))[0]
@@ -296,6 +296,11 @@ class JunctionAnalyzer:
                     'gene_id': gene.id,
                     'gene_name': gene.attributes.get('gene_name', [None])[0]
                 }
+
+            # Get trancsript types 
+            transcript_types = {}
+            for t in transcripts:
+                transcript_types[t.id] = t.attributes.get('transcript_type', [None])[0]
 
             # Process each junction
             for j_id, junction in tqdm(junc_group, desc="Processing junctions"):
@@ -308,6 +313,7 @@ class JunctionAnalyzer:
                 min_dist_3_prime = float('inf')
                 position_off_5_prime, position_off_3_prime = None, None
                 transcripts_junc = set()
+                trancsript_types_junc = set()
                 genes_found = set()
 
                 for transcript in transcripts:
@@ -367,6 +373,7 @@ class JunctionAnalyzer:
                     # Add transcript if either end is found
                     if found_5_prime or found_3_prime:
                         transcripts_junc.add(transcript.id)
+                        trancsript_types_junc.add(transcript_types[transcript.id])
                         gene_data = gene_info[transcript.id]
                         genes_found.add((gene_data['gene_id'], gene_data['gene_name']))
 
@@ -376,6 +383,7 @@ class JunctionAnalyzer:
                     "position_off_5_prime": position_off_5_prime,
                     "position_off_3_prime": position_off_3_prime,
                     "transcripts": list(transcripts_junc),
+                    "transcript_types": list(trancsript_types_junc),
                     "gene_ids": [g[0] for g in genes_found],
                     "gene_names": [g[1] for g in genes_found]
                 })
@@ -921,10 +929,9 @@ class ATSEAnalyzer:
         try:
             with gzip.open(file_name, 'wt') as f:  # 'wt' for write text mode
                 # Write header
-                f.write("event_id\tgene_id\tgene_name\tnum_junctions\tevent_type\tannotation_status\t"
+                f.write("event_id\tgene_id\tgene_name\ttranscripts\ttranscript_types\tnum_junctions\tevent_type\tannotation_status\t"
                        "junction_id\tchrom\tstart\tend\tstrand\tcells\ttotal_score\t"
                        "splice_motif\tdonor_seq\tacceptor_seq\t"
-                       "label_5_prime\tlabel_3_prime\t"
                        "position_off_5_prime\tposition_off_3_prime\n")
 
                 # Write data
@@ -948,11 +955,20 @@ class ATSEAnalyzer:
                             gene_names = j_data.get('gene_names', [])
                             gene_names_str = '|'.join(str(name) for name in gene_names) if gene_names else 'NA'
 
+                            # Handle transcripts - join with comma or return NA if empty
+                            transcripts = j_data.get('transcripts', [])
+                            transcripts_str = ','.join(str(t) for t in transcripts) if transcripts else 'NA'
+
+                            # Handle transcripts types - join with comma or return NA if empty
+                            transcript_types = j_data.get('transcript_types', [])
+                            transcript_types_str = ','.join(str(t) for t in transcript_types) if transcript_types else 'NA'
 
                             # Write line with all information
                             f.write(f"{event_id}\t"
                                    f"{group['gene_id']}\t"
                                    f"{gene_names_str}\t"
+                                   f"{transcripts_str}\t"
+                                   f"{transcript_types_str}\t"
                                    f"{group['num_junctions']}\t"
                                    f"{group['event_type']}\t"
                                    f"{j_data.get('annotation_status', 'NA')}\t"
@@ -966,8 +982,6 @@ class ATSEAnalyzer:
                                    f"{j_data.get('splice_motif', 'NA')}\t"
                                    f"{j_data.get('donor_seq', 'NA')}\t"
                                    f"{j_data.get('acceptor_seq', 'NA')}\t"
-                                   f"{j_data.get('label_5_prime', 'NA')}\t"
-                                   f"{j_data.get('label_3_prime', 'NA')}\t"
                                    f"{j_data.get('position_off_5_prime', 'NA')}\t"
                                    f"{j_data.get('position_off_3_prime', 'NA')}\n"
                                 )

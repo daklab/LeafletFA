@@ -264,7 +264,7 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
 
     # Prepare junction metadata (var) from intron_clusts
     columns_to_include = [
-        'junction_id', 'event_id', 'splice_motif', 'label_5_prime', 'label_3_prime',
+        'junction_id', 'event_id', 'splice_motif',
         'annotation_status', 'gene_name', 'gene_id', 'num_junctions',
         'position_off_5_prime', 'position_off_3_prime', 'total_score'  # Keep only one 'total_score'
     ]

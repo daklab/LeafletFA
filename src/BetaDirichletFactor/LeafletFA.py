@@ -36,7 +36,7 @@ print(f"CUDA Version: {torch.version.cuda}")
 
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
-                 waypoints_use=True,
+                 waypoints_use=True, fixed_psi=None,
                  eps = 1e-6, alpha_hyper = 5.0, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
                  ELBO_num_particles=1, patience=5, min_delta=0.01, num_samples=10, loss_plot=True, output_dir=None):
         """
@@ -48,6 +48,7 @@ class LeafletFA:
         - junc_specific_prior (bool): Whether to learn a global prior over junctions.
         - input_conc_prior: Concentration prior (can be either 'None' or 'torch.tensor(np.inf)').
         - waypoints_use (bool): Whether to use waypoints for initialization.
+        - fixed_psi (torch.Tensor): Fix PSI during inference by using an existing PSI latent variable from previous model training.
         - eps (float): Small value to prevent numerical issues.
         - alpha_hyper (float): Hyperparameter for the Dirichlet prior on Pi.
         - lr (float): Learning rate.
@@ -69,6 +70,7 @@ class LeafletFA:
         self.junc_specific_prior = junc_specific_prior
         self.input_conc_prior = input_conc_prior
         self.waypoints_use = waypoints_use
+        self.fixed_psi = fixed_psi
         self.eps = eps
         self.alpha_hyper = alpha_hyper
         self.lr = lr
@@ -88,6 +90,12 @@ class LeafletFA:
         self.results = None
         self.variable_sizes = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # If fixed PSI is provided, disable waypoint initialization
+        if self.fixed_psi is not None:
+            if self.waypoints_use:
+                print("Fixed PSI provided! Disabling waypoint-based PSI initialization.")
+            self.waypoints_use = False
 
     @staticmethod
     def convertr(hyperparam, name):
@@ -131,9 +139,16 @@ class LeafletFA:
         if "cell_by_junction_matrix" not in self.adata.layers.keys():
             raise ValueError("cell_by_junction_matrix not found in adata.layers.")
 
-        # Convert layers to COO sparse matrices
-        self.adata.layers["Cluster_Counts"] = coo_matrix(self.adata.layers["cell_by_cluster_matrix"])
-        self.adata.layers["Junction_Counts"] = coo_matrix(self.adata.layers["cell_by_junction_matrix"])
+        # Convert layers to COO sparse matrices only if they are not already sparse
+        if not isinstance(self.adata.layers["cell_by_cluster_matrix"], coo_matrix):
+            self.adata.layers["Cluster_Counts"] = coo_matrix(self.adata.layers["cell_by_cluster_matrix"])
+        else:
+            self.adata.layers["Cluster_Counts"] = self.adata.layers["cell_by_cluster_matrix"]
+
+        if not isinstance(self.adata.layers["cell_by_junction_matrix"], coo_matrix):
+            self.adata.layers["Junction_Counts"] = coo_matrix(self.adata.layers["cell_by_junction_matrix"])
+        else:
+            self.adata.layers["Junction_Counts"] = self.adata.layers["cell_by_junction_matrix"]
 
         # Extract cell and junction indices
         cell_index_array = np.array(self.adata.layers["Junction_Counts"].row)
@@ -205,32 +220,42 @@ class LeafletFA:
 
         N, P = self.y.shape # Cells, junctions
 
-        # Sample input_conc from the prior provided during initialization 
-        input_conc = self.convertr(input_conc_prior, "bb_conc")
+        # Sample all the PSI related parameters if fixed_psi is None
+        if self.fixed_psi is None:
 
-        # Learnable priors for Gamma shape and rate
-        a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))  # Learn shape
-        a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))  # Learn rate
-        b_shape = pyro.sample("b_shape", dist.Gamma(1.0, 1.0))
-        b_rate = pyro.sample("b_rate", dist.Gamma(1.0, 1.0))
+            # Sample input_conc from the prior provided during initialization 
+            input_conc = self.convertr(input_conc_prior, "bb_conc")
 
-        # Sample psi from a Beta distribution
-        if junc_specific_prior:
-            # junction-specific shape parameters sampled from Gamma priors 
-            a = pyro.sample("a", dist.Gamma(a_shape, a_rate).expand([P]).to_event(1))
-            b = pyro.sample("b", dist.Gamma(b_shape, b_rate).expand([P]).to_event(1))
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2)) 
-            psi = psi.to(dtype=torch.float32)
-        else:
-            # single shape parameters for all junctions sampled from Gamma priors
-            a = pyro.sample("a", dist.Gamma(a_shape, a_rate))  
-            b = pyro.sample("b", dist.Gamma(b_shape, b_rate))  
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2))
-            psi = psi.to(dtype=torch.float32)
+            # Learnable priors for Gamma shape and rate
+            a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))  # Learn shape
+            a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))  # Learn rate
+            b_shape = pyro.sample("b_shape", dist.Gamma(1.0, 1.0))
+            b_rate = pyro.sample("b_rate", dist.Gamma(1.0, 1.0))
 
-        # Assert that 'psi' has no NaN or negative values
-        if not torch.isfinite(psi).all():
-            raise ValueError("psi contains NaN or infinite values!")
+            # Sample psi from a Beta distribution
+            if junc_specific_prior:
+                # junction-specific shape parameters sampled from Gamma priors 
+                a = pyro.sample("a", dist.Gamma(a_shape, a_rate).expand([P]).to_event(1))
+                b = pyro.sample("b", dist.Gamma(b_shape, b_rate).expand([P]).to_event(1))
+                psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2)) 
+                psi = psi.to(dtype=torch.float32)
+            else:
+                # single shape parameters for all junctions sampled from Gamma priors
+                a = pyro.sample("a", dist.Gamma(a_shape, a_rate))  
+                b = pyro.sample("b", dist.Gamma(b_shape, b_rate))  
+                psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2))
+                psi = psi.to(dtype=torch.float32)
+
+            # Assert that 'psi' has no NaN or negative values
+            if not torch.isfinite(psi).all():
+                raise ValueError("psi contains NaN or infinite values!")
+        else: 
+            # Use fixed PSI values from a previous model training
+            psi = self.fixed_psi
+            psi = psi.to(self.device)
+
+            # still need to sample the input_conc
+            input_conc = self.convertr(input_conc_prior, "bb_conc")
 
         # Sample Pi prior from a Dirichlet distribution
         pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * self.alpha_hyper / K))
@@ -250,6 +275,9 @@ class LeafletFA:
         if torch.any(assign < self.eps):
             assign = assign + self.eps
             assign = assign / assign.sum(dim=1, keepdim=True)  # Re-normalize to sum to 1
+
+        assign = assign.to(self.device, dtype=torch.float32)
+        psi = psi.to(self.device, dtype=torch.float32)
 
         # Get the predicted success probabilities for each junction
         pred = torch.matmul(assign, psi).to(self.device)
@@ -428,6 +456,7 @@ class LeafletFA:
             print(f"Random seeds: {seeds}")
 
         all_results = []
+        pyro.clear_param_store()  # Clear previous optimizations
         all_params = []
         completed_inits = 0  # Track how many successful initializations
 
@@ -483,14 +512,15 @@ class LeafletFA:
             # Define the guide (AutoGuideList for variational inference)
             guide = AutoGuideList(self.model)
 
-            # Guide for 'psi' with conditional initialization
-            if psi_init is not None:
-                guide.append(AutoDiagonalNormal(
-                    block(self.model, expose=['psi']),
-                    init_loc_fn=init_to_value(values={'psi': psi_init})
-                ))
-            else:
-                guide.append(AutoDiagonalNormal(block(self.model, expose=['psi'])))
+            # Only include 'psi' in the guide if self.fixed_psi is None
+            if self.fixed_psi is None:
+                if psi_init is not None:
+                    guide.append(AutoDiagonalNormal(
+                        block(self.model, expose=['psi']),
+                        init_loc_fn=init_to_value(values={'psi': psi_init})
+                    ))
+                else:
+                    guide.append(AutoDiagonalNormal(block(self.model, expose=['psi'])))
 
             # Guide for 'assign' with conditional initialization
             if phi_init is not None:
@@ -588,21 +618,41 @@ class LeafletFA:
         self.best_elbo = best_elbo
 
     def get_psi_variational_params(self, initialization=None):
+        """
+        Extracts PSI variational parameters if PSI was learned.
+        If PSI was fixed, it simply uses the fixed PSI.
+        """
+    
         if initialization is None:
             initialization = self.best_init
-
-        # Vaiarional parameters for psi (gaussian mean and scale)
-        self.psis_loc = self.all_params[initialization]["AutoGuideList.0.loc"].reshape(self.K, self.num_junctions)
-        self.psis_scale = self.all_params[initialization]["AutoGuideList.0.scale"].reshape(self.K, self.num_junctions)
-        
-        # Latent variables sampled from the guide
-        self.psi = self.latent_results[initialization]["summary_stats"]["psi"]["mean"]
-        self.a = self.latent_results[initialization]["summary_stats"]["a"]["mean"]
-        self.b = self.latent_results[initialization]["summary_stats"]["b"]["mean"]
-        self.a_shape = self.latent_results[initialization]["summary_stats"]["a_shape"]["mean"]
-        self.a_rate = self.latent_results[initialization]["summary_stats"]["a_rate"]["mean"]
-        self.b_shape = self.latent_results[initialization]["summary_stats"]["b_shape"]["mean"]
-        self.b_rate = self.latent_results[initialization]["summary_stats"]["b_rate"]["mean"]
+    
+        if self.fixed_psi is not None:
+            print("PSI was fixed during inference. Using the provided fixed PSI instead of learned variational parameters.")
+            self.psi = self.fixed_psi  # Use the fixed PSI directly
+            self.psis_loc = None  # No variational parameters available
+            self.psis_scale = None
+            self.a = None
+            self.b = None
+            self.a_shape = None
+            self.a_rate = None
+            self.b_shape = None
+            self.b_rate = None
+        else:
+            # Extract variational parameters if PSI was learned
+            print("Extracting variational parameters for PSI...")
+            self.psis_loc = self.all_params[initialization]["AutoGuideList.0.loc"].reshape(self.K, self.num_junctions)
+            self.psis_scale = self.all_params[initialization]["AutoGuideList.0.scale"].reshape(self.K, self.num_junctions)
+            
+            # Latent variables sampled from the guide
+            self.psi = self.latent_results[initialization]["summary_stats"]["psi"]["mean"]
+            self.a = self.latent_results[initialization]["summary_stats"]["a"]["mean"]
+            self.b = self.latent_results[initialization]["summary_stats"]["b"]["mean"]
+            self.a_shape = self.latent_results[initialization]["summary_stats"]["a_shape"]["mean"]
+            self.a_rate = self.latent_results[initialization]["summary_stats"]["a_rate"]["mean"]
+            self.b_shape = self.latent_results[initialization]["summary_stats"]["b_shape"]["mean"]
+            self.b_rate = self.latent_results[initialization]["summary_stats"]["b_rate"]["mean"]
+    
+        print("PSI parameters extraction completed.")
 
     def get_pi(self, initialization=None):
         """
