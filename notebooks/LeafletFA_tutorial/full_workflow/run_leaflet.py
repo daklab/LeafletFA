@@ -15,6 +15,8 @@ import scanpy as sc
 import json
 import pickle
 import lzma
+import wandb  # Import wandb
+import gzip
 
 # Ensure CUDA is available and if not use CPU
 import torch
@@ -28,8 +30,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 float_type = {"device": device, "dtype": torch.float}
-if device.type == "cuda":
-    torch.set_default_tensor_type(torch.cuda.FloatTensor)
+torch.set_default_tensor_type("torch.FloatTensor" if device.type == "cpu" else "torch.cuda.FloatTensor")
 
 # Set seed for reproducibility
 torch.manual_seed(0)
@@ -51,7 +52,8 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-21/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-13/"
+print(f"Base output directory: {base_output_dir}")
 
 # Get parameter set ID from command line
 param_id = int(sys.argv[1])
@@ -71,13 +73,46 @@ output_dir = os.path.join(base_output_dir, f"run_{param_id}")
 os.makedirs(output_dir, exist_ok=True)
 print(f"All outputs will be saved in {output_dir}")
 
+# Get today's date and time 
+today = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+print(f"Starting run at: {today}")
+
+# Initialize wandb
+wandb.init(
+    project="LeafletFA-TabulaSenisAnalysis",  # Your project name
+    config=params,  # Config parameters for this run
+    # add time to run name 
+    name=f"run_{param_id}_{today}",  # Name of this run
+    dir=output_dir,  # Directory to store wandb files
+    # Optional: Add a group for easier organization
+    group="TabulaSenis",
+    # Optional: Add notes
+    notes=f"Parameter set {param_id}, K={params['K']}, waypoints={params['waypoints_use']}"
+)
+
+# Also log additional parameters
+wandb.config.update({
+    "param_id": param_id,
+    "data_source": "TabulaSenis",
+    "anndata_file": "TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad",
+})
+
 # Load Anndata file
-# ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/BRAIN_ONLY/02112025/TMS_Anndata_ATSE_counts_with_waypoints_20250211_171237.h5ad"
 ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/ALL_CELLS/022025/TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad"
 
 print(f"Loading Anndata file: {ATSE_anndata_file}")
 adata = ad.read_h5ad(ATSE_anndata_file)
 print(f"Anndata file loaded successfully.")
+
+# Log basic dataset info
+wandb.log({
+    "dataset_cells": adata.shape[0],
+    "dataset_junctions": adata.shape[1],
+    "initial_learning_rate": params["lr"],
+    "gamma_decay": params["gamma"],
+    "inital_K": params["K"]
+})
+
 
 # Initialize model
 print("Initializing LeafletFA model...")
@@ -91,9 +126,12 @@ leaflet_model = LeafletFA.LeafletFA(
     print_epochs=1, 
     ELBO_num_particles=params["ELBO_num_particles"], 
     lr=params["lr"], 
-    gamma=0.05, 
+    gamma=params["gamma"], 
+    min_delta=params["min_delta"],
     num_samples=params["num_samples"], 
-    output_dir=output_dir
+    patience=params["patience"],
+    output_dir=output_dir,
+    log_wandb=True  # Log to wandb
 )
 
 # Train model
@@ -103,19 +141,27 @@ leaflet_model.train(num_initializations=params["num_inits"])
 
 print("Training complete, extracting results...")
 leaflet_model.get_all_variables()
+
 # Prune K! 
 print("Pruning K...")
 leaflet_model.prune_K()
+new_K = leaflet_model.K 
 
 # Calculate correlations between initializations if more than 2 
 assign_matrices = [result["summary_stats"]["assign"]["mean"] for result in leaflet_model.latent_results]
 if params["num_inits"] > 1:
     avg_corr, median_corr, min_corr = utils.calculate_and_plot_correlations(assign_matrices)
+    # Log to wandb
+    wandb.log({
+        "avg_corr": avg_corr,
+        "median_corr": median_corr,
+        "min_corr": min_corr
+    })
 else: 
     avg_corr, median_corr, min_corr = None, None, None  # Set default values when there's only one initialization
 
 # Save latent variables
-adata.obsm[f"X_leafletFA_K{params['K']}"] = leaflet_model.assign_post
+adata.obsm[f"X_leafletFA_K{new_K}"] = leaflet_model.assign_post
 
 cell_tye_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.obs.cell_type_grouped.values)
 age_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.obs.age.values)
@@ -123,30 +169,57 @@ age_silhouette = ds.calculate_silhouette_score(leaflet_model.assign_post, adata.
 print(f"Silhouette score for cell types: {cell_tye_silhouette}")
 print(f"Silhouette score for age: {age_silhouette}")
 
+# Log silhouette scores to wandb
+wandb.log({
+    "cell_type_silhouette": cell_tye_silhouette,
+    "age_silhouette": age_silhouette
+})
+
 # Compute UMAP
-print(f"Computing UMAP for K={params['K']}...")
-sc.pp.neighbors(adata, use_rep=f"X_leafletFA_K{params['K']}")
+print(f"Computing UMAP for K={new_K}...")
+sc.pp.neighbors(adata, use_rep=f"X_leafletFA_K{new_K}")
 sc.tl.umap(adata)
 
-# Define UMAP save path
-umap_save_path = os.path.join(output_dir, f"UMAP_K{params['K']}.png")
+# Define UMAP save paths for cell_type and age
+umap_celltype_path = os.path.join(output_dir, f"UMAP_K{new_K}_celltype.png")
+umap_age_path = os.path.join(output_dir, f"UMAP_K{new_K}_age.png")
 
-# Set figure parameters (size, dpi, font settings)
+# Set figure parameters and generate cell type UMAP
 with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):  
     sc.pl.umap(
         adata, 
-        color=["cell_type_grouped", "age"], 
+        color=["cell_type_grouped"], 
         wspace=0.9, 
         show=False  # Don't show interactive plot
     )
-    plt.savefig(umap_save_path, bbox_inches="tight")  # Save with tight bounding box
+    plt.savefig(umap_celltype_path, bbox_inches="tight")  # Save with tight bounding box
 
-print(f"Saved UMAP plot to {umap_save_path}")
+# Generate age UMAP
+with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):  
+    sc.pl.umap(
+        adata, 
+        color=["age"], 
+        wspace=0.9, 
+        show=False  # Don't show interactive plot
+    )
+    plt.savefig(umap_age_path, bbox_inches="tight")  # Save with tight bounding box
 
+print(f"Saved UMAP plots to {output_dir}")
+
+# Log UMAPs to wandb
+wandb.log({
+    "umap_cell_type": wandb.Image(umap_celltype_path),
+    "umap_age": wandb.Image(umap_age_path)
+})
+
+# Get factor assignments and log to wandb
 pi_df = pd.DataFrame(leaflet_model.pi, columns=["factor_assignment_probabilities"])
 pi_df["factor_K"] = pi_df.index+1
 pi_df.to_csv(os.path.join(output_dir, "factor_assignment_probabilities.csv"), index=False)
 print(f"Saved factor assignment probabilities to {os.path.join(output_dir, 'factor_assignment_probabilities.csv')}")
+
+# Create a table in wandb
+wandb.log({"factor_assignments": wandb.Table(dataframe=pi_df)})
 
 # Create a dataframe to store results
 results_df = pd.DataFrame([{
@@ -176,14 +249,51 @@ print(f"Saved run summary to {results_file}")
 
 # Save leafletfa model object 
 model_file = os.path.join(output_dir, "leafletfa_model.pkl.xz")
+
 # Save the trained LeafletFA model (without the adata object)
 leaflet_model.adata = None
 # Remove tensors also 
 leaflet_model.y = None
 leaflet_model.total_counts = None
-print(f"Saving model to {model_file}")
 
-with lzma.open(model_file, "wb") as f:
-    pickle.dump(leaflet_model, f)
+# List of attributes to keep
+only_things_we_need = [
+    'ELBO_num_particles', 'K', 'a', 'a_rate', 'a_shape', 'assign_post', 'b', 
+    'b_rate', 'b_shape', 'bb_conc', 'best_elbo', 'best_init', 'gamma', "alpha_pi", 
+    'input_conc_prior', 'junc_specific_prior', 'losses', 'phi_samples', 
+    'pi', 'psi_learned', 'psi_samples',
+    'psis_loc', 'psis_scale'
+]
 
-print(f"Model saved to {model_file}")
+# Iterate over all attributes in the model
+for attr_name in dir(leaflet_model):
+    attr_value = getattr(leaflet_model, attr_name)
+    
+    # Check if it's NOT in the whitelist and is NOT a method
+    if not attr_name.startswith('__') and attr_name not in only_things_we_need:
+        if not callable(attr_value):  # Skip methods
+            delattr(leaflet_model, attr_name)
+
+# Check remaining attributes
+print(f"Remaining attributes: {dir(leaflet_model)}")
+
+import gc
+gc.collect()  # Free memory
+print(f"Trying to free up memory before saving model...")
+
+# Save only if num_epochs > 100
+if params.get("num_epochs", 0) > 100:
+    with gzip.open(model_file, "wb") as f:
+        print(f"Starting model save to {model_file}...")
+
+        for attr_name in only_things_we_need:
+            attr_value = getattr(leaflet_model, attr_name, None)
+            if attr_value is not None:
+                print(f"Saving {attr_name}...")  # Track progress
+                pickle.dump({attr_name: attr_value}, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print(f"Model saved to {model_file}")
+else:
+    print(f"Model not saved to {model_file} because num_epochs <= 100.")
+
+print("Run complete.")

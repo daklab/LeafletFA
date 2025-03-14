@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker  # Import ticker for scientific notation
-
+from tqdm import tqdm
 import torch
+from torch.optim import Adam
 import pyro
 import pyro.distributions as dist
 from torch.distributions import Distribution
@@ -16,14 +17,14 @@ from pyro.infer import SVI, Trace_ELBO, Predictive
 from pyro.infer.autoguide import (
     AutoGuideList, AutoDelta, AutoDiagonalNormal
 )
-from pyro.infer.autoguide.initialization import init_to_value, init_to_uniform
+from pyro.infer.autoguide.initialization import init_to_value
 from pyro import poutine
 
 from pyro.poutine import block
-from pyro.infer.autoguide.initialization import init_to_value
 from scipy.sparse import coo_matrix
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+import wandb 
+import torch.nn.functional as F
 
 # Configure logging
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -35,75 +36,10 @@ Distribution.set_default_validate_args(False)
 print(f"Torch Version: {torch.__version__}")
 print(f"CUDA Version: {torch.version.cuda}")
 
-def sparse_collate_fn(batch, J):
-    """
-    Custom collate function that aligns y and total_counts 
-    using nonzero indices from total_counts.
-    
-    Parameters:
-    - batch: List of (cell_idx, y, total_counts) tuples.
-    - J: Total number of junctions (global max_junctions).
-    
-    Returns:
-    - A dictionary containing batched dense tensors for y, total_counts, and a mask.
-    """
-
-    cell_indices_batch = []
-    y_tensors = []
-    total_counts_tensors = []
-    mask_tensors = []  # Mask for valid values
-
-    for (cell_idx, y, total_counts) in batch:
-        cell_indices_batch.append(cell_idx)
-
-        # Ensure tensors are coalesced (important for proper indexing)
-        y = y.coalesce()
-        total_counts = total_counts.coalesce()
-
-        # Initialize dense tensors
-        y_dense = torch.zeros(J, dtype=torch.float32)
-        total_counts_dense = torch.zeros(J, dtype=torch.float32)
-        mask = torch.zeros(J, dtype=torch.bool)  # Mask for valid entries
-
-        # Retrieve nonzero indices
-        y_indices = y.indices()[0]  # Extracts row indices (assuming y is (1D) sparse)
-        total_counts_indices = total_counts.indices()[0]
-
-        # Place values in the correct positions
-        y_dense[y_indices] = y.values()
-        total_counts_dense[total_counts_indices] = total_counts.values()
-        mask[y_indices] = True  # Mark positions where values exist
-
-        y_tensors.append(y_dense)
-        total_counts_tensors.append(total_counts_dense)
-        mask_tensors.append(mask)
-
-    return {
-        "cell_indices": torch.tensor(cell_indices_batch, dtype=torch.long),
-        "y_values": torch.stack(y_tensors),  # (batch_size, J)
-        "total_counts_values": torch.stack(total_counts_tensors),  # (batch_size, J)
-        "mask": torch.stack(mask_tensors)  # (batch_size, J)
-    }
-
-class SparseTensorDataset(torch.utils.data.Dataset):
-    def __init__(self, sparse_y, sparse_total_counts):
-        self.y = sparse_y
-        self.total_counts = sparse_total_counts
-
-    def __len__(self):
-        return self.y.size(0)  # number of cells
-
-    def __getitem__(self, idx):
-        # row index = cell index
-        y_row = self.y[idx]
-        total_counts_row = self.total_counts[idx]
-        # Return the index alongside the data
-        return idx, y_row, total_counts_row
-    
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
-                 waypoints_use=True, fixed_psi=None, batch_size=128, 
-                 eps = 1e-6, alpha_hyper = 5.0, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
+                 waypoints_use=True, fixed_psi=None, log_wandb=False, batch_size=512,
+                 eps = 1e-6, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
                  ELBO_num_particles=1, patience=5, min_delta=0.01, num_samples=10, loss_plot=True, output_dir=None):
         """
         Initialize the LeafletFA model.
@@ -115,9 +51,7 @@ class LeafletFA:
         - input_conc_prior: Concentration prior (can be either 'None' or 'torch.tensor(np.inf)').
         - waypoints_use (bool): Whether to use waypoints for initialization.
         - fixed_psi (torch.Tensor): Fix PSI during inference by using an existing PSI latent variable from previous model training.
-        - batch_size (int): Batch size for training.
         - eps (float): Small value to prevent numerical issues.
-        - alpha_hyper (float): Hyperparameter for the Dirichlet prior on Pi.
         - lr (float): Learning rate.
         - gamma (float): Learning rate decay.
         - num_epochs (int): Number of training epochs.
@@ -131,6 +65,7 @@ class LeafletFA:
         """
 
         self.adata = adata
+        self.batch_size = batch_size
         self.K = K
         self.num_cells = adata.shape[0]
         self.num_junctions = adata.shape[1]
@@ -138,9 +73,7 @@ class LeafletFA:
         self.input_conc_prior = input_conc_prior
         self.waypoints_use = waypoints_use
         self.fixed_psi = fixed_psi
-        self.batch_size = batch_size
         self.eps = eps
-        self.alpha_hyper = alpha_hyper
         self.lr = lr
         self.gamma = gamma
         self.num_epochs = num_epochs
@@ -151,11 +84,11 @@ class LeafletFA:
         self.num_samples = num_samples
         self.loss_plot = loss_plot
         self.output_dir = output_dir
+        self.log_wandb = log_wandb
         
         # Initialize other attributes
         self.guide = None
         self.losses = []
-        self.results = None
         self.variable_sizes = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -164,6 +97,7 @@ class LeafletFA:
             if self.waypoints_use:
                 print("Fixed PSI provided! Disabling waypoint-based PSI initialization.")
             self.waypoints_use = False
+
 
     @staticmethod
     def convertr(hyperparam, name):
@@ -177,7 +111,7 @@ class LeafletFA:
             if torch.isinf(hyperparam_tensor).any():
                 return hyperparam_tensor
             else:
-                return torch.tensor(hyperparam, dtype=torch.float32)
+                return torch.tensor(hyperparam, dtype=torch.float32)    
 
     def from_anndata(self, float_type=None):
         """
@@ -252,334 +186,679 @@ class LeafletFA:
 
         # Clean up memory
         del cell_index_tensor, junc_index_tensor, ycount, total_counts_tensor
-        
-        if self.device.type == "cuda":
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         
         # Add the tensors to the self object
         self.y = full_y_tensor
         self.total_counts = full_total_counts_tensor
 
-    # set up data loader for minibatch training
-    def setup_data_loader(self, batch_size):
+    def model(self, y=None, total_counts=None, K=None, junc_specific_prior=None, 
+          input_conc_prior=None, idx=None, predict=False):
+
         """
-        Set up a data loader for minibatch training.
+        Define a probabilistic Bayesian model using a Beta-Dirichlet factorization with subsampling for memory efficient inference.
         """
+        
+        # 1) Housekeeping: check arguments or use self.y, etc.
+        if y is None:
+            y = self.y
+        if total_counts is None:
+            total_counts = self.total_counts
+        if K is None:
+            K = self.K
+        if junc_specific_prior is None:
+            junc_specific_prior = self.junc_specific_prior
+        if input_conc_prior is None:
+            input_conc_prior = self.input_conc_prior
 
-        # Create dataset
-        dataset = SparseTensorDataset(self.y, self.total_counts)
-        J = dataset[0][1].size(0)  # Number of junctions
+        # 2) Suppose y has shape [N, P]  or Cells, junctions
+        N, P = self.y.shape 
 
-        # Create DataLoader
-        dataloader = torch.utils.data.DataLoader(
-            dataset, 
-            batch_size=batch_size, 
-            shuffle=False, 
-            collate_fn=lambda batch: sparse_collate_fn(batch, J),
-            pin_memory=False,  # Turn off since data is already on GPU
-            num_workers=0      # Use main process to avoid extra transfers
-        )
-       
-        return dataloader
+        # 3) Sample the global latent variables in non mini-batched mode
+        #    These do *not* get subsampled.
+        # --------------------------------------------------
 
-    def model(self, y_batch, total_counts_batch, mask_batch):
-        """
-        Probabilistic model for LeafletFA with mini-batching.
-
-        Parameters:
-        - y_batch (Tensor): Observed junction counts for the batch.
-        - total_counts_batch (Tensor): Total counts for intron clusters in the batch.
-        - mask_batch (Tensor): Mask indicating valid junctions in the batch.
-        """
-
-        # Number of junctions
-        P = y_batch.shape[1]
-
-        # Number of cells in the batch
-        actual_batch_size = y_batch.shape[0]
-
-        # Sample concentration prior
-        input_conc = self.convertr(self.input_conc_prior, "bb_conc")
-
-        # Sample all the PSI related parameters if fixed_psi is None
         # Learnable priors for Gamma shape and rate
-        a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))  # Learn shape
-        a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))  # Learn rate
-        b_shape = pyro.sample("b_shape", dist.Gamma(1.0, 1.0))
-        b_rate = pyro.sample("b_rate", dist.Gamma(1.0, 1.0))
-       
+        shape_prior = dist.Gamma(1.0, 1.0)
+        a_shape, a_rate, b_shape, b_rate = [pyro.sample(name, shape_prior) for name in ["a_shape", "a_rate", "b_shape", "b_rate"]]
+
         # Sample psi from a Beta distribution
-        if self.junc_specific_prior:
+        if junc_specific_prior:
             # junction-specific shape parameters sampled from Gamma priors 
             a = pyro.sample("a", dist.Gamma(a_shape, a_rate).expand([P]).to_event(1))
             b = pyro.sample("b", dist.Gamma(b_shape, b_rate).expand([P]).to_event(1))
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([self.K, P]).to_event(2)) 
-            psi = psi.to(dtype=torch.float32)
+            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2)) 
         else:
             # single shape parameters for all junctions sampled from Gamma priors
             a = pyro.sample("a", dist.Gamma(a_shape, a_rate))  
             b = pyro.sample("b", dist.Gamma(b_shape, b_rate))  
-            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([self.K, P]).to_event(2))
-            psi = psi.to(dtype=torch.float32)
-            # Assert that 'psi' has no NaN or negative values
-            if not torch.isfinite(psi).all():
-                raise ValueError("psi contains NaN or infinite values!")
-
-        # Sample concentration value that scales the pi vector (higher values lead to more uniform pi)
-        conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
-        conc = torch.clamp(conc, min=1e-6, max=1e6) # Prevent numerical issues
+            psi = pyro.sample("psi", dist.Beta(a+self.eps, b+self.eps).expand([K, P]).to_event(2))
+        psi = psi.to(self.device, dtype=torch.float32)
 
         # Sample Pi prior from a Dirichlet distribution
-        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(self.K) * self.alpha_hyper / self.K))
-        
-        # Assert that pi sums to 1 and contains no NaN/inf values
+        # First sample alpha from a gamma distribution
+        alpha_pi = pyro.sample("alpha_pi", dist.Gamma(1.0, 1.0))
+        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha_pi / K))
+
         assert torch.isfinite(pi).all(), "pi contains NaN or infinite values!"
         assert torch.allclose(pi.sum(), torch.tensor(1.0, dtype=torch.float)), f"pi does not sum to 1: {pi.sum()}"
 
-        # Define `assign` inside the batch plate
-        with pyro.plate("batch", actual_batch_size, dim=-2):
-        
-            assign_raw = pyro.sample("assign", dist.Dirichlet(pi * conc * torch.ones(self.K, device=self.device)))
-        
-            # Remove the extra dimension
-            assign = assign_raw.squeeze(1)  # (batch_size, K)
-        
-            # Normalize the assignment probabilities
-            assign = torch.clamp(assign, min=self.eps)
-            assign = assign / assign.sum(dim=1, keepdim=True)
+        # Sample concentration scaling factor
+        conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
+        conc = torch.clamp(conc, min=1e-6, max=1e6)  
 
-            # Compute predicted success probabilities
-            pred = torch.matmul(assign, psi)
+        # Sample input_conc from the prior (for likelihood)
+        input_conc = self.convertr(input_conc_prior, "bb_conc")
+        # --------------------------------------------------
 
-        # Compute log probability
-        log_prob = self.log_prob_calc(y_batch, total_counts_batch, pred, input_conc, mask_batch)
-        scaled_log_prob = log_prob * (self.num_cells / actual_batch_size)
+        # 4) Subsample the local latent variables (one per row). 
+        #    pyro.plate(...) with size=N, subsample=idx
+        #    so that your local variable "assign" is only length == len(idx)
+        #    but is an unbiased sample from the “full” dimension of size=N.
+        if predict or idx is None or len(idx) == N:
+             # Use full plate (no subsampling)
+             with pyro.plate("data_plate", size=N) as plate_idx:
+                batch_size = N
+                conc_vec = (pi * conc).expand([batch_size, self.K])
+                assign = pyro.sample("assign", dist.Dirichlet(conc_vec))
+                assign = torch.clamp(assign, min=1e-8)
+                assign /= assign.sum(dim=1, keepdim=True)
+                print(f"Getting predictions for {N} cells.")
+        else:
+            with pyro.plate("data_plate", size=N, subsample=idx) as subsample_idx:
 
+                # subsample_idx is effectively the same as idx but
+                # ensures Pyro does the correct book‐keeping internally.
+                batch_size = len(subsample_idx)
+                # Expand the concentration vector to shape [batch_size, K]
+                conc_vec = (pi * conc).expand([batch_size, self.K])
+
+                # 4a) local "assign" – shape [len(subsample_idx), K]
+                assign = pyro.sample("assign", dist.Dirichlet(conc_vec))
+
+                # Make sure to clamp or re-normalize if necessary
+                # if any numerical issues arise:
+                assign = torch.clamp(assign, min=1e-8)
+                assign /= assign.sum(dim=1, keepdim=True)
+
+        # 5) Now subset the data for the same mini-batch
+        # --------------------------------------------------
+        tt_indices = total_counts._indices()  # shape [2, nnz]
+        tt_values  = total_counts._values()
+        y_indices  = y._indices()            # shape [2, nnz]
+        y_values   = y._values()
+
+        # They should match exactly: tt_indices == y_indices
+        # (But confirm if you want to be extra sure!)
+        assert torch.equal(tt_indices, y_indices), "Indices mismatch!"
+
+        # 5a) Make a mask for the rows we want in this batch
+        mask = torch.isin(tt_indices[0], idx)
+
+        # 5b) Subset the indices/values
+        sub_tt_indices = tt_indices[:, mask]
+        sub_tt_values  = tt_values[mask]
+        sub_y_indices  = y_indices[:, mask]
+        sub_y_values   = y_values[mask]
+
+        # 5c) Shift row indices from 'global' to 'local' in a vectorized manner.
+        # Create a mapping tensor on the same device as your indices.
+        # First, create a tensor of length equal to the total number of cells,
+        # filled with -1 (or any invalid value), then set the entries for indices in idx.
+        mapping = -torch.ones(N, dtype=torch.long, device=sub_tt_indices.device)
+        mapping[idx] = torch.arange(len(idx), device=sub_tt_indices.device)
+
+        # Now, update the row indices for both sub_tt_indices and sub_y_indices:
+        sub_tt_indices_updated = sub_tt_indices.clone()
+        sub_y_indices_updated = sub_y_indices.clone()
+
+        # Replace global row indices with local indices:
+        sub_tt_indices_updated[0] = mapping[sub_tt_indices[0]]
+        sub_y_indices_updated[0] = mapping[sub_y_indices[0]]
+
+        # Optionally, assert that all new indices are in the range [0, len(idx)-1]
+        assert torch.all((sub_tt_indices_updated[0] >= 0) & (sub_tt_indices_updated[0] < len(idx)))
+        assert torch.all((sub_y_indices_updated[0] >= 0) & (sub_y_indices_updated[0] < len(idx)))
+
+        # Now use these updated indices to create the mini-batch sparse tensors.
+        sub_total_counts = torch.sparse_coo_tensor(
+            sub_tt_indices_updated,
+            sub_tt_values,
+            size=(len(idx), total_counts.size(1))
+        ).coalesce()
+
+        sub_y = torch.sparse_coo_tensor(
+            sub_y_indices_updated,
+            sub_y_values,
+            size=(len(idx), y.size(1))
+        ).coalesce()
+    
+        # 6) Use "assign" (size [batch_size,K]) and "psi" (size [K,P]) to get predictions
+        # --------------------------------------------------        
+        pred_sub = torch.matmul(assign, psi)  # -> shape [batch_size, P]
+
+        # 7) Compute partial log_prob for these rows only
+        #    For example, if your `log_prob_calc` function can handle
+        #    dense inputs of shape [batch_size, P], you can do:
+        # --------------------------------------------------
+        partial_log_prob = self.log_prob_calc(
+            sub_y,
+            sub_total_counts,
+            pred_sub,
+            input_conc
+        )
+    
+        # 8) Scale the partial log-prob by (N / batch_size):
+        #    This ensures an unbiased gradient for the full data
+        # --------------------------------------------------
+        batch_size = len(idx)
+        scaling_factor = N / float(batch_size)
+        #  Each mini-batch loss is already an unbiased estimate of the full-data loss
+        scaled_log_prob = partial_log_prob * scaling_factor
+
+        # 9) Put that scaled log-prob into pyro.factor (or pyro.sample if using
+        #    a distribution) so that Pyro knows this contributes to the ELBO
         pyro.factor("obs", scaled_log_prob)
 
-    def log_prob_calc(self, y, total_counts, pred, input_conc, mask):
+        # 10) If tracking log_prob for debugging
+        self.current_log_prob = scaled_log_prob.detach()
+
+    def log_prob_calc(self, y, total_counts, pred, input_conc):
         """
         Compute the log probability of observed data under either a binomial or beta-binomial distribution,
-        depending on whether fixed_psi is used.
+        depending on the concentration parameter.
 
         Parameters:
-        - y (torch.Tensor): Dense tensor of observed junction counts (batch_size, max_junctions).
-        - total_counts (torch.Tensor): Dense tensor of total intron cluster counts (batch_size, max_junctions).
-        - pred (torch.Tensor): Dense tensor of predicted success probabilities (batch_size, max_junctions).
-        - input_conc (torch.Tensor or float): The concentration parameter.
-        - mask (torch.Tensor): Boolean tensor indicating valid (non-padded) values.
+        - y (torch.Tensor): Sparse tensor of observed junction counts.
+        - total_counts (torch.Tensor): Sparse tensor of total intron cluster counts.
+        - pred (torch.Tensor): Dense tensor of predicted success probabilities.
+        - input_conc (torch.Tensor or float): The concentration parameter 
+        - Note: input_conc is assumed to be preprocessed in model() using convertr().
 
         Returns:
         - torch.Tensor: The summed log probabilities for all non-zero data points.
         """
 
-        batch_size = y.shape[0]
+        # Extract non-zero elements and their indices
+        y_indices = y._indices()  # Row and column indices of nonzero values
+        y_values = y._values()  # Observed counts
 
-        # Ensure mask has the correct batch size
-        # Remove this should not be needed 
-        # if mask.shape[0] != batch_size:
-        #    print(f"Fixing mask batch size from {mask.shape[0]} to {batch_size}")
-        #    mask = mask[:batch_size]
+        total_counts_indices = total_counts._indices()
+        total_counts_values = total_counts._values()  # Total counts for corresponding junctions
 
-        # Ensure success_probs are in the valid range to prevent log issues
-        success_probs = pred.clamp(min=1e-6, max=1-1e-6)  # Avoid log issues
+        # Ensure indices match between y and total_counts
+        if not torch.equal(y_indices, total_counts_indices):
+            raise ValueError("Mismatch between indices of y and total_counts.")
 
-        # Apply mask: Only keep values where mask == True (where junctions are present in given batch of cells)
-        y_masked = torch.masked_select(y, mask)
-        total_counts_masked = torch.masked_select(total_counts, mask)
-        success_probs_masked = torch.masked_select(success_probs, mask)
+        # Extract success probabilities for the relevant indices
+        success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
 
-        if self.fixed_psi is not None:
+        # Since input_conc has already been processed in the model, we just check for Binomial vs Beta-Binomial
+        if torch.isinf(input_conc).any():
             # Binomial likelihood
-            log_probs = dist.Binomial(total_counts_masked, probs=success_probs_masked).log_prob(y_masked)
+            log_probs = dist.Binomial(total_counts_values, probs=success_probs).log_prob(y_values)
         else:
-            if torch.isinf(input_conc).any():
-                # Binomial likelihood
-                log_probs = dist.Binomial(total_counts_masked, probs=success_probs_masked).log_prob(y_masked)
-            else:
-                # Beta-Binomial likelihood
-                alpha = success_probs_masked * input_conc
-                beta = (1 - success_probs_masked) * input_conc
-                # import pdb ; pdb.set_trace()
-                log_probs = dist.BetaBinomial(alpha, beta, total_counts_masked).log_prob(y_masked)
+            # Beta-Binomial likelihood
+            alpha = success_probs * input_conc
+            beta = (1 - success_probs) * input_conc
+            log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
-        return log_probs.sum()
+        loss = log_probs.sum()        
+        return loss 
     
-    def train(self, svi, train_loader):
+    def fit(self, guide):
         """
-        Train the model using mini-batching.
-
-        Parameters:
-        - svi (SVI): Stochastic Variational Inference optimizer.
-        - train_loader (DataLoader): PyTorch DataLoader providing mini-batches.
-
-        Returns:
-        - total_epoch_loss_train (float): Average ELBO loss per data point in the epoch.
+        Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
+        to ensure numerical stability and early stopping to prevent overfitting.
         """
-        epoch_loss = 0.0  # Accumulate ELBO loss across mini-batches
+        
+        # Calculate the learning rate decary factor per step 
+        lrd = self.gamma ** (1 / self.num_epochs)
+        scheduler = ClippedAdam({'lr': self.lr, 'lrd': lrd}) 
+        loss = Trace_ELBO(num_particles=self.ELBO_num_particles) 
+        
+        # SVI the step function minimizes the negative ELBO
+        svi = SVI(self.model, guide, scheduler, loss)
 
-        # if self.device.type == "cuda" then use_cuda = True else False
-        use_cuda = self.device.type == "cuda"
+        pyro.clear_param_store() # Clear previous optimizations
+
+        # Initialize early stopping variables
+        losses = []
+        best_loss = float('inf')
+        epochs_since_improvement = 0
 
         # Convert input_conc_prior to tensor if it's a float and move it to the device
         if isinstance(self.input_conc_prior, float):
             self.input_conc_prior = torch.tensor(self.input_conc_prior, device=self.device)
         elif isinstance(self.input_conc_prior, torch.Tensor):
             self.input_conc_prior = self.input_conc_prior.to(self.device)
-        
-        for batch_idx, batch in tqdm(enumerate(train_loader)):
-            # Extract batch components from DataLoader
-            cell_indices = batch["cell_indices"]
-            y_batch = batch["y_values"]
-            total_counts_batch = batch["total_counts_values"]
-            mask_batch = batch["mask"]
 
-            # Compute ELBO loss using the batch
-            batch_loss = svi.step(y_batch, total_counts_batch, mask_batch)
-            epoch_loss += batch_loss
-
-        # Sum loss across all batches
-        sum_epoch_loss = epoch_loss
-        avg_epoch_loss = epoch_loss / len(train_loader.dataset)
-        print(f"Sum Loss: {sum_epoch_loss:.2f}, Avg Loss: {avg_epoch_loss:.4f}")
-        return sum_epoch_loss
-
-    def fit(self, guide=None):
-        """
-        Fit the model using Stochastic Variational Inference (SVI) with mini-batching.
-        Implements gradient clipping, learning rate decay, and early stopping.
-        """
-
-        # Define the guide
-        if guide is None:
-            guide = AutoGuideList(self.model)
-        
-            # Add a guide for continuous global parameters
-            guide.add(AutoDiagonalNormal(poutine.block(
-                self.model, 
-                expose=["a_shape", "a_rate", "b_shape", "b_rate", "dir_conc", "pi", "bb_conc"]
-             )))
-        
-            # Add a guide for the continuous array parameters
-            guide.add(AutoDiagonalNormal(poutine.block(
-                self.model, 
-                expose=["a", "b", "psi"]
-            )))
-
-            # Add a guide for the per-batch assignment parameters
-            guide.add(AutoDiagonalNormal(poutine.block(
-                self.model, 
-                expose=["assign"]
-            )))
-        
-        self.guide = guide
-        pyro.clear_param_store()
-
-        # Initialize SVI
-        optimizer = ClippedAdam({'lr': self.lr, 
-                                 'lrd': self.gamma ** (1 / self.num_epochs)})  
-        loss_fn = Trace_ELBO(num_particles=self.ELBO_num_particles)  
-        svi = SVI(self.model, guide, optimizer, loss_fn)
-
-        # Prepare DataLoader
-        dataloader = self.setup_data_loader(batch_size=self.batch_size)
         print(f"Training in progress for {self.num_epochs} epochs!")
+        N = self.y.size(0)  # Number of cells
+        batch_size = self.batch_size
+        print(f"Number of cells: {N}, using batch size: {batch_size}")        
 
-        train_elbo = []
-        best_loss = float("inf")
-        patience_counter = 0
+        for epoch in tqdm(range(self.num_epochs)):
+            perm = torch.randperm(N)      # shuffle
+            epoch_loss = 0.0
+            for i in range(0, N, batch_size):
+                #print(f"Epoch {epoch} - Batch {i // batch_size}", end="\r")
+                idx = perm[i : i + batch_size]
+                loss = svi.step(
+                    y=self.y,
+                    total_counts=self.total_counts,
+                    K=self.K,
+                    junc_specific_prior=self.junc_specific_prior,
+                    input_conc_prior=self.input_conc_prior,
+                    idx=idx,  # <--- pass the mini-batch indices
+                )
+                epoch_loss += loss
 
-        for epoch in range(self.num_epochs):
-            total_epoch_loss = self.train(svi, dataloader)
-            # total_epoch_loss is the SUM of the negative log-likelihood (or negative ELBO).
-            # We *minimize* that quantity, so "better" => smaller loss.
-            # if epoch divides by 2 then print it 
-            if epoch % self.print_epochs == 0:
-                print(f"Epoch {epoch}: Total Loss: {total_epoch_loss:.2f}")
+            # Call SVI step with dynamic passing of input_conc_prior
+            losses.append(epoch_loss)
 
-            if total_epoch_loss < (best_loss - self.min_delta):
-                best_loss = total_epoch_loss
-                patience_counter = 0
+            # Assuming a single parameter group:
+            current_lr = list(scheduler.optim_objs.values())[0].param_groups[0]['lr']
+            
+            # Retrieve log likelihood from the model
+            log_prob = self.current_log_prob if hasattr(self, "current_log_prob") else None
 
-                # Save the best parameter state so we can restore it after stopping
-                best_params = {
-                    name: p.clone().detach()
-                    for name, p in pyro.get_param_store().items()
-                    }
+            # Log loss, log likelihood, learning rate, and latent variables in wandb
+            if self.log_wandb:
+                wandb.log({
+                    "epoch": epoch,
+                    "learning_rate": current_lr,
+                    "ELBO_loss": loss,
+                    "log_likelihood": log_prob})
+
+            # Check for early stopping
+            if loss < best_loss - self.min_delta:
+                best_loss = loss
+                epochs_since_improvement = 0
             else:
-                patience_counter += 1
-                if patience_counter >= self.patience:
-                    print(f"Early stopping at epoch {epoch}")
+                epochs_since_improvement += 1
+
+            # Early stopping if no improvement in 'patience' epochs 
+            if epochs_since_improvement >= self.patience:
+                print(f"Early stopping at epoch {epoch} with loss: {loss}")
                 break
 
-            # Keep track of negative total_epoch_loss for plotting an ELBO-like curve
-            train_elbo.append(-total_epoch_loss)
+            if epoch % self.print_epochs == 0:
+                print(f"Epoch {epoch}: Loss = {loss}, LR = {current_lr}, Log Likelihood = {log_prob}")
 
-        return train_elbo
-    
-    def get_cell_assignments(self):
+        print(f"Training completed after {epoch + 1} epochs.")
+        return losses
+
+    def collect_samples(self, guide, idx=None, predict=False):
+
+        N = self.y.size(0)  # Number of cells
+        print(f"Collecting samples across {N} cells.")
+
+        print(f"Predict: {predict}")
+
+        if idx is None:
+            idx = torch.arange(self.y.size(0))
+
+        kwargs = dict(
+            y=self.y,
+            total_counts=self.total_counts,
+            K=self.K,
+            junc_specific_prior=self.junc_specific_prior,
+            input_conc_prior=self.input_conc_prior,
+            idx=idx,
+            predict=predict
+             )
+        
+        _ = pyro.poutine.trace(guide).get_trace(**kwargs)
+        
+        samples = {}
+        for _ in range(self.num_samples):
+            trace = pyro.poutine.trace(guide).get_trace(**kwargs)
+            for name, node in trace.nodes.items():
+                if node["type"] == "sample":
+                    if name not in samples:
+                        samples[name] = []
+                    samples[name].append(node["value"].detach().cpu())
+        for name in samples:
+            samples[name] = torch.stack(samples[name], dim=0)
+        return samples
+
+    def calculate_summary_stats(self, samples):
+
+        stats = {}
+
+        for name, values_tensor in samples.items():
+
+            # Ensure the tensor is on CPU before converting to numpy
+            if values_tensor.is_cuda:
+                values_tensor = values_tensor.cpu()
+
+            stats[name] = {
+                'mean': torch.mean(values_tensor, dim=0).numpy(),
+                'std': torch.std(values_tensor, dim=0).numpy()
+            }
+        return stats
+
+    def full_plate(*args, **kwargs):
+        # Assume the full data is available via self.y.
+        # You might expect kwargs to include 'y' or 'idx'.
+        # We ignore subsampling and use full data.
+        # For example, use the number of cells from kwargs['y']:
+        if "y" in kwargs:
+            N = kwargs["y"].size(0)
+        else:
+            # Alternatively, assume the first argument is a tensor y:
+            N = args[0].size(0)
+        return pyro.plate("data_plate", size=N)
+
+    def train(self, num_initializations=3, seeds=None, psi_init=None, phi_init=None, save_to_file=False, file_prefix=None):
+
         """
-        Extract assignment values (cell factor activities) for all cells after training.
+        Train the model using SVI, collect samples, and return results.
+        Main function to fit our Leaflet Bayesian beta-dirichlet factor model.
+
+        Parameters:
+        - num_initializations (int): Number of random initializations.
+        - seeds (list, optional): List of seeds for random initializations.
+        - psi_init (torch.Tensor, optional): Pre-initialized values for psi.
+        - phi_init (torch.Tensor, optional): Pre-initialized values for assign (phi).
+        - save_to_file (bool): Whether to save the results to a file.
+        - file_prefix (str, optional): Prefix for the saved file name.
 
         Returns:
-        - assignments (np.ndarray): Array of shape [num_cells, K] with cell-to-factor assignments
+        - all_results (list): List of results containing losses, latent variables, and summary statistics.
+        - variable_sizes (dict): Dictionary containing sizes of model variables.
         """
 
-        # Make sure model is fitted
-        if self.guide is None:
-            raise ValueError("Model must be fit before extracting assignments")
+        # Generate random seeds if not provided
+        if seeds is None:
+            seeds = [random.randint(1, 10000) for _ in range(num_initializations)]
+            print(f"Random seeds: {seeds}")
 
-        batch_size = self.batch_size
-        dataloader = self.setup_data_loader(batch_size=batch_size)
+        all_results = []
+        pyro.clear_param_store()  # Clear previous optimizations
+        all_params = []
+        completed_inits = 0  # Track how many successful initializations
 
-        # Initialize array to hold results
-        all_assignments = np.zeros((self.num_cells, self.K))
+        # If num_initializations is 1, then save self.self.best_init to 0
+        if num_initializations == 1:
+            self.best_init = 0
 
-        # Set model to evaluation mode
-        with torch.no_grad():
-            for batch_idx, batch in enumerate(dataloader):
-                print(f"Processing batch {batch_idx+1}/{len(dataloader)} for assignments")
+        # Log model settings
+        print(f"Training LeafletFA with {num_initializations} initializations.")
+        print(f"Input concentration prior: {self.input_conc_prior}")
+        print(f"Junction-specific prior: {self.junc_specific_prior}")
+        print(f"Initial K to learn: {self.K}")
 
-                # Extract batch data
-                cell_indices = batch["cell_indices"].cpu().numpy()
-                y_batch = batch["y_values"]
-                total_counts_batch = batch["total_counts_values"]
-                mask_batch = batch["mask"]
+        if self.waypoints_use:
+            print(f"Initializing variational parameters with pre-defined PSI and PHI matrices!")
+        
+            # Dynamically select the correct PSI and PHI based on the value of K
+            psi_key = f"psi_init_{self.K}_waypoints"
+            phi_key = f"phi_init_{self.K}_waypoints"
 
-                # Move to GPU if needed
-                if self.device.type == "cuda":
-                    y_batch = y_batch.cuda()
-                    total_counts_batch = total_counts_batch.cuda()
-                    mask_batch = mask_batch.cuda()
+            if psi_key in self.adata.varm and phi_key in self.adata.obsm:
+                # Load the corresponding psi and phi initializations
+                psi_init = torch.tensor(self.adata.varm[psi_key]).T  # Transpose for correct shape
+                phi_init = torch.tensor(self.adata.obsm[phi_key])
 
-                # Run the guide to get posterior samples
-                guide_trace = poutine.trace(self.guide).get_trace(
-                    y_batch, total_counts_batch, mask_batch
-                )
+                print(f"Shape of PSI_init is {psi_init.shape}")
+                print(f"Shape of PHI_init is {phi_init.shape}")
+            else:
+                raise ValueError(f"PSI and PHI initializations for {K} waypoints not found in adata.varm or adata.obsm.")
+        else:
+            print(f"Random initialization of variational parameters!")
+            psi_init = None 
+            phi_init = None
 
-                # Extract assignment values from guide trace
-                if "assign" in guide_trace.nodes:
-                    # Get the raw assignment tensor
-                    assign_values = guide_trace.nodes["assign"]["value"]
+        # Only empty CUDA cache if using a GPU
+        if self.device.type == 'cuda':
+            torch.cuda.empty_cache()
 
-                    # Remove any extra dimensions (should be [batch_size, K] after squeezing)
-                    if len(assign_values.shape) > 2:
-                        assign_values = assign_values.squeeze(1)
+        for i, seed in enumerate(seeds):
 
-                    # Convert to probabilities if needed
-                    # For Dirichlet - values are already probabilities 
-                    # If using Normal guide, may need to do assign_probs = torch.softmax(assign_values, dim=-1)?
-                    assign_probs = assign_values
+            # Clear the parameter store for each initialization
+            pyro.clear_param_store()  
 
-                    # Convert to numpy
-                    batch_assignments = assign_probs.cpu().numpy()
+            print("-------------------------------------------------")
+            print(f"Initialization #{i+1} with seed {seed}", flush=True)
+            print("-------------------------------------------------")
 
-                    # Store in result array
-                    for i, cell_idx in enumerate(cell_indices):
-                        if i < len(batch_assignments):
-                            all_assignments[cell_idx] = batch_assignments[i]
+            # Set the seed for reproducibility
+            pyro.set_rng_seed(seed)
+            torch.manual_seed(seed)
+            random.seed(seed)
 
-        return all_assignments
+            # Define the guide (AutoGuideList for variational inference)
+            guide = AutoGuideList(self.model)
 
+            # Only include 'psi' in the guide if self.fixed_psi is None
+            if self.fixed_psi is None:
+                if psi_init is not None:
+                    guide.append(AutoDiagonalNormal(
+                        block(self.model, expose=['psi']),
+                        init_loc_fn=init_to_value(values={'psi': psi_init})
+                    ))
+                else:
+                    guide.append(AutoDiagonalNormal(block(self.model, expose=['psi'])))
 
+            # Guide for 'assign' with conditional initialization
+            if phi_init is not None:
+                guide.append(AutoDiagonalNormal(
+                    block(self.model, expose=['assign']),
+                    init_loc_fn=init_to_value(values={'assign': phi_init})
+                ))
+            else:
+                guide.append(AutoDiagonalNormal(block(self.model, expose=['assign'])))
 
+            # Guide for everything else (excluding 'psi' and 'assign')
+            guide.append(AutoDiagonalNormal(block(self.model, hide=['psi', 'assign'])))
+
+            # Fit the model using SVI
+            losses = self.fit(guide)
+
+            # Optionally plot loss
+            if self.loss_plot:
+                plt.plot(losses)
+                plt.xlabel("Epoch")
+                plt.ylabel("Loss")
+
+                # Format y-axis in scientific notation
+                plt.gca().yaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+                plt.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))  # Force scientific notation
+
+                plt.title(f"Loss Plot for Initialization #{i+1}")
+
+                if self.output_dir is not None:
+                    plot_filename = f"loss_curve_seed_{seed}.png"
+                    plot_filepath = os.path.join(self.output_dir, plot_filename)
+                    plt.savefig(plot_filepath)
+                    print(f"Loss plot saved to {plot_filepath}", flush=True)
+                else:
+                    print("No output directory specified, skipping loss plot save.")
+
+            # Collect samples from the trained guide
+            print(f"Collecting posterior samples for initialization #{i+1}", flush=True)
+            full_idx = torch.arange(self.y.size(0))
+            all_samples = self.collect_samples(guide, idx=full_idx, predict=True)
+
+            # add all_samples to self object
+            self.all_samples = all_samples
+
+            # Compute summary statistics for latent variables
+            # print(f"Computing summary statistics for initialization #{i+1}", flush=True)
+            # summary_stats = self.calculate_summary_stats(all_samples)
+
+            # Store results
+            all_results.append({
+                'seed': seed,
+                'losses': losses,
+                'latent_vars': all_samples }) #,  # Store all sampled latent variables
+           #     'summary_stats': summary_stats  # Store computed summary statistics
+           # })
+
+            # Store the parameters from the ParamStoreDict
+            # params_copy = {name: pyro.get_param_store().get_param(name).detach().clone()
+            #               for name in pyro.get_param_store().get_all_param_names()}
+            # all_params.append(params_copy)
+
+            # Move to the next initialization
+            completed_inits += 1
+
+        print("------------------------------------------------")
+        # print(f"Model variable sizes: {variable_sizes}", flush=True)
+        print("------------------------------------------------")
+
+        # Save results to file if required
+        if save_to_file:
+            print("Saving results to file.", flush=True)
+            date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            file_name = f"{file_prefix}_{date}_{self.K}_{num_initializations}_factors.pt" if file_prefix else f"results_{date}_{self.K}_{num_initializations}_factors.pt"
+            torch.save(all_results, file_name)
+            print(f"Results saved to {file_name}", flush=True)
+
+        # save these things to self. all_results, all_params, variable_sizes        
+        #self.latent_results = all_results
+        #self.all_params = all_params
+            
+    def get_best_initialization(self):
+        
+        """
+        Select the best initialization based on the lowest loss.
+        """
+        
+        best_init = np.argmin([result["losses"][-1] for result in self.latent_results])
+        best_elbo = self.latent_results[best_init]["losses"][-1]
+        print(f"The best initialization was {best_init} with an ELBO of {best_elbo}")
+
+        self.best_init = best_init
+        self.best_elbo = best_elbo
+
+    def get_psi_variational_params(self, initialization=None):
+        """
+        Extracts PSI variational parameters if PSI was learned.
+        If PSI was fixed, it simply uses the fixed PSI.
+        """
+    
+        if initialization is None:
+            initialization = self.best_init
+            
+        # Extract variational parameters if PSI was learned
+        print("Extracting variational parameters for PSI...")
+        self.psis_loc = self.all_params[initialization]["AutoGuideList.0.loc"].reshape(self.K, self.num_junctions)
+        self.psis_scale = self.all_params[initialization]["AutoGuideList.0.scale"].reshape(self.K, self.num_junctions)
+        
+        # Latent variables sampled from the guide
+        self.psi = self.latent_results[initialization]["summary_stats"]["psi"]["mean"]
+        self.a = self.latent_results[initialization]["summary_stats"]["a"]["mean"]
+        self.b = self.latent_results[initialization]["summary_stats"]["b"]["mean"]
+        self.a_shape = self.latent_results[initialization]["summary_stats"]["a_shape"]["mean"]
+        self.a_rate = self.latent_results[initialization]["summary_stats"]["a_rate"]["mean"]
+        self.b_shape = self.latent_results[initialization]["summary_stats"]["b_shape"]["mean"]
+        self.b_rate = self.latent_results[initialization]["summary_stats"]["b_rate"]["mean"]
+    
+        print("PSI parameters extraction completed.")
+
+    def get_pi(self, initialization=None):
+        """
+        Extract the Pi vector from the trained model.
+        """
+        if initialization is None:
+            initialization = self.best_init
+
+        self.alpha_pi = self.latent_results[initialization]["summary_stats"]["alpha_pi"]["mean"]
+        self.pi = self.latent_results[initialization]["summary_stats"]["pi"]["mean"]
+
+    def get_bb_conc(self, initialization=None):
+
+        if initialization is None:
+            initialization = self.best_init
+
+        # If input_conc was None extract it from latent variables 
+        if self.input_conc_prior is None:
+            self.bb_conc = self.latent_results[initialization]["summary_stats"]["bb_conc"]["mean"]
+        else:
+            self.bb_conc = "infinity"
+
+    def get_latent_representation(self, initialization=None):
+        """
+        Extract the latent representation from the trained model.
+        """
+        if initialization is None:
+            initialization = self.best_init
+        
+        latent_vars = self.latent_results[initialization]['summary_stats']
+        assign_post = latent_vars["assign"]["mean"]
+        self.assign_post = assign_post  
+
+    def get_all_variables(self, initialization=None):
+        """
+        Extract all variables from the best initialization:
+        This includes PSI, PI, BB_CONC, and the latent representation PHI.
+        """
+
+        self.get_best_initialization()
+
+        if initialization is None:
+            initialization = self.best_init
+
+        print(f"Extracting all variables from initialization #{initialization}")
+
+        print(f"Extracting PSI variational parameters...")
+        self.get_psi_variational_params(initialization)
+
+        print(f"Extracting the learned beta-binomial concentration (if applicable)...")
+        self.get_bb_conc(initialization)
+
+        print(f"Extracting the latent representation, C x K matrix of factor activities...")
+        self.get_latent_representation(initialization)
+
+        print(f"Extracting the learned Pi vector...")
+        self.get_pi(initialization)
+
+    def prune_K(self, threshold=0.005):
+        """Prunes latent variables based on a threshold."""
+        
+        print(f"The K before pruning is {self.K}")
+        
+        pruned_indices = np.where(self.pi > threshold)[0]
+        pruned_pi = self.pi[pruned_indices] / self.pi[pruned_indices].sum() # Re-normalize
+        # update self 
+        self.pi = pruned_pi
+        
+        pruned_assign_post = self.assign_post[:, pruned_indices]
+        pruned_assign_post = pruned_assign_post / pruned_assign_post.sum(axis=1, keepdims=True) # Re-normalize factor activities in cells 
+        self.assign_post = pruned_assign_post
+
+        psis_loc_pruned = self.psis_loc[pruned_indices]
+        psis_scale_pruned = self.psis_scale[pruned_indices]
+        self.psis_loc = psis_loc_pruned
+        self.psis_scale = psis_scale_pruned
+
+        psi_learned_pruned = self.psi[pruned_indices, :]
+        self.psi_learned = psi_learned_pruned
+
+        # Need to also prune the sampled PSI values from the guide 
+        pruned_psi_samples = self.all_samples["psi"][:, pruned_indices, :] # samples x K x junctions
+        self.psi_samples = pruned_psi_samples
+        pruned_phi_samples = self.all_samples["assign"][:, :, pruned_indices] # samples x cells x K
+        self.phi_samples = pruned_phi_samples
+
+        # Get a mean and std of the pruned psi samples for every factor-junction
+        psi_samples_mean = pruned_psi_samples.mean(dim=0)
+        psi_samples_std = pruned_psi_samples.std(dim=0)
+        self.psi_samples_mean = psi_samples_mean
+        self.psi_samples_std = psi_samples_std
+
+        if self.junc_specific_prior:
+            pruned_a = self.a[pruned_indices]
+            pruned_b = self.b[pruned_indices]
+            self.a = pruned_a
+            self.b = pruned_b
+
+        # pruned_pi, pruned_assign_post, psis_mus[pruned_indices], psis_loc[pruned_indices], psi_learned[pruned_indices]
+        print(f"The K after pruning is {len(pruned_indices)}")
+        print(f"Upating K to {len(pruned_indices)} in the LeafletFA object.")
+        self.K = len(pruned_indices)
+
+        

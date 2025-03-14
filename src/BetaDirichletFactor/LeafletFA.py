@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker  # Import ticker for scientific notation
 
 import torch
+from torch.optim import Adam
 import pyro
 import pyro.distributions as dist
 from torch.distributions import Distribution
@@ -16,13 +17,13 @@ from pyro.infer import SVI, Trace_ELBO, Predictive
 from pyro.infer.autoguide import (
     AutoGuideList, AutoDelta, AutoDiagonalNormal
 )
-from pyro.infer.autoguide.initialization import init_to_value, init_to_uniform
+from pyro.infer.autoguide.initialization import init_to_value
 from pyro import poutine
 
 from pyro.poutine import block
-from pyro.infer.autoguide.initialization import init_to_value
 from scipy.sparse import coo_matrix
 from torch.utils.data import Dataset, DataLoader
+import wandb 
 
 # Configure logging
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -36,8 +37,8 @@ print(f"CUDA Version: {torch.version.cuda}")
 
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
-                 waypoints_use=True, fixed_psi=None,
-                 eps = 1e-6, alpha_hyper = 5.0, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
+                 waypoints_use=True, fixed_psi=None, log_wandb=False,
+                 eps = 1e-6, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
                  ELBO_num_particles=1, patience=5, min_delta=0.01, num_samples=10, loss_plot=True, output_dir=None):
         """
         Initialize the LeafletFA model.
@@ -50,7 +51,6 @@ class LeafletFA:
         - waypoints_use (bool): Whether to use waypoints for initialization.
         - fixed_psi (torch.Tensor): Fix PSI during inference by using an existing PSI latent variable from previous model training.
         - eps (float): Small value to prevent numerical issues.
-        - alpha_hyper (float): Hyperparameter for the Dirichlet prior on Pi.
         - lr (float): Learning rate.
         - gamma (float): Learning rate decay.
         - num_epochs (int): Number of training epochs.
@@ -72,7 +72,6 @@ class LeafletFA:
         self.waypoints_use = waypoints_use
         self.fixed_psi = fixed_psi
         self.eps = eps
-        self.alpha_hyper = alpha_hyper
         self.lr = lr
         self.gamma = gamma
         self.num_epochs = num_epochs
@@ -83,11 +82,11 @@ class LeafletFA:
         self.num_samples = num_samples
         self.loss_plot = loss_plot
         self.output_dir = output_dir
+        self.log_wandb = log_wandb
         
         # Initialize other attributes
         self.guide = None
         self.losses = []
-        self.results = None
         self.variable_sizes = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -227,10 +226,8 @@ class LeafletFA:
             input_conc = self.convertr(input_conc_prior, "bb_conc")
 
             # Learnable priors for Gamma shape and rate
-            a_shape = pyro.sample("a_shape", dist.Gamma(1.0, 1.0))  # Learn shape
-            a_rate = pyro.sample("a_rate", dist.Gamma(1.0, 1.0))  # Learn rate
-            b_shape = pyro.sample("b_shape", dist.Gamma(1.0, 1.0))
-            b_rate = pyro.sample("b_rate", dist.Gamma(1.0, 1.0))
+            shape_prior = dist.Gamma(1.0, 1.0)
+            a_shape, a_rate, b_shape, b_rate = [pyro.sample(name, shape_prior) for name in ["a_shape", "a_rate", "b_shape", "b_rate"]]
 
             # Sample psi from a Beta distribution
             if junc_specific_prior:
@@ -258,7 +255,9 @@ class LeafletFA:
             input_conc = self.convertr(input_conc_prior, "bb_conc")
 
         # Sample Pi prior from a Dirichlet distribution
-        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * self.alpha_hyper / K))
+        # First sample alpha from a gamma distribution
+        alpha_pi = pyro.sample("alpha_pi", dist.Gamma(1.0, 1.0))
+        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha_pi / K))
         
         # Assert that pi sums to 1 and contains no NaN/inf values
         assert torch.isfinite(pi).all(), "pi contains NaN or infinite values!"
@@ -286,6 +285,10 @@ class LeafletFA:
         log_prob = self.log_prob_calc(y, total_counts, pred, input_conc) 
         assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
         pyro.factor("obs", log_prob) 
+
+        # Store log likelihood for tracking in wandb
+        self.current_log_prob = log_prob.item()
+
 
     def log_prob_calc(self, y, total_counts, pred, input_conc):
         """
@@ -315,7 +318,7 @@ class LeafletFA:
             raise ValueError("Mismatch between indices of y and total_counts.")
 
         # Extract success probabilities for the relevant indices
-        success_probs = pred[y_indices[0], y_indices[1]].clamp_(min=1e-6, max=1-1e-6)  # Prevent log issues
+        success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
 
         # Since input_conc has already been processed in the model, we just check for Binomial vs Beta-Binomial
         if torch.isinf(input_conc).any():
@@ -327,7 +330,8 @@ class LeafletFA:
             beta = (1 - success_probs) * input_conc
             log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
-        return log_probs.sum()
+        loss = log_probs.sum()        
+        return loss 
 
     def fit(self, guide):
         """
@@ -339,6 +343,7 @@ class LeafletFA:
         lrd = self.gamma ** (1 / self.num_epochs)
         scheduler = ClippedAdam({'lr': self.lr, 'lrd': lrd}) 
         loss = Trace_ELBO(num_particles=self.ELBO_num_particles) 
+        
         # SVI the step function minimizes the negative ELBO
         svi = SVI(self.model, guide, scheduler, loss)
 
@@ -363,8 +368,22 @@ class LeafletFA:
             loss = svi.step(self.y, self.total_counts, self.K, self.junc_specific_prior, self.input_conc_prior)
             losses.append(loss)
 
+            # Assuming a single parameter group:
+            current_lr = list(scheduler.optim_objs.values())[0].param_groups[0]['lr']
+
+            # Retrieve log likelihood from the model
+            log_prob = self.current_log_prob if hasattr(self, "current_log_prob") else None
+
+            # Log loss, log likelihood, learning rate, and latent variables in wandb
+            if self.log_wandb:
+                wandb.log({
+                    "epoch": epoch,
+                    "learning_rate": current_lr,
+                    "ELBO_loss": loss,
+                    "log_likelihood": log_prob})
+
             # Check for early stopping
-            if best_loss-loss > self.min_delta:
+            if loss < best_loss - self.min_delta:
                 best_loss = loss
                 epochs_since_improvement = 0
             else:
@@ -377,6 +396,7 @@ class LeafletFA:
 
             if epoch % self.print_epochs == 0:
                 print(f"Epoch {epoch}: Loss = {loss}")
+                print(f"The current learning rate is {current_lr}")
 
         print(f"Training completed after {epoch + 1} epochs.")
         return losses
@@ -603,7 +623,7 @@ class LeafletFA:
         self.latent_results = all_results
         self.all_params = all_params
         self.variable_sizes = variable_sizes
-
+            
     def get_best_initialization(self):
         
         """
@@ -628,7 +648,7 @@ class LeafletFA:
     
         if self.fixed_psi is not None:
             print("PSI was fixed during inference. Using the provided fixed PSI instead of learned variational parameters.")
-            self.psi = self.fixed_psi  # Use the fixed PSI directly
+            self.psi = self.fixed_psi.to(self.device)  # Use the fixed PSI directly
             self.psis_loc = None  # No variational parameters available
             self.psis_scale = None
             self.a = None
@@ -661,12 +681,14 @@ class LeafletFA:
         if initialization is None:
             initialization = self.best_init
 
+        # get alpha_pi from the guide also 
+        self.alpha_pi = self.latent_results[initialization]["summary_stats"]["alpha_pi"]["mean"]
         self.pi = self.latent_results[initialization]["summary_stats"]["pi"]["mean"]
 
     def get_bb_conc(self, initialization=None):
 
         if initialization is None:
-            initialization = self.best
+            initialization = self.best_init
 
         # If input_conc was None extract it from latent variables 
         if self.input_conc_prior is None:

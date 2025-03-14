@@ -18,15 +18,18 @@ print(f"All outputs will be saved in {base_output_dir}")
 
 # Define parameter grid
 param_grid = {
-    "input_conc": [None, 'inf'],  # 'inf' will be converted to torch.tensor(np.inf)
+    "input_conc": [None],  # 'inf' will be converted to torch.tensor(np.inf)
     "junc_specific_prior": [True],
     "K": [30, 100],
     "waypoints_use": [True],
     "num_inits": [1],
-    "ELBO_num_particles": [5],
+    "ELBO_num_particles": [2],
     "num_samples": [100],
-    "lr": [0.2],
-    "num_epochs": [200]
+    'gamma': [0.05],
+    'min_delta': [50],
+    "lr": [0.9],
+    "num_epochs": [5, 200],
+    "patience": [3],
 }
 
 # Generate all parameter combinations

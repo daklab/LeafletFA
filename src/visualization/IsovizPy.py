@@ -202,6 +202,7 @@ def convert_junction_ids(df):
 
 def plot_exons_and_junctions(
     db,
+    atse, 
     transcript_data,
     splice_junctions,
     region_start,
@@ -373,7 +374,7 @@ def plot_exons_and_junctions(
     ax.set_ylim([-1, y_offset])
     ax.set_xlabel("Genomic Position", fontsize=12)
     ax.set_title(
-        f"Splice Junctions and Exons for Gene {gene_name} \n(ID: {gene_id}, Strand: {gene_strand})",
+        f"Splice Junctions and Exons for Gene {gene_name} \n(ID: {gene_id}, Strand: {gene_strand} \nATSE: {atse})",
         fontsize=12,
     )
     ax.set_yticks([])
@@ -549,6 +550,7 @@ def plot_isoforms(
     transcript_data,
     region_start,
     region_end,
+    transcript_order=None, #list of transcript_names
     base_width=8,
     fixed_height=False, 
     fixed_height_value=8,
@@ -601,7 +603,8 @@ def plot_isoforms(
         reverse_transform_x = lambda x: x
 
     # Plot each transcript's exons, CDS, and introns
-    for transcript_id, transcript_info in transcript_data.items():
+    for transcript_id in transcript_order:
+        transcript_info = transcript_data[transcript_id]
 
         # Plot exons
         for exon_start, exon_end in transcript_info["exons"]:

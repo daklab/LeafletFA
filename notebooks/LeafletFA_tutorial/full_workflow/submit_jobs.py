@@ -4,7 +4,7 @@ import datetime
 
 # Define where to save outputs 
 # Should be directory in which model params are saved
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-02-21/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-13/"
 
 # Load parameter list from JSON file
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")
@@ -25,8 +25,7 @@ job_script_template = """#!/bin/bash
 #SBATCH --error={log_dir}/leaflet_{job_id}.err
 #SBATCH --time=3-00:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=600G
-#SBATCH --partition=bigmem
+#SBATCH --mem=200G
 
 # Set Python to run in unbuffered mode to ensure real-time output
 export PYTHONUNBUFFERED=1
