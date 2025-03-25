@@ -33,8 +33,8 @@ print(f"Number of junction files going in to the analysis: {len(junction_files)}
 # Set up parameters for junction processing
 min_intron = 50
 max_intron = 500000
-min_junc_reads = 20 
-min_num_cells_wjunc = 2
+min_junc_reads = 200 
+min_num_cells_wjunc = 10
 batch_size = 32
 num_workers = 10
 
@@ -50,7 +50,7 @@ reader = JunctionReader(batch_size=batch_size,
                         num_workers=num_workers)
 
 # For testing, sample 100 junction files
-junction_files = junction_files.sample(50)
+junction_files = junction_files.sample(100)
 
 # Process and filter junctions
 # Note: if you have a large number of junctions (e.g. > 1000),
@@ -104,7 +104,7 @@ output_file = os.path.join(output_path, atse_file)
 atse_analyzer.save_atse_file(ATSE_lablled, filtered_junctions, output_file)
 # 
 # # Visualize random ATSEs
-p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-03-03_test_atse_file.txt.gz", sep="\t")
+p=pd.read_csv("/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/ATSEmap/output/2025-03-24_test_atse_file.txt.gz", sep="\t")
 db = gffutils.FeatureDB("gencodeVM19", keep_order=True)
 atse_event = p.sample(1)["event_id"].values[0]
 juncs = p[p["event_id"]==atse_event]
@@ -121,5 +121,5 @@ unique_transcripts = list({transcript for label in junction_annotation_results f
 # Fetch transcript exon coordinates and determine plot boundaries
 transcript_data = ja.fetch_transcripts_and_annotations(db, unique_transcripts)
 region_start, region_end = ja.determine_region_boundaries(splice_junctions)
-ja.plot_exons_and_junctions(db, transcript_data, splice_junctions, region_start, region_end, base_width=8, trans_height=0.5, show_usage=False, show_junc_lines=True)
+ja.plot_exons_and_junctions(db, atse_event, transcript_data, splice_junctions, region_start, region_end, base_width=8, trans_height=0.5, show_usage=False, show_junc_lines=True)
 

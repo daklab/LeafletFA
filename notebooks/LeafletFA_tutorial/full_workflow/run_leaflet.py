@@ -52,7 +52,7 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-13/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-25/"
 print(f"Base output directory: {base_output_dir}")
 
 # Get parameter set ID from command line
@@ -94,11 +94,11 @@ wandb.init(
 wandb.config.update({
     "param_id": param_id,
     "data_source": "TabulaSenis",
-    "anndata_file": "TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad",
+    "anndata_file": "TMS_Anndata_ATSE_counts_with_waypoints_20250325_171641.h5ad",
 })
 
 # Load Anndata file
-ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/ALL_CELLS/022025/TMS_Anndata_ATSE_counts_with_waypoints_20250209_165655.h5ad"
+ATSE_anndata_file = "/gpfs/commons/groups/knowles_lab/Karin/TMS_MODELING/DATA_FILES/ALL_CELLS/022025/TMS_Anndata_ATSE_counts_with_waypoints_20250325_171641.h5ad"
 
 print(f"Loading Anndata file: {ATSE_anndata_file}")
 adata = ad.read_h5ad(ATSE_anndata_file)
@@ -112,7 +112,6 @@ wandb.log({
     "gamma_decay": params["gamma"],
     "inital_K": params["K"]
 })
-
 
 # Initialize model
 print("Initializing LeafletFA model...")

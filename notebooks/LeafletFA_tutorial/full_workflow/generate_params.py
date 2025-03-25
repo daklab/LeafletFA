@@ -23,13 +23,13 @@ param_grid = {
     "K": [30, 100],
     "waypoints_use": [True],
     "num_inits": [1],
-    "ELBO_num_particles": [2],
+    "ELBO_num_particles": [5],
     "num_samples": [100],
     'gamma': [0.05],
     'min_delta': [50],
-    "lr": [0.9],
-    "num_epochs": [5, 200],
-    "patience": [3],
+    "lr": [0.8],
+    "num_epochs": [5, 500],
+    "patience": [5],
 }
 
 # Generate all parameter combinations

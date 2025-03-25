@@ -14,14 +14,9 @@ from sklearn.metrics import precision_recall_curve, auc
 import sys 
 import os 
 
-
 def calculate_silhouette_score(assign_post, cell_types):
     """Calculates silhouette score for the factor assignments."""
     return silhouette_score(assign_post, cell_types)
-
-# TO-DO: INSTEAD OF DOING DS BETWEEN FACTORS, DO DS BETWEEN CELL TYPES
-# JUST LOOK AT FACTOR ACTITIES VIA PHI AND PSI FOR PHI[CELL_TYPE, FACTOR] AND PSI[FACTOR, JUNCTION]
-# VERSUS PHI[CELL_TYPE, FACTOR] AND PSI[FACTOR, JUNCTION] FOR ALL OTHER CELL TYPES
 
 def plot_psi_distribution(psi_samples, junction_idx=None, ref_factor=None):
 
@@ -69,6 +64,22 @@ def plot_psi_distribution(psi_samples, junction_idx=None, ref_factor=None):
     print(f"The mean PSI of Reference Factor ({ref_factor}): {psi_ref.mean():.4f}")
     print(f"The mean PSI of Other Factors: {psi_nonref.mean():.4f}")
 
+def sample_rho_posterior(leaflet_model, n_samples=1000):
+    # y_cj ~ BetaBinomial(T_cj | alpha, rho_cj)
+    # rho_cj ~ Beta(alpha * rho_cj, alpha * (1 - rho_cj))
+    # y_cj | rho_cj ~ Binomial(T_cj , rho_cj)
+    # rho_cj | y_cj, rho_cj, T_cj  ~ Beta(y_cj + alpha * rho_cj, T_cj - y_cj + alpha * (1 - rho_cj))
+
+    y = leaflet_model.y
+    T = leaflet_model.total_counts
+    alpha = leaflet_model.bb_conc 
+    psi = leaflet_model.psi_samples  
+
+    # Sample psi as I do now but plus into Beta and sample from that 
+    sampled_rho = torch.zeros_like(psi) 
+    # define beta distribution to sample from 
+    beta_dist = torch.distributions.Beta(y + (alpha * psi), (T-y) + (alpha * (1 - psi)))
+
 
 def compute_psi_effect_size(psi_samples, factor_idx, junction_idx, min_effect_size=0.1):
     """
@@ -104,8 +115,12 @@ def compute_psi_effect_size(psi_samples, factor_idx, junction_idx, min_effect_si
     effect_size_mean = psi_diff_samples.mean()
     effect_size_var = psi_diff_samples.var()
 
+    prob_positive = (psi_diff_samples > 0).float().mean()   
+    prob_negative = (psi_diff_samples < 0).float().mean()
+    prob_greater = torch.maximum(prob_positive, prob_negative)
+
     # Compute probability of effect size being greater than the threshold
-    prob_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().mean()
+    # prob_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().mean()
     num_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().sum()
     prob_lessoreq = 1 - prob_greater
 
@@ -159,15 +174,8 @@ def compute_junctions_significance_psi(effect_sizes, fdr_threshold, min_effect_s
     fdrs_original_order[sorted_idx] = fdrs  # Undo sorting
 
     # Identify significant junctions based on FDR threshold
-    significant = fdrs_original_order <= fdr_threshold  # Directly apply FDR cutoff
-
-    # Find the last rank where FDR is within threshold
-    if np.any(fdrs <= fdr_threshold):
-        last_sig_index = np.max(np.where(fdrs <= fdr_threshold)[0])  # Last valid discovery
-        significant[sorted_idx[:last_sig_index + 1]] = True
-
-    # Apply effect size threshold separately
-    significant = significant & (np.abs(beta) > min_effect_size)
+    # Find the last rank where FDR is within threshold and apply effect size threshold separately
+    significant = (fdrs_original_order <= fdr_threshold) & (np.abs(beta) > min_effect_size)
 
     # Count number of significant junctions
     n_significant = np.sum(significant)
@@ -234,10 +242,6 @@ def analyze_all_factors_psi(
 
     return results
 
-## this function is for doing differential splicing between predefined cell types 
-## can be one cell type vs all others or pairwise if two cell types are provided
-## but need to fix first 
-## NEW
 
 def compute_differential_splicing_groups(
     adata, psi_samples, phi_samples, junction_idx, 
@@ -382,122 +386,5 @@ def compute_junctions_significance_groups(effect_sizes, fdr_threshold=0.05, min_
 
     return results_df
 
-# TO-DO: FIX THE CALIBRATION TEST TO WORK WITH THE NEW ANALYSIS FUNCTION
-def calibration_test(leaflet_model, true_positive_junctions, min_effect_size=None, fdr_thresholds=[0.01, 0.05, 0.1, 0.2]):
-    """
-    Tests calibration of the Bayesian FDR control by comparing expected vs. observed FDR.
 
-    Args:
-        leaflet_model: LeafletFA model object.
-        true_positive_junctions (set): Indices of true differentially spliced junctions (for empirical FDR calculation).
-        fdr_thresholds (list): List of FDR thresholds to test.
 
-    Returns:
-        DataFrame with expected vs. observed FDR values.
-    """
-    results = []
-
-    for fdr in fdr_thresholds:
-        print(f"Running with FDR threshold: {fdr}")
-        results_dict, results_df = analyze_differential_splicing(leaflet_model, fdr_threshold=fdr, min_effect_size=min_effect_size)
-
-        # Extract discovered junctions
-        discovered_junctions = set(results_df[results_df['significant']].junction_idx)
-
-        # Compute observed FDR
-        false_positives = discovered_junctions - true_positive_junctions
-        observed_fdr = len(false_positives) / max(len(discovered_junctions), 1)  # Avoid division by zero
-
-        # Store results
-        results.append({'FDR_threshold': fdr, 'Observed_FDR': observed_fdr, 'Total Discoveries': len(discovered_junctions)})
-
-    # Convert to DataFrame
-    df_results = pd.DataFrame(results)
-
-    # Plot expected vs. observed FDR
-    plt.figure(figsize=(6, 5))
-    plt.plot(df_results['FDR_threshold'], df_results['FDR_threshold'], '--', label="Ideal Calibration (y=x)")
-    plt.scatter(df_results['FDR_threshold'], df_results['Observed_FDR'], color='red', label="Observed FDR")
-    plt.xlabel("Expected FDR Threshold")
-    plt.ylabel("Observed FDR")
-    plt.legend()
-    plt.title("FDR Calibration Test")
-    plt.show()
-    return df_results
-
-def plot_precision_recall_curve(adata_input, results_df, output_dir=None):
-    """
-    Plots a Precision-Recall (PR) curve for differential splicing analysis.
-    
-    Args:
-        adata_input: AnnData object containing true labels in `adjusted_true_label`.
-        results_df: DataFrame containing posterior probabilities (`prob_greater`) from `analyze_differential_splicing`.
-
-    Returns:
-        Plots the PR curve.
-    """
-    # Ensure labels are binary (1 = True DS, 0 = Not DS)
-    true_labels = (adata_input.var["adjusted_true_label"] == "positive").astype(int).values
-
-    # Use posterior probability as score
-    predicted_scores = results_df["prob_greater"].values
-
-    # Compute precision, recall, and thresholds
-    precision, recall, thresholds = precision_recall_curve(true_labels, predicted_scores)
-
-    # Compute area under PR curve (AUC-PR)
-    auc_pr = auc(recall, precision)
-
-    # Plot Precision-Recall curve
-    plt.figure(figsize=(7, 5))
-    plt.plot(recall, precision, marker='.', label=f'PR Curve (AUC = {auc_pr:.2f})')
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve for Differential Splicing')
-    plt.legend()
-    plt.grid()
-    
-    if output_dir is not None:
-        plt.savefig(os.path.join(output_dir, "precision_recall_curve.png"))
-    
-    plt.show()
-    return precision, recall, auc_pr
-
-def plot_roc_curve(adata_input, results_df, output_dir=None):
-    """
-    Plots a Receiver Operating Characteristic (ROC) curve for differential splicing analysis.
-
-    Args:
-        adata_input: AnnData object containing true labels in `adjusted_true_label`.
-        results_df: DataFrame containing posterior probabilities (`prob_greater`) from `analyze_differential_splicing`.
-
-    Returns:
-        Plots the ROC curve and prints the AUC.
-    """
-    # Ensure labels are binary (1 = True DS, 0 = Not DS)
-    true_labels = (adata_input.var["adjusted_true_label"] == "positive").astype(int).values
-
-    # Use posterior probability as score
-    predicted_scores = results_df["prob_greater"].values
-
-    # Compute ROC curve
-    fpr, tpr, thresholds = roc_curve(true_labels, predicted_scores)
-
-    # Compute area under ROC curve (AUC-ROC)
-    auc_roc = auc(fpr, tpr)
-
-    # Plot ROC curve
-    plt.figure(figsize=(7, 5))
-    plt.plot(fpr, tpr, marker='.', label=f'ROC Curve (AUC = {auc_roc:.2f})')
-    plt.plot([0, 1], [0, 1], linestyle='--', color='grey')  # Random chance line
-    plt.xlabel('False Positive Rate (FPR)')
-    plt.ylabel('True Positive Rate (TPR)')
-    plt.title('ROC Curve for Differential Splicing')
-    plt.legend()
-    plt.grid()
-
-    if output_dir is not None:
-        plt.savefig(os.path.join(output_dir, "roc_curve.png"))
-
-    plt.show()  # Display plot after saving
-    return fpr, tpr, auc_roc

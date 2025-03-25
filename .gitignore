@@ -13,4 +13,6 @@ src/beta-binomial-lda/*.npz
 src/visualization/gencode_mm10.db
 src/visualization/human_v47_gencode_annotation
 src/visualization/human_v47_gencode_basic
+src/visualization/human_v47_comp_anno
 src/clustering/gencodeVM19
+gencodeVM19

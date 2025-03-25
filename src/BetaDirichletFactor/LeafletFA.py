@@ -169,6 +169,10 @@ class LeafletFA:
             device=float_type["device"]
         )
 
+        # clean up memory
+        del ycount
+        torch.cuda.empty_cache()
+
         # Extract cluster counts (ATSE counts for all junctions in it)
         total_counts_array = np.array(self.adata.layers["Cluster_Counts"].data)
         total_counts_tensor = torch.tensor(total_counts_array, **float_type)
@@ -182,7 +186,7 @@ class LeafletFA:
         )
 
         # Clean up memory
-        del cell_index_tensor, junc_index_tensor, ycount, total_counts_tensor
+        del cell_index_tensor, junc_index_tensor, total_counts_tensor
         torch.cuda.empty_cache()
         
         # Add the tensors to the self object
@@ -278,8 +282,25 @@ class LeafletFA:
         assign = assign.to(self.device, dtype=torch.float32)
         psi = psi.to(self.device, dtype=torch.float32)
 
-        # Get the predicted success probabilities for each junction
-        pred = torch.matmul(assign, psi).to(self.device)
+        # Extract indices of nonzero elements in y and total_counts
+        y_indices = y._indices()
+        total_counts_indices = total_counts._indices()
+
+        if not torch.equal(y_indices, total_counts_indices):
+            raise ValueError("Mismatch between indices of y and total_counts.")
+
+        # Compute predicted probabilities only at these indices
+        # pred = torch.matmul(assign, psi).to(self.device)
+
+        # get the sparse indices once
+        cell_idx, junc_idx = y._indices()
+
+        device = self.device  # or infer from y.device
+        assign_sel = assign[cell_idx.to(device)]  # shape: (nnz, K)
+        psi_sel = psi.t()[junc_idx.to(device)] # shape: (K, nnz) post transform 
+
+        # Compute the dot product for each (cell, junction) pair:
+        pred = (assign_sel * psi_sel).sum(dim=1) # should be equivalent to pred[i] = dot(assign[cell_idx[i]], psi[:, junc_idx[i]])
 
         # Compute the log probability of the observed data under either a Binomial or Beta-Binomial likelihood 
         log_prob = self.log_prob_calc(y, total_counts, pred, input_conc) 
@@ -318,7 +339,9 @@ class LeafletFA:
             raise ValueError("Mismatch between indices of y and total_counts.")
 
         # Extract success probabilities for the relevant indices
-        success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
+        # success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
+        # pred is now in sparse format containing values just for the non-zero elements
+        success_probs = pred.clamp(min=1e-6, max=1-1e-6)
 
         # Since input_conc has already been processed in the model, we just check for Binomial vs Beta-Binomial
         if torch.isinf(input_conc).any():

@@ -92,6 +92,8 @@ class LeafletFA:
         self.variable_sizes = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        print(f"Batch size for training: {self.batch_size} cells")
+
         # If fixed PSI is provided, disable waypoint initialization
         if self.fixed_psi is not None:
             if self.waypoints_use:
@@ -255,31 +257,22 @@ class LeafletFA:
         #    pyro.plate(...) with size=N, subsample=idx
         #    so that your local variable "assign" is only length == len(idx)
         #    but is an unbiased sample from the “full” dimension of size=N.
-        if predict or idx is None or len(idx) == N:
-             # Use full plate (no subsampling)
-             with pyro.plate("data_plate", size=N) as plate_idx:
-                batch_size = N
-                conc_vec = (pi * conc).expand([batch_size, self.K])
-                assign = pyro.sample("assign", dist.Dirichlet(conc_vec))
-                assign = torch.clamp(assign, min=1e-8)
-                assign /= assign.sum(dim=1, keepdim=True)
-                print(f"Getting predictions for {N} cells.")
-        else:
-            with pyro.plate("data_plate", size=N, subsample=idx) as subsample_idx:
-
-                # subsample_idx is effectively the same as idx but
-                # ensures Pyro does the correct book‐keeping internally.
-                batch_size = len(subsample_idx)
-                # Expand the concentration vector to shape [batch_size, K]
-                conc_vec = (pi * conc).expand([batch_size, self.K])
-
-                # 4a) local "assign" – shape [len(subsample_idx), K]
-                assign = pyro.sample("assign", dist.Dirichlet(conc_vec))
-
-                # Make sure to clamp or re-normalize if necessary
-                # if any numerical issues arise:
-                assign = torch.clamp(assign, min=1e-8)
-                assign /= assign.sum(dim=1, keepdim=True)
+        if idx is None:
+            # Use full data
+            idx = torch.arange(N, device=self.device)
+    
+        with pyro.plate("data_plate", size=N, subsample=idx) as subsample_idx:
+            # subsample_idx is effectively the same as idx but
+            # ensures Pyro does the correct book‐keeping internally.
+            batch_size = len(subsample_idx)
+            # Expand the concentration vector to shape [batch_size, K]
+            conc_vec = (pi * conc).expand([batch_size, self.K])
+            # 4a) local "assign" – shape [len(subsample_idx), K]
+            assign = pyro.sample("assign", dist.Dirichlet(conc_vec))
+            # Make sure to clamp or re-normalize if necessary
+            # if any numerical issues arise:
+            assign = torch.clamp(assign, min=1e-8)
+            assign /= assign.sum(dim=1, keepdim=True)
 
         # 5) Now subset the data for the same mini-batch
         # --------------------------------------------------
@@ -490,38 +483,85 @@ class LeafletFA:
         return losses
 
     def collect_samples(self, guide, idx=None, predict=False):
+        """
+        Collect samples from the trained model for all cells or a specified subset.
 
-        N = self.y.size(0)  # Number of cells
+        Parameters:
+        - guide: Trained variational guide
+        - idx: Optional indices of cells to collect samples for (default: all cells)
+        - predict: Whether to use prediction mode
+
+        Returns:
+        - Dictionary of samples for each latent variable
+        """
+        N = self.y.size(0)  # Total number of cells
         print(f"Collecting samples across {N} cells.")
 
-        print(f"Predict: {predict}")
-
+        # If idx is None, use all cells
         if idx is None:
-            idx = torch.arange(self.y.size(0))
+            idx = torch.arange(N, device=self.device)
 
-        kwargs = dict(
-            y=self.y,
-            total_counts=self.total_counts,
-            K=self.K,
-            junc_specific_prior=self.junc_specific_prior,
-            input_conc_prior=self.input_conc_prior,
-            idx=idx,
-            predict=predict
-             )
-        
-        _ = pyro.poutine.trace(guide).get_trace(**kwargs)
-        
-        samples = {}
-        for _ in range(self.num_samples):
-            trace = pyro.poutine.trace(guide).get_trace(**kwargs)
-            for name, node in trace.nodes.items():
-                if node["type"] == "sample":
-                    if name not in samples:
-                        samples[name] = []
-                    samples[name].append(node["value"].detach().cpu())
-        for name in samples:
-            samples[name] = torch.stack(samples[name], dim=0)
-        return samples
+        # For prediction mode, we'll collect all samples directly without batching
+        if predict:
+            print(f"Running full prediction for all {len(idx)} cells")
+
+            # Run the guide once with all cells to get global variables
+            kwargs = dict(
+                y=self.y,
+                total_counts=self.total_counts,
+                K=self.K,
+                junc_specific_prior=self.junc_specific_prior,
+                input_conc_prior=self.input_conc_prior,
+                idx=idx,
+                predict=True
+            )
+
+            # Initialize sample storage
+            samples = {}
+
+            # Collect samples
+            for i in range(self.num_samples):
+                print(f"Collecting sample {i+1}/{self.num_samples}")
+                trace = pyro.poutine.trace(guide).get_trace(**kwargs)
+
+                for name, node in trace.nodes.items():
+                    if node["type"] == "sample":
+                        if name not in samples:
+                            samples[name] = []
+                        # Detach and move to CPU to save GPU memory
+                        samples[name].append(node["value"].detach().cpu())
+
+            # Stack samples for each variable
+            for name in samples:
+                samples[name] = torch.stack(samples[name], dim=0)
+
+            return samples
+        else:
+            # Original behavior for non-prediction scenarios
+            kwargs = dict(
+                y=self.y,
+                total_counts=self.total_counts,
+                K=self.K,
+                junc_specific_prior=self.junc_specific_prior,
+                input_conc_prior=self.input_conc_prior,
+                idx=idx,
+                predict=predict
+            )
+
+            samples = {}
+            for _ in range(self.num_samples):
+                trace = pyro.poutine.trace(guide).get_trace(**kwargs)
+                for name, node in trace.nodes.items():
+                    if node["type"] == "sample":
+                        if name not in samples:
+                            samples[name] = []
+                        samples[name].append(node["value"].detach().cpu())
+
+            for name in samples:
+                samples[name] = torch.stack(samples[name], dim=0)
+
+            return samples    
+
 
     def calculate_summary_stats(self, samples):
 
@@ -538,18 +578,6 @@ class LeafletFA:
                 'std': torch.std(values_tensor, dim=0).numpy()
             }
         return stats
-
-    def full_plate(*args, **kwargs):
-        # Assume the full data is available via self.y.
-        # You might expect kwargs to include 'y' or 'idx'.
-        # We ignore subsampling and use full data.
-        # For example, use the number of cells from kwargs['y']:
-        if "y" in kwargs:
-            N = kwargs["y"].size(0)
-        else:
-            # Alternatively, assume the first argument is a tensor y:
-            N = args[0].size(0)
-        return pyro.plate("data_plate", size=N)
 
     def train(self, num_initializations=3, seeds=None, psi_init=None, phi_init=None, save_to_file=False, file_prefix=None):
 
@@ -677,14 +705,9 @@ class LeafletFA:
                 else:
                     print("No output directory specified, skipping loss plot save.")
 
-            # Collect samples from the trained guide
+            # Collect samples from the trained guide - MODIFIED HERE
             print(f"Collecting posterior samples for initialization #{i+1}", flush=True)
-            full_idx = torch.arange(self.y.size(0))
-            all_samples = self.collect_samples(guide, idx=full_idx, predict=True)
-
-            # add all_samples to self object
-            self.all_samples = all_samples
-
+                
             # Compute summary statistics for latent variables
             # print(f"Computing summary statistics for initialization #{i+1}", flush=True)
             # summary_stats = self.calculate_summary_stats(all_samples)
@@ -692,8 +715,7 @@ class LeafletFA:
             # Store results
             all_results.append({
                 'seed': seed,
-                'losses': losses,
-                'latent_vars': all_samples }) #,  # Store all sampled latent variables
+                'losses': losses})
            #     'summary_stats': summary_stats  # Store computed summary statistics
            # })
 
