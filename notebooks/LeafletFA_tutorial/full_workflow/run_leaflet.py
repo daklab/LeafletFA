@@ -52,7 +52,7 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-25/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-27/"
 print(f"Base output directory: {base_output_dir}")
 
 # Get parameter set ID from command line
@@ -136,6 +136,8 @@ leaflet_model = LeafletFA.LeafletFA(
 # Train model
 print("Training LeafletFA model...")
 leaflet_model.from_anndata()
+# Initialize triton mask 
+leaflet_model.initialize_triton_mask()
 leaflet_model.train(num_initializations=params["num_inits"])
 
 print("Training complete, extracting results...")

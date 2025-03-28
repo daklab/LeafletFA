@@ -24,6 +24,7 @@ from pyro.poutine import block
 from scipy.sparse import coo_matrix
 from torch.utils.data import Dataset, DataLoader
 import wandb 
+from tqdm import tqdm
 
 # Configure logging
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -35,6 +36,14 @@ Distribution.set_default_validate_args(False)
 print(f"Torch Version: {torch.__version__}")
 print(f"CUDA Version: {torch.version.cuda}")
 
+# Load leaflet_fa_torch_ops
+# from leaflet_fa_torch_ops import masked_matmul
+# from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
+import sys
+sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src')
+from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
                  waypoints_use=True, fixed_psi=None, log_wandb=False,
@@ -193,6 +202,20 @@ class LeafletFA:
         self.y = full_y_tensor
         self.total_counts = full_total_counts_tensor
 
+    def initialize_triton_mask(self):
+        """Precomputes the binary mask needed for masked matrix multiplication."""
+        cell_idx, junc_idx = self.y._indices()
+        C, J = self.y.shape
+        mask = torch.zeros((C, J), device=self.device)
+        mask[cell_idx, junc_idx] = 1.0
+        self.triton_mask = mask
+    
+    def compute_pred_triton(self, assign, psi):
+        out = masked_matmul(assign.to(self.device), psi.to(self.device), self.triton_mask)
+        print(out.requires_grad) 
+        cell_idx, junc_idx = self.y._indices()
+        return out[cell_idx, junc_idx]
+
     def model(self, y=None, total_counts=None, K=None, junc_specific_prior=None, input_conc_prior=None):
 
         """
@@ -291,26 +314,54 @@ class LeafletFA:
 
         # Compute predicted probabilities only at these indices
         # pred = torch.matmul(assign, psi).to(self.device)
+        if not hasattr(self, "triton_mask"):
+            raise RuntimeError("You must call `initialize_triton_mask()` before training.")
+        
+        cell_idx, junc_idx = self.y._indices()
+        
+        # Compute log-probability
+        # if on CPU do full matrix multiplication and not triton 
+        if self.device.type == 'cpu':
+            cell_idx, junc_idx = self.y._indices()
+            pred_vanilla = torch.matmul(assign, psi).to(self.device)
+            pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
 
-        # get the sparse indices once
-        cell_idx, junc_idx = y._indices()
+            log_prob = self.log_prob_calc(y, total_counts, pred_vanilla_sparse, input_conc)
+            print(f"The log probability via dense matmul {log_prob}")
+            # Validate for numerical issues
+            assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
+        else:
+            # Use Triton for GPU-accelerated matrix multiplication
+            pred_triton = self.compute_pred_triton(assign, psi)
+            print("Requires grad:", pred_triton.requires_grad)  # Should now be True
 
-        device = self.device  # or infer from y.device
-        assign_sel = assign[cell_idx.to(device)]  # shape: (nnz, K)
-        psi_sel = psi.t()[junc_idx.to(device)] # shape: (K, nnz) post transform 
+            log_prob = self.log_prob_calc_sparse(y, total_counts, pred_triton, input_conc)
+            print(f"The log probability via sparse matmul is {log_prob}")
+            # Validate for numerical issues
+            assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
 
-        # Compute the dot product for each (cell, junction) pair:
-        pred = (assign_sel * psi_sel).sum(dim=1) # should be equivalent to pred[i] = dot(assign[cell_idx[i]], psi[:, junc_idx[i]])
+        # Add to Pyro trace
+        pyro.factor("obs", log_prob)
 
-        # Compute the log probability of the observed data under either a Binomial or Beta-Binomial likelihood 
-        log_prob = self.log_prob_calc(y, total_counts, pred, input_conc) 
-        assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
-        pyro.factor("obs", log_prob) 
+    def log_prob_calc_sparse(self, y, total_counts, pred_triton, input_conc):
 
-        # Store log likelihood for tracking in wandb
-        self.current_log_prob = log_prob.item()
-
-
+        y_values = y._values()
+        total_counts_values = total_counts._values()
+        success_probs = pred_triton.clamp(min=1e-6, max=1-1e-6)
+  
+        # Check consistency
+        assert y_values.shape == total_counts_values.shape == success_probs.shape, \
+            f"Shape mismatch: y={y_values.shape}, total={total_counts_values.shape}, pred={success_probs.shape}"
+    
+        if torch.isinf(input_conc).any():
+            log_probs = dist.Binomial(total_counts_values, probs=success_probs).log_prob(y_values)
+        else:
+            alpha = success_probs * input_conc
+            beta = (1 - success_probs) * input_conc
+            log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
+    
+        return log_probs.sum()
+    
     def log_prob_calc(self, y, total_counts, pred, input_conc):
         """
         Compute the log probability of observed data under either a binomial or beta-binomial distribution,
@@ -341,6 +392,7 @@ class LeafletFA:
         # Extract success probabilities for the relevant indices
         # success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
         # pred is now in sparse format containing values just for the non-zero elements
+       
         success_probs = pred.clamp(min=1e-6, max=1-1e-6)
 
         # Since input_conc has already been processed in the model, we just check for Binomial vs Beta-Binomial
@@ -351,9 +403,11 @@ class LeafletFA:
             # Beta-Binomial likelihood
             alpha = success_probs * input_conc
             beta = (1 - success_probs) * input_conc
+
             log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
 
-        loss = log_probs.sum()        
+        loss = log_probs.sum() 
+        # print(f"The overall Log Likelihood is {loss}")
         return loss 
 
     def fit(self, guide):

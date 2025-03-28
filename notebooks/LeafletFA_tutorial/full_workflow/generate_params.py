@@ -23,12 +23,12 @@ param_grid = {
     "K": [30, 100],
     "waypoints_use": [True],
     "num_inits": [1],
-    "ELBO_num_particles": [5],
+    "ELBO_num_particles": [3],
     "num_samples": [100],
-    'gamma': [0.05],
+    'gamma': [0.01],
     'min_delta': [50],
-    "lr": [0.8],
-    "num_epochs": [5, 500],
+    "lr": [0.5],
+    "num_epochs": [5, 300],
     "patience": [5],
 }
 

@@ -115,9 +115,9 @@ def compute_psi_effect_size(psi_samples, factor_idx, junction_idx, min_effect_si
     effect_size_mean = psi_diff_samples.mean()
     effect_size_var = psi_diff_samples.var()
 
-    prob_positive = (psi_diff_samples > 0).float().mean()   
-    prob_negative = (psi_diff_samples < 0).float().mean()
-    prob_greater = torch.maximum(prob_positive, prob_negative)
+    prob_greater = (psi_diff_samples > 0).float().mean()   
+    # prob_negative = (psi_diff_samples < 0).float().mean()
+    # prob_greater = torch.maximum(prob_positive, prob_negative)
 
     # Compute probability of effect size being greater than the threshold
     # prob_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().mean()
@@ -157,7 +157,7 @@ def compute_junctions_significance_psi(effect_sizes, fdr_threshold, min_effect_s
             raise ValueError(f"Missing column '{col}' in effect_sizes DataFrame.")
 
     # Extract values
-    prob_greater = effect_sizes['prob_greater'].values
+    prob_greater = effect_sizes['prob_greater'].values # probability of effect size being greater than 0
     beta = effect_sizes['effect_size'].values
     beta_vars = effect_sizes['effect_size_var'].values
     n_junctions = len(effect_sizes)
