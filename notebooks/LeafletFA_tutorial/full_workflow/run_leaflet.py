@@ -52,7 +52,7 @@ import BetaDirichletFactor.differential_splicing as ds
 import BetaDirichletFactor.utils as utils
 
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-27/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-30/"
 print(f"Base output directory: {base_output_dir}")
 
 # Get parameter set ID from command line
@@ -122,7 +122,7 @@ leaflet_model = LeafletFA.LeafletFA(
     waypoints_use=params["waypoints_use"], 
     input_conc_prior=params["input_conc"], 
     num_epochs=params["num_epochs"], 
-    print_epochs=1, 
+    print_epochs=10, 
     ELBO_num_particles=params["ELBO_num_particles"], 
     lr=params["lr"], 
     gamma=params["gamma"], 
@@ -152,12 +152,6 @@ new_K = leaflet_model.K
 assign_matrices = [result["summary_stats"]["assign"]["mean"] for result in leaflet_model.latent_results]
 if params["num_inits"] > 1:
     avg_corr, median_corr, min_corr = utils.calculate_and_plot_correlations(assign_matrices)
-    # Log to wandb
-    wandb.log({
-        "avg_corr": avg_corr,
-        "median_corr": median_corr,
-        "min_corr": min_corr
-    })
 else: 
     avg_corr, median_corr, min_corr = None, None, None  # Set default values when there's only one initialization
 
@@ -172,6 +166,7 @@ print(f"Silhouette score for age: {age_silhouette}")
 
 # Log silhouette scores to wandb
 wandb.log({
+    "new_K": new_K,
     "cell_type_silhouette": cell_tye_silhouette,
     "age_silhouette": age_silhouette
 })
@@ -194,6 +189,7 @@ with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):
         show=False  # Don't show interactive plot
     )
     plt.savefig(umap_celltype_path, bbox_inches="tight")  # Save with tight bounding box
+    plt.close()
 
 # Generate age UMAP
 with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):  
@@ -204,23 +200,30 @@ with plt.rc_context({'figure.figsize': (10, 7), 'savefig.dpi': 300}):
         show=False  # Don't show interactive plot
     )
     plt.savefig(umap_age_path, bbox_inches="tight")  # Save with tight bounding box
-
+    plt.close()
+    
 print(f"Saved UMAP plots to {output_dir}")
+
+# Make a quick barplot of PI and add to wandb log 
+alpha_pi=leaflet_model.alpha_pi
+PI = leaflet_model.pi
+PI_df = pd.DataFrame(PI, columns=["PI"])
+PI_df["Factor"] = PI_df.index
+# Ensure 'Factor' is treated as categorical
+PI_df["Factor"] = PI_df["Factor"].astype(str)
+PI_df = PI_df.sort_values(by="PI", ascending=False)
+print(f"Original K is {leaflet_model.K} and reduced K is {len(PI_df)}")
+PI_df.to_csv(os.path.join(output_dir, "factor_assignment_probabilities.csv"), index=False)
+print(f"Saved factor assignment probabilities to {os.path.join(output_dir, 'factor_assignment_probabilities.csv')}")
 
 # Log UMAPs to wandb
 wandb.log({
     "umap_cell_type": wandb.Image(umap_celltype_path),
-    "umap_age": wandb.Image(umap_age_path)
+    "umap_age": wandb.Image(umap_age_path), 
+    "alpha_pi": alpha_pi,
+    "dir_conc": leaflet_model.dir_conc,
+    "bb_conc": leaflet_model.bb_conc
 })
-
-# Get factor assignments and log to wandb
-pi_df = pd.DataFrame(leaflet_model.pi, columns=["factor_assignment_probabilities"])
-pi_df["factor_K"] = pi_df.index+1
-pi_df.to_csv(os.path.join(output_dir, "factor_assignment_probabilities.csv"), index=False)
-print(f"Saved factor assignment probabilities to {os.path.join(output_dir, 'factor_assignment_probabilities.csv')}")
-
-# Create a table in wandb
-wandb.log({"factor_assignments": wandb.Table(dataframe=pi_df)})
 
 # Create a dataframe to store results
 results_df = pd.DataFrame([{
@@ -262,7 +265,7 @@ only_things_we_need = [
     'ELBO_num_particles', 'K', 'a', 'a_rate', 'a_shape', 'assign_post', 'b', 
     'b_rate', 'b_shape', 'bb_conc', 'best_elbo', 'best_init', 'gamma', "alpha_pi", 
     'input_conc_prior', 'junc_specific_prior', 'losses', 'phi_samples', 
-    'pi', 'psi_learned', 'psi_samples',
+    'pi', 'psi_learned', 'psi_samples', 'dir_conc', 
     'psis_loc', 'psis_scale'
 ]
 

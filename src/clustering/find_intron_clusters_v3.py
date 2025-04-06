@@ -547,6 +547,7 @@ class GenomeDB:
 # Edges represent junctions
 # Connected components form ATSEs
 # Event classification based on graph topology
+
 class ATSEAnalyzer:
     def __init__(self):
         self.events = {}

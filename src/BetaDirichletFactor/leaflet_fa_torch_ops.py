@@ -76,3 +76,20 @@ class MaskedMatmulFunction(Function):
 # 3. Function to call in LeafletFA model
 def masked_matmul(A, B, M):
     return MaskedMatmulFunction.apply(A, B, M)
+
+# 4. CPU Fall Back 
+def masked_matmul_sparse_cpu(A, B, mask_sparse):
+    """
+    Compute out[i, j] = A[i] @ B[:, j] only for (i, j) pairs in mask_sparse.indices().
+    Returns a sparse COO tensor.
+    """
+        
+    indices = mask_sparse._indices()
+    i_idx = indices[0]
+    j_idx = indices[1]
+
+    A_rows = A[i_idx]  # shape: (nnz, K)
+    B_cols = B[:, j_idx].T  # shape: (nnz, K)
+
+    values = (A_rows * B_cols).sum(dim=1)  # shape: (nnz,)
+    return values

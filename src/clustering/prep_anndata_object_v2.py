@@ -301,6 +301,16 @@ def create_anndata_object(cell_by_junction_matrix, cell_by_cluster_matrix, cell_
     adata.obs.head()
     print(adata.obs.dtypes)
 
+    # Clean up adata.obs to avoid HDF5 write errors
+    for col in adata.obs.columns:
+        if adata.obs[col].dtype.name in ["object", "category"]:
+            adata.obs[col] = adata.obs[col].astype(str).replace("nan", "")  # Convert NaN to empty string
+        elif adata.obs[col].isna().any() and not np.issubdtype(adata.obs[col].dtype, np.number):
+            adata.obs[col] = adata.obs[col].fillna("")
+    
+    # If you want to check what dtypes remain
+    print("Cleaned obs dtypes:\n", adata.obs.dtypes)
+
     if save_file:
         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         adata_path = f"{prefix}_{current_time}.h5ad"

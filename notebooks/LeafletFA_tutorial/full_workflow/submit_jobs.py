@@ -4,7 +4,7 @@ import datetime
 
 # Define where to save outputs 
 # Should be directory in which model params are saved
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-27/"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/TabulaSenis/Leaflet/leafletFAmodel/2025-03-30/"
 
 # Load parameter list from JSON file
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")

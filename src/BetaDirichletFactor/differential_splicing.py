@@ -115,12 +115,8 @@ def compute_psi_effect_size(psi_samples, factor_idx, junction_idx, min_effect_si
     effect_size_mean = psi_diff_samples.mean()
     effect_size_var = psi_diff_samples.var()
 
-    prob_greater = (psi_diff_samples > 0).float().mean()   
-    # prob_negative = (psi_diff_samples < 0).float().mean()
-    # prob_greater = torch.maximum(prob_positive, prob_negative)
-
     # Compute probability of effect size being greater than the threshold
-    # prob_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().mean()
+    prob_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().mean()
     num_greater = (torch.abs(psi_diff_samples) > min_effect_size).float().sum()
     prob_lessoreq = 1 - prob_greater
 

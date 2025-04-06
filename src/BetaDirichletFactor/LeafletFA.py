@@ -41,7 +41,7 @@ print(f"CUDA Version: {torch.version.cuda}")
 # from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
 import sys
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src')
-from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
+from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul, masked_matmul_sparse_cpu
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class LeafletFA:
@@ -209,10 +209,18 @@ class LeafletFA:
         mask = torch.zeros((C, J), device=self.device)
         mask[cell_idx, junc_idx] = 1.0
         self.triton_mask = mask
+
+    def dense_to_sparse_mask(self, dense_mask: torch.Tensor) -> torch.sparse_coo_tensor:
+        """Convert a dense binary mask (0/1) to sparse COO format."""
+        assert dense_mask.dim() == 2, "Expected 2D mask"
+        device = dense_mask.device
+        indices = dense_mask.nonzero(as_tuple=False).T  # shape: (2, nnz)
+        values = torch.ones(indices.shape[1], dtype=dense_mask.dtype, device=device)
+        sparse_mask = torch.sparse_coo_tensor(indices, values, size=dense_mask.shape, device=device)
+        return sparse_mask.coalesce()
     
     def compute_pred_triton(self, assign, psi):
         out = masked_matmul(assign.to(self.device), psi.to(self.device), self.triton_mask)
-        print(out.requires_grad) 
         cell_idx, junc_idx = self.y._indices()
         return out[cell_idx, junc_idx]
 
@@ -291,11 +299,11 @@ class LeafletFA:
         assert torch.allclose(pi.sum(), torch.tensor(1.0, dtype=torch.float)), f"pi does not sum to 1: {pi.sum()}"
 
         # Sample concentration value that scales the pi vector (higher values lead to more uniform pi)
-        conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
-        conc = torch.clamp(conc, min=1e-6, max=1e6) # Prevent numerical issues
+        dir_conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
+        dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6) # Prevent numerical issues
 
         # Sample the factor assignments for cells 
-        assign = pyro.sample("assign", dist.Dirichlet(pi * conc).expand([N]).to_event(1)).to(dtype=torch.float32)
+        assign = pyro.sample("assign", dist.Dirichlet(pi * dir_conc).expand([N]).to_event(1)).to(dtype=torch.float32)
 
         # Ensure no negative values in assign 
         if torch.any(assign < self.eps):
@@ -316,27 +324,24 @@ class LeafletFA:
         # pred = torch.matmul(assign, psi).to(self.device)
         if not hasattr(self, "triton_mask"):
             raise RuntimeError("You must call `initialize_triton_mask()` before training.")
-        
-        cell_idx, junc_idx = self.y._indices()
-        
+                
         # Compute log-probability
         # if on CPU do full matrix multiplication and not triton 
-        if self.device.type == 'cpu':
-            cell_idx, junc_idx = self.y._indices()
-            pred_vanilla = torch.matmul(assign, psi).to(self.device)
-            pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
-
-            log_prob = self.log_prob_calc(y, total_counts, pred_vanilla_sparse, input_conc)
-            print(f"The log probability via dense matmul {log_prob}")
+        if self.device.type == 'cpu':            
+            pred_values = masked_matmul_sparse_cpu(assign, psi, self.triton_mask)
+            # print("Requires grad:", pred_values.requires_grad)  # Should now be True
+            #pred_vanilla = torch.matmul(assign, psi).to(self.device)
+            #pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
+            log_prob = self.log_prob_calc_sparse(y, total_counts, pred_values, input_conc)
+            # print(f"The log probability via dense matmul {log_prob}")
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
         else:
             # Use Triton for GPU-accelerated matrix multiplication
             pred_triton = self.compute_pred_triton(assign, psi)
             print("Requires grad:", pred_triton.requires_grad)  # Should now be True
-
             log_prob = self.log_prob_calc_sparse(y, total_counts, pred_triton, input_conc)
-            print(f"The log probability via sparse matmul is {log_prob}")
+            # print(f"The log probability via sparse matmul is {log_prob}")
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
 
@@ -761,6 +766,8 @@ class LeafletFA:
         # get alpha_pi from the guide also 
         self.alpha_pi = self.latent_results[initialization]["summary_stats"]["alpha_pi"]["mean"]
         self.pi = self.latent_results[initialization]["summary_stats"]["pi"]["mean"]
+        # get dir_conc from the guide also
+        self.dir_conc = self.latent_results[initialization]["summary_stats"]["dir_conc"]["mean"]
 
     def get_bb_conc(self, initialization=None):
 
