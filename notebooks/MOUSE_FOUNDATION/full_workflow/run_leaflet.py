@@ -134,10 +134,15 @@ leaflet_model = LeafletFA.LeafletFA(
 )
 
 # Train model
-print("Training LeafletFA model...")
+print(f"Extracting sparse tensors from anndata object")
 leaflet_model.from_anndata()
-# Initialize triton mask 
-leaflet_model.initialize_triton_mask()
+
+# Initialize triton mask only if device if cpu 
+if device=="cpu":
+    print(f"Obtaining mask for sparse operations")
+    leaflet_model.initialize_triton_mask()
+
+print("Training LeafletFA model...")
 leaflet_model.train(num_initializations=params["num_inits"])
 
 print("Training complete, extracting results...")

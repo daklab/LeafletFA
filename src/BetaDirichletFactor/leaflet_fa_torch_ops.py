@@ -3,6 +3,9 @@ import triton
 import triton.language as tl
 from torch.autograd import Function
 
+def next_power_of_2(x):
+    return 1 << (x - 1).bit_length()
+
 # 1. Triton kernel 
 @triton.jit
 def masked_matmul_kernel(
@@ -93,3 +96,90 @@ def masked_matmul_sparse_cpu(A, B, mask_sparse):
 
     values = (A_rows * B_cols).sum(dim=1)  # shape: (nnz,)
     return values
+
+def sparse_dot_cpu(assign, psi, cell_idx, junc_idx):
+    """
+    Compute output[k] = assign[cell_idx[k]] @ psi[:, junc_idx[k]]
+    Returns a 1D tensor of shape (nnz,)
+    """
+    assign_rows = assign[cell_idx]             # shape: (nnz, K)
+    psi_cols = psi[:, junc_idx].T              # shape: (nnz, K)
+    return (assign_rows * psi_cols).sum(dim=1) # shape: (nnz,)
+
+@triton.jit
+def sparse_dot_kernel(
+    assign_ptr, psi_ptr, cell_idx_ptr, junc_idx_ptr, out_ptr,
+    C, J, K, nnz,
+    stride_assign_c, stride_assign_k,
+    stride_psi_k, stride_psi_j,
+    BLOCK_K: tl.constexpr
+):
+    pid = tl.program_id(0)
+    if pid >= nnz:
+        return
+
+    i = tl.load(cell_idx_ptr + pid)
+    j = tl.load(junc_idx_ptr + pid)
+
+    offsets = tl.arange(0, BLOCK_K)
+    mask = offsets < K
+
+    a_ptr = assign_ptr + i * stride_assign_c + offsets
+    b_ptr = psi_ptr + offsets * stride_psi_k + j * stride_psi_j
+
+    a = tl.load(a_ptr, mask=mask, other=0.0)
+    b = tl.load(b_ptr, mask=mask, other=0.0)
+
+    acc = tl.sum(a * b)
+    tl.store(out_ptr + pid, acc)
+
+class SparseDotFunction(Function):
+    @staticmethod
+    def forward(ctx, assign, psi, cell_idx, junc_idx):
+        assign = assign.contiguous()
+        psi = psi.contiguous()
+
+        nnz = cell_idx.shape[0]
+        K = assign.shape[1]
+        BLOCK_K = next_power_of_2(K)
+
+        out = torch.empty(nnz, device=assign.device, dtype=assign.dtype)
+
+        # Save for backward pass
+        ctx.save_for_backward(assign, psi, cell_idx, junc_idx)
+        ctx.K = K  # original K for masking
+
+        grid = (triton.cdiv(nnz, 1),)
+        sparse_dot_kernel[grid](
+            assign, psi, cell_idx, junc_idx, out,
+            assign.shape[0], psi.shape[1], K, nnz,
+            assign.stride(0), assign.stride(1),
+            psi.stride(0), psi.stride(1),
+            BLOCK_K=BLOCK_K
+        )
+
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        assign, psi, cell_idx, junc_idx = ctx.saved_tensors
+        grad_assign = grad_psi = None
+
+        K = ctx.K
+
+        if ctx.needs_input_grad[0]:
+            grad_assign = torch.zeros_like(assign)
+            psi_cols = psi[:, junc_idx]  # (K, nnz)
+            grad_vals = grad_out.view(-1, 1) * psi_cols.T  # (nnz, K)
+            grad_assign.index_add_(0, cell_idx, grad_vals)
+
+        if ctx.needs_input_grad[1]:
+            grad_psi = torch.zeros_like(psi)
+            assign_rows = assign[cell_idx]  # (nnz, K)
+            grad_vals = grad_out.view(-1, 1) * assign_rows  # (nnz, K)
+            grad_psi.index_add_(1, junc_idx, grad_vals.T)
+
+        return grad_assign, grad_psi, None, None
+
+def masked_sparse_matmul_triton(assign, psi, cell_idx, junc_idx):
+    return SparseDotFunction.apply(assign, psi, cell_idx, junc_idx)

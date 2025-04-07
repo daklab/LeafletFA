@@ -41,7 +41,7 @@ print(f"CUDA Version: {torch.version.cuda}")
 # from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
 import sys
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src')
-from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul, masked_matmul_sparse_cpu
+from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul, sparse_dot_cpu, masked_sparse_matmul_triton
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class LeafletFA:
@@ -322,25 +322,31 @@ class LeafletFA:
 
         # Compute predicted probabilities only at these indices
         # pred = torch.matmul(assign, psi).to(self.device)
-        if not hasattr(self, "triton_mask"):
-            raise RuntimeError("You must call `initialize_triton_mask()` before training.")
+        # if not hasattr(self, "triton_mask"):
+        #    raise RuntimeError("You must call `initialize_triton_mask()` before training.")
                 
         # Compute log-probability
         # if on CPU do full matrix multiplication and not triton 
         if self.device.type == 'cpu':            
-            pred_values = masked_matmul_sparse_cpu(assign, psi, self.triton_mask)
+            cell_idx, junc_idx = self.y._indices()
+            pred = sparse_dot_cpu(assign, psi, cell_idx, junc_idx)
             # print("Requires grad:", pred_values.requires_grad)  # Should now be True
             #pred_vanilla = torch.matmul(assign, psi).to(self.device)
             #pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
-            log_prob = self.log_prob_calc_sparse(y, total_counts, pred_values, input_conc)
+            log_prob = self.log_prob_calc_sparse(y, total_counts, pred, input_conc)
             # print(f"The log probability via dense matmul {log_prob}")
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
         else:
             # Use Triton for GPU-accelerated matrix multiplication
-            pred_triton = self.compute_pred_triton(assign, psi)
-            print("Requires grad:", pred_triton.requires_grad)  # Should now be True
-            log_prob = self.log_prob_calc_sparse(y, total_counts, pred_triton, input_conc)
+            cell_idx, junc_idx = y._indices()
+            assign = assign.to(self.device, dtype=torch.float32).contiguous()
+            psi = psi.to(self.device, dtype=torch.float32).contiguous()
+
+            pred = masked_sparse_matmul_triton(assign, psi, cell_idx, junc_idx)
+            # pred_triton = self.compute_pred_triton(assign, psi)
+            # print("Requires grad:", pred.requires_grad)  # Should now be True
+            log_prob = self.log_prob_calc_sparse(y, total_counts, pred, input_conc)
             # print(f"The log probability via sparse matmul is {log_prob}")
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
