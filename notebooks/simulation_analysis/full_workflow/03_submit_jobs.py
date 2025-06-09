@@ -2,7 +2,7 @@ import os
 import json
 
 # Define output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-02-22"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-04-18"
 
 # Load parameter list from JSON file
 param_file = os.path.join(base_output_dir, "parameter_combinations.json")
@@ -28,7 +28,7 @@ job_script_template = """#!/bin/bash
 #SBATCH --gres=gpu:1
 
 # Run Python script
-python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/archive/simulation_analysis/full_workflow/02_run_simulation_and_leaflet.py {param_id}
+python /gpfs/commons/home/kisaev/Leaflet-private/notebooks/simulation_analysis/full_workflow/02_run_simulation_and_leaflet.py {param_id}
 """
 
 # Generate and submit jobs

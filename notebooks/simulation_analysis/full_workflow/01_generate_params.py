@@ -13,28 +13,31 @@ base_output_dir = os.path.join(base_output_dir, today)
 os.makedirs(base_output_dir, exist_ok=True)
 print(f"All outputs will be saved in {base_output_dir}")
 
-# Define parameter grid
+# Define concise parameter grid (only unique values)
 param_grid = {
-    "input_conc": [None, "inf"],  # 'inf' will be converted to torch.tensor(np.inf)
+    "input_conc": [None, "inf"],  # You can convert "inf" to np.inf later
     "junc_specific_prior": [True, False],
+    "delta_fixed": [0.5, 1, None],
     "sim_label_column": [None, "cell_type_grouped"],
     "waypoints_use": [False],
     "num_inits": [5],
-    "num_samples": [500],
-    "lr": [0.1, 0.5, 0.8],
-    "proportion_negative": [0.5, 0.15, 0.85],
+    "num_samples": [100],
+    "lr": [0.2, 0.8],
+    "gamma": [0.01, 0.05],
+    "proportion_negative": [0.5, 0.2, 0.8],
     "ELBO_num_particles": [10],
-    "num_epochs": [300]
+    "num_epochs": [500],
+    "device": ["gpu"]
 }
 
-# Generate all parameter combinations
+# Generate all combinations of unique parameter settings
 param_combinations = list(itertools.product(*param_grid.values()))
 
-# Convert to list of dictionaries with replicate IDs (3 repeats per param set)
+# Create param dicts with replicate IDs
 param_list = [
     {**dict(zip(param_grid.keys(), values)), "replicate_id": replicate}
     for values in param_combinations
-    for replicate in range(3)  # Generate three replicates per combination
+    for replicate in range(3)
 ]
 
 # Save parameter combinations to JSON

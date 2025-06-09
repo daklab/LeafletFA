@@ -41,12 +41,14 @@ print(f"CUDA Version: {torch.version.cuda}")
 # from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
 import sys
 sys.path.append('/gpfs/commons/home/kisaev/Leaflet-private/src')
-from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul, sparse_dot_cpu, masked_sparse_matmul_triton
+from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class LeafletFA:
-    def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, 
-                 waypoints_use=True, fixed_psi=None, log_wandb=False,
+    def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, delta_fixed=None,
+                 waypoints_use=True, fixed_psi=None, 
+                 pi_init=None, alpha_pi_init=None,
+                 log_wandb=False,
                  eps = 1e-6, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
                  ELBO_num_particles=1, patience=5, min_delta=0.01, num_samples=10, loss_plot=True, output_dir=None):
         """
@@ -58,6 +60,8 @@ class LeafletFA:
         - junc_specific_prior (bool): Whether to learn a global prior over junctions.
         - input_conc_prior: Concentration prior (can be either 'None' or 'torch.tensor(np.inf)').
         - waypoints_use (bool): Whether to use waypoints for initialization.
+        - pi_init (torch.Tensor): Initialization for the pi vector.
+        - alpha_pi_init (torch.Tensor): Initialization for the alpha_pi vector.
         - fixed_psi (torch.Tensor): Fix PSI during inference by using an existing PSI latent variable from previous model training.
         - eps (float): Small value to prevent numerical issues.
         - lr (float): Learning rate.
@@ -78,8 +82,11 @@ class LeafletFA:
         self.num_junctions = adata.shape[1]
         self.junc_specific_prior = junc_specific_prior
         self.input_conc_prior = input_conc_prior
+        self.dir_conc = delta_fixed
         self.waypoints_use = waypoints_use
         self.fixed_psi = fixed_psi
+        self.pi_init = pi_init
+        self.alpha_pi_init = alpha_pi_init
         self.eps = eps
         self.lr = lr
         self.gamma = gamma
@@ -107,7 +114,11 @@ class LeafletFA:
 
     @staticmethod
     def convertr(hyperparam, name):
-        """ Convert hyperparameters to Pyro samples or fixed tensors. """
+        """ Convert hyperparameters to Pyro samples or fixed tensors. 
+        If hyperparam is a distribution, sample from it.
+        If hyperparam is None, sample from a Gamma distribution with shape and rate 10.0.
+        Otherwise, convert the hyperparameter provided to a tensor.
+        """
         if isinstance(hyperparam, torch.distributions.Distribution):
             return pyro.sample(name, hyperparam)
         elif hyperparam is None:
@@ -209,22 +220,23 @@ class LeafletFA:
         mask = torch.zeros((C, J), device=self.device)
         mask[cell_idx, junc_idx] = 1.0
         self.triton_mask = mask
-
-    def dense_to_sparse_mask(self, dense_mask: torch.Tensor) -> torch.sparse_coo_tensor:
-        """Convert a dense binary mask (0/1) to sparse COO format."""
-        assert dense_mask.dim() == 2, "Expected 2D mask"
-        device = dense_mask.device
-        indices = dense_mask.nonzero(as_tuple=False).T  # shape: (2, nnz)
-        values = torch.ones(indices.shape[1], dtype=dense_mask.dtype, device=device)
-        sparse_mask = torch.sparse_coo_tensor(indices, values, size=dense_mask.shape, device=device)
-        return sparse_mask.coalesce()
     
     def compute_pred_triton(self, assign, psi):
         out = masked_matmul(assign.to(self.device), psi.to(self.device), self.triton_mask)
         cell_idx, junc_idx = self.y._indices()
         return out[cell_idx, junc_idx]
+    
+    def sparse_dot_cpu(self, assign, psi, cell_idx, junc_idx):
+        """
+        Compute output[k] = assign[cell_idx[k]] @ psi[:, junc_idx[k]]
+        Returns a 1D tensor of shape (nnz,)
+        """
+        assign_rows = assign[cell_idx]             # shape: (nnz, K)
+        psi_cols = psi[:, junc_idx].T              # shape: (nnz, K)
+        return (assign_rows * psi_cols).sum(dim=1) # shape: (nnz,)
 
-    def model(self, y=None, total_counts=None, K=None, junc_specific_prior=None, input_conc_prior=None):
+    def model(self, y=None, total_counts=None, K=None, 
+              junc_specific_prior=None, input_conc_prior=None):
 
         """
         Define a probabilistic Bayesian model using a Beta-Dirichlet factorization.
@@ -281,26 +293,41 @@ class LeafletFA:
             # Assert that 'psi' has no NaN or negative values
             if not torch.isfinite(psi).all():
                 raise ValueError("psi contains NaN or infinite values!")
+            
+            # Sample Pi prior from a Dirichlet distribution
+            # First sample alpha from a gamma distribution
+            alpha_pi = pyro.sample("alpha_pi", dist.Gamma(1.0, 1.0))
+            pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha_pi / K))
+
         else: 
-            # Use fixed PSI values from a previous model training
-            psi = self.fixed_psi
-            psi = psi.to(self.device)
+            # Use fixed PSI values and initialize pi from a previous model training
+            psi = self.fixed_psi.to(self.device)
 
-            # still need to sample the input_conc
+            # initialize alpha_pi and pi as learnable variables, using provided initial values
+            alpha_pi_init = self.alpha_pi_init.to(self.device)
+            pi_init = self.pi_init.to(self.device)
+
+            # Register initial values as parameters so pyro.sample can use them
+            alpha_pi_param = pyro.param("alpha_pi_param", alpha_pi_init)
+            pi_param = pyro.param("pi_param", pi_init)
+
+            alpha_pi = pyro.sample("alpha_pi", dist.Gamma(1.0, 1.0), infer={"initial_value": alpha_pi_param})
+            pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha_pi / K), infer={"initial_value": pi_param})
+
+            # Sample input_conc as usual
             input_conc = self.convertr(input_conc_prior, "bb_conc")
-
-        # Sample Pi prior from a Dirichlet distribution
-        # First sample alpha from a gamma distribution
-        alpha_pi = pyro.sample("alpha_pi", dist.Gamma(1.0, 1.0))
-        pi = pyro.sample("pi", dist.Dirichlet(torch.ones(K) * alpha_pi / K))
         
         # Assert that pi sums to 1 and contains no NaN/inf values
         assert torch.isfinite(pi).all(), "pi contains NaN or infinite values!"
         assert torch.allclose(pi.sum(), torch.tensor(1.0, dtype=torch.float)), f"pi does not sum to 1: {pi.sum()}"
 
-        # Sample concentration value that scales the pi vector (higher values lead to more uniform pi)
-        dir_conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
-        dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6) # Prevent numerical issues
+        # Check if we are used a fixed delta value or if we are learning it 
+        if self.dir_conc is None:
+            # Sample concentration value that scales the pi vector (higher values lead to more uniform pi)
+            dir_conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
+            dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6) # Prevent numerical issues
+        else:
+            dir_conc = self.dir_conc
 
         # Sample the factor assignments for cells 
         assign = pyro.sample("assign", dist.Dirichlet(pi * dir_conc).expand([N]).to_event(1)).to(dtype=torch.float32)
@@ -322,14 +349,11 @@ class LeafletFA:
 
         # Compute predicted probabilities only at these indices
         # pred = torch.matmul(assign, psi).to(self.device)
-        # if not hasattr(self, "triton_mask"):
-        #    raise RuntimeError("You must call `initialize_triton_mask()` before training.")
-                
+
         # Compute log-probability
-        # if on CPU do full matrix multiplication and not triton 
         if self.device.type == 'cpu':            
             cell_idx, junc_idx = self.y._indices()
-            pred = sparse_dot_cpu(assign, psi, cell_idx, junc_idx)
+            pred = self.sparse_dot_cpu(assign, psi, cell_idx, junc_idx)
             # print("Requires grad:", pred_values.requires_grad)  # Should now be True
             #pred_vanilla = torch.matmul(assign, psi).to(self.device)
             #pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
@@ -338,15 +362,17 @@ class LeafletFA:
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
         else:
+            if not hasattr(self, "triton_mask"):
+                raise RuntimeError("You must call `initialize_triton_mask()` before training.")
+                
             # Use Triton for GPU-accelerated matrix multiplication
             cell_idx, junc_idx = y._indices()
             assign = assign.to(self.device, dtype=torch.float32).contiguous()
             psi = psi.to(self.device, dtype=torch.float32).contiguous()
 
-            pred = masked_sparse_matmul_triton(assign, psi, cell_idx, junc_idx)
-            # pred_triton = self.compute_pred_triton(assign, psi)
+            pred_triton = self.compute_pred_triton(assign, psi)
             # print("Requires grad:", pred.requires_grad)  # Should now be True
-            log_prob = self.log_prob_calc_sparse(y, total_counts, pred, input_conc)
+            log_prob = self.log_prob_calc_sparse(y, total_counts, pred_triton, input_conc)
             # print(f"The log probability via sparse matmul is {log_prob}")
             # Validate for numerical issues
             assert torch.isfinite(log_prob).all(), "log_prob contains NaN or infinite values!"
@@ -355,72 +381,25 @@ class LeafletFA:
         pyro.factor("obs", log_prob)
 
     def log_prob_calc_sparse(self, y, total_counts, pred_triton, input_conc):
-
         y_values = y._values()
         total_counts_values = total_counts._values()
-        success_probs = pred_triton.clamp(min=1e-6, max=1-1e-6)
-  
-        # Check consistency
-        assert y_values.shape == total_counts_values.shape == success_probs.shape, \
-            f"Shape mismatch: y={y_values.shape}, total={total_counts_values.shape}, pred={success_probs.shape}"
+        success_probs = pred_triton.clamp(min=1e-6, max=1 - 1e-6)
+        
+        # Check shape consistency
+        assert y_values.shape == total_counts_values.shape == success_probs.shape, (
+            f"Shape mismatch: y={y_values.shape}, "
+            f"total={total_counts_values.shape}, pred={success_probs.shape}"
+        )
     
         if torch.isinf(input_conc).any():
             log_probs = dist.Binomial(total_counts_values, probs=success_probs).log_prob(y_values)
         else:
-            alpha = success_probs * input_conc
+            alpha = success_probs 
             beta = (1 - success_probs) * input_conc
             log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
-    
+
         return log_probs.sum()
     
-    def log_prob_calc(self, y, total_counts, pred, input_conc):
-        """
-        Compute the log probability of observed data under either a binomial or beta-binomial distribution,
-        depending on the concentration parameter.
-
-        Parameters:
-        - y (torch.Tensor): Sparse tensor of observed junction counts.
-        - total_counts (torch.Tensor): Sparse tensor of total intron cluster counts.
-        - pred (torch.Tensor): Dense tensor of predicted success probabilities.
-        - input_conc (torch.Tensor or float): The concentration parameter 
-        - Note: input_conc is assumed to be preprocessed in model() using convertr().
-
-        Returns:
-        - torch.Tensor: The summed log probabilities for all non-zero data points.
-        """
-
-        # Extract non-zero elements and their indices
-        y_indices = y._indices()  # Row and column indices of nonzero values
-        y_values = y._values()  # Observed counts
-
-        total_counts_indices = total_counts._indices()
-        total_counts_values = total_counts._values()  # Total counts for corresponding junctions
-
-        # Ensure indices match between y and total_counts
-        if not torch.equal(y_indices, total_counts_indices):
-            raise ValueError("Mismatch between indices of y and total_counts.")
-
-        # Extract success probabilities for the relevant indices
-        # success_probs = pred[y_indices[0], y_indices[1]].clamp(min=1e-6, max=1-1e-6)
-        # pred is now in sparse format containing values just for the non-zero elements
-       
-        success_probs = pred.clamp(min=1e-6, max=1-1e-6)
-
-        # Since input_conc has already been processed in the model, we just check for Binomial vs Beta-Binomial
-        if torch.isinf(input_conc).any():
-            # Binomial likelihood
-            log_probs = dist.Binomial(total_counts_values, probs=success_probs).log_prob(y_values)
-        else:
-            # Beta-Binomial likelihood
-            alpha = success_probs * input_conc
-            beta = (1 - success_probs) * input_conc
-
-            log_probs = dist.BetaBinomial(alpha, beta, total_counts_values).log_prob(y_values)
-
-        loss = log_probs.sum() 
-        # print(f"The overall Log Likelihood is {loss}")
-        return loss 
-
     def fit(self, guide):
         """
         Fit a probabilistic model using Stochastic Variational Inference (SVI) with gradient clipping
@@ -451,7 +430,7 @@ class LeafletFA:
         print(f"Training in progress for {self.num_epochs} epochs!")
 
         for epoch in range(self.num_epochs):
-
+            
             # Call SVI step with dynamic passing of input_conc_prior
             loss = svi.step(self.y, self.total_counts, self.K, self.junc_specific_prior, self.input_conc_prior)
             losses.append(loss)
@@ -589,7 +568,6 @@ class LeafletFA:
                 # Load the corresponding psi and phi initializations
                 psi_init = torch.tensor(self.adata.varm[psi_key]).T  # Transpose for correct shape
                 phi_init = torch.tensor(self.adata.obsm[phi_key])
-
                 print(f"Shape of PSI_init is {psi_init.shape}")
                 print(f"Shape of PHI_init is {phi_init.shape}")
             else:
@@ -772,8 +750,9 @@ class LeafletFA:
         # get alpha_pi from the guide also 
         self.alpha_pi = self.latent_results[initialization]["summary_stats"]["alpha_pi"]["mean"]
         self.pi = self.latent_results[initialization]["summary_stats"]["pi"]["mean"]
-        # get dir_conc from the guide also
-        self.dir_conc = self.latent_results[initialization]["summary_stats"]["dir_conc"]["mean"]
+        # get dir_conc from the guide also if we learned it 
+        if self.dir_conc is None:
+            self.dir_conc = self.latent_results[initialization]["summary_stats"]["dir_conc"]["mean"]
 
     def get_bb_conc(self, initialization=None):
 
@@ -822,7 +801,7 @@ class LeafletFA:
         print(f"Extracting the learned Pi vector...")
         self.get_pi(initialization)
 
-    def prune_K(self, threshold=0.005):
+    def prune_K(self, threshold=0.05):
         """Prunes latent variables based on a threshold."""
         
         print(f"The K before pruning is {self.K}")

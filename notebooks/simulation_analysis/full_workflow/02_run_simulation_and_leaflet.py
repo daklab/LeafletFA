@@ -14,6 +14,8 @@ import anndata as ad
 import scanpy as sc 
 from tqdm import tqdm
 import json 
+import scipy 
+from scipy.sparse import csr_matrix
 
 # Ensure CUDA is available and if not use CPU
 import torch
@@ -61,10 +63,9 @@ sys.path.append("/gpfs/commons/home/kisaev/Leaflet-private/src/simulation/")
 import simulate_counts as sim 
 importlib.reload(sim)
 
-
 # %%
 # Define base output directory
-base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-02-22"
+base_output_dir = "/gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/Simulations/2025/manuscript_sim_analysis/2025-04-18"
 
 # Get parameter set ID from command line
 param_id = int(sys.argv[1])
@@ -119,6 +120,34 @@ _, _, adata_input, cell_type_psi_df = sim.simulate_and_prepare_data(adata_filter
 cell_type_psi_df_path = os.path.join(output_dir, 'cell_type_psi_df.csv')
 cell_type_psi_df.to_csv(cell_type_psi_df_path, index=False)
 
+# Check column names that are not strings
+problematic_columns = [col for col in adata_input.var.columns if not isinstance(col, str)]
+print("Problematic columns:", problematic_columns)
+
+# Convert problematic column names to strings
+adata_input.var.columns = adata_input.var.columns.map(str)
+if adata_input.var.columns.duplicated().any():
+    print("Duplicate column names found. Resolving by renaming.")
+    adata_input.var.columns = pd.io.parsers.ParserBase({'names': adata_input.var.columns})._maybe_dedup_names(adata_input.var.columns)
+
+# Check if any layers are in COO format
+for layer_name, layer_data in adata_input.layers.items():
+    if isinstance(layer_data, scipy.sparse.coo_matrix):
+        print(f"Converting {layer_name} from COO to CSR format.")
+        adata_input.layers[layer_name] = layer_data.tocsr()
+
+# Convert adata.X if it is in COO format
+if isinstance(adata_input.X, scipy.sparse.coo_matrix):
+    print("Converting adata.X from COO to CSR format.")
+    adata_input.X = adata_input.X.tocsr()
+
+# Convert varm, obsm, and obsp if they contain COO matrices
+for attr in ['varm', 'obsm', 'obsp']:
+    for key in getattr(adata_input, attr).keys():
+        if isinstance(getattr(adata_input, attr)[key], scipy.sparse.coo_matrix):
+            print(f"Converting {attr}['{key}'] from COO to CSR format.")
+            getattr(adata_input, attr)[key] = getattr(adata_input, attr)[key].tocsr()
+
 # %% [markdown]
 # ### Initialize and train the model using the simulated counts!
 
@@ -127,24 +156,31 @@ num_inits = params["num_inits"]
 num_epochs = params["num_epochs"]
 num_samples = params["num_samples"]
 lr = params["lr"]
+gamma = params["gamma"]
 ELBO_num_particles = params["ELBO_num_particles"]
-print_epochs = 10
+dir_conc = params["delta_fixed"]
+print_epochs = 5
 
 # %%
 # Let's initialize the LeafletFA class 
+log_wandb = False 
 leaflet_model = LeafletFA.LeafletFA(adata=adata_input, K=K, 
                                     junc_specific_prior = junc_specific_prior, 
                                     waypoints_use=waypoints_use, 
                            input_conc_prior = input_conc, 
                            num_epochs=num_epochs, 
                            print_epochs=print_epochs, 
+                           delta_fixed = dir_conc, 
                            ELBO_num_particles=ELBO_num_particles, 
-                           lr=lr, gamma=0.05, 
+                           lr=lr, gamma=gamma, 
                            num_samples=num_samples, 
                            output_dir=output_dir)
 
 # Convert AnnData into PyTorch tensors for model training 
 leaflet_model.from_anndata()
+
+# Initialize triton mask (no longer actually need this for GPU but now need for CPU...)
+leaflet_model.initialize_triton_mask()
 
 # Train the model 
 leaflet_model.train(num_initializations=num_inits)
@@ -244,35 +280,8 @@ plt.title(f"Imputed vs True Difference in PSI (Spearman: {round(spearman_corr_im
 plt.savefig(os.path.join(output_dir, "imputed_vs_true_diff.png"))
 
 # %%
-if K > 2:
-    results = ds.analyze_all_factors(leaflet_model, fdr_threshold=0.05, min_effect_size=0.1)
-
-    # Let's collect all the dataframes from results
-    # go through results.keys() and collect second value in tuple and add column indicating factor K
-    results_df = pd.DataFrame()
-    for key in results.keys():
-        factor_res = results[key][1]
-        factor_res["factor_K"] = key
-        results_df = pd.concat([results_df, factor_res])
-
-    # for every unique junctions i want to summarize number of factors that it was significant in
-    sig_only = results_df[results_df["significant"] == True]
-    sig_only = sig_only.groupby("junction_idx").agg({"significant": "count"}).reset_index()
-    sig_only = sig_only.rename(columns={"significant": "num_factors_significant"})
-    # merge with results_df
-    results_df = results_df.merge(sig_only, on="junction_idx", how="left")
-    results_df["abs_effect_size"] = np.abs(results_df["effect_size"])
-
-    # plot dist of effect sizes
-    plt.figure(figsize=(6, 6))
-    sns.histplot(results_df["effect_size"], bins=30)
-    plt.xlabel("Effect Size")
-    plt.ylabel("Frequency")
-    # save to output_dir
-    plt.savefig(os.path.join(output_dir, "effect_size_dist.png"))
-
-# %%
 if K == 2:
+    print(f"Running differential splicing analysis!")
     results_dict, results_df = ds.analyze_differential_splicing(leaflet_model, factor_idx = 0, 
                                                             fdr_threshold=0.05, 
                                                             min_effect_size=0.1)

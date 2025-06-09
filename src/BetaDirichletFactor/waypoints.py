@@ -155,19 +155,6 @@ def generate_initializations(rho_hat, waypoints_dict, metacell_dicts, epsilon=0.
 
     return psi_list, phi_list
 
-# Function to transform the junction_id and Cluster to the desired format
-def transform_row(row):
-    junction_id = row['junction_id']
-    cluster = row['Cluster']
-    
-    # Split the junction_id into chromosome, start, end, and strand
-    chrom, start, end, strand = junction_id.split('_')
-    
-    # Format as required
-    formatted = f"{chrom[3:]}:{start}:{end}:clu_{cluster}_{strand}"
-    
-    return formatted
-
 def calculate_centered_psi(junction_counts, cluster_counts, rho=0.1):
     """
     Calculates centered PSI values and other related matrices based on the input junction counts and cluster counts.
@@ -196,6 +183,11 @@ def calculate_centered_psi(junction_counts, cluster_counts, rho=0.1):
                      shape=junction_counts.shape)  # Create a sparse matrix with calculated PSI values
 
     # Step 2: Calculate observation weights (w) using the beta-binomial variance model
+    # Downweights low-depth junctions where PSI estimates are noisy
+    # 𝑤𝑖𝑗=precision of the PSI𝑖𝑗, which comes from the inverse of the beta-binomial variance.
+    # so doing weighted mean instead of regular mean to account for differences in atse counts and how that could affect PSI estimates...
+    # we are trying to prevent High activity in latent components driven by expression differences, not splicing patterns
+
     w = junction_counts.copy()  # Observation weights are based on junction counts
     w.data = cluster_counts.data / (1. + (cluster_counts.data - 1) * rho)  # Beta-binomial variance model
 

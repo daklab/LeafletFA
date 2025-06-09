@@ -140,10 +140,12 @@ def prep_model_input(masked_junction_counts, masked_intron_clusts):
     #1. intron clusts 
     indices = torch.tensor(np.nonzero(masked_intron_clusts), dtype=torch.long)
     values = torch.tensor(masked_intron_clusts[np.nonzero(masked_intron_clusts)], dtype=torch.float)
+    
     # Determine the size of the tensor
     num_cells = masked_intron_clusts.shape[0]
     num_junctions = masked_intron_clusts.shape[1]
     size = (num_cells, num_junctions)
+    
     # Create a sparse tensor
     masked_intron_clusts_tensor = torch.sparse_coo_tensor(indices, values, size)
     masked_intron_clusts_tensor
@@ -154,7 +156,6 @@ def prep_model_input(masked_junction_counts, masked_intron_clusts):
     masked_junction_counts_tensor = torch.sparse_coo_tensor(indices, values_j, size)
 
     assert torch.all(masked_intron_clusts_tensor.to_dense() >= masked_junction_counts_tensor.to_dense())
-
     return masked_junction_counts_tensor, masked_intron_clusts_tensor
 
 
