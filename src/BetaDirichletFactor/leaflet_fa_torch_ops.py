@@ -35,7 +35,6 @@ def masked_matmul_kernel(
     out_ptrs = Out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     tl.store(out_ptrs, acc, mask=load_mask)
 
-
 # 2. Autograd wrapper
 class MaskedMatmulFunction(Function):
     @staticmethod

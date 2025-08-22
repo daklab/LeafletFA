@@ -46,7 +46,7 @@ from BetaDirichletFactor.leaflet_fa_torch_ops import masked_matmul
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class LeafletFA:
     def __init__(self, adata, K=50, junc_specific_prior=True, input_conc_prior=None, delta_fixed=None,
-                 waypoints_use=True, fixed_psi=None, 
+                 waypoints_use=True, fixed_psi=None, use_dense_mode=None,
                  pi_init=None, alpha_pi_init=None,
                  log_wandb=False,
                  eps = 1e-6, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10, 
@@ -63,6 +63,7 @@ class LeafletFA:
         - pi_init (torch.Tensor): Initialization for the pi vector.
         - alpha_pi_init (torch.Tensor): Initialization for the alpha_pi vector.
         - fixed_psi (torch.Tensor): Fix PSI during inference by using an existing PSI latent variable from previous model training.
+        - use_dense_mode (bool): Whether to use dense mode for computation.
         - eps (float): Small value to prevent numerical issues.
         - lr (float): Learning rate.
         - gamma (float): Learning rate decay.
@@ -94,6 +95,7 @@ class LeafletFA:
         self.print_epochs = print_epochs
         self.ELBO_num_particles = ELBO_num_particles
         self.patience = patience
+        self.use_dense_mode = use_dense_mode
         self.min_delta = min_delta
         self.num_samples = num_samples
         self.loss_plot = loss_plot
@@ -212,7 +214,29 @@ class LeafletFA:
         # Add the tensors to the self object
         self.y = full_y_tensor
         self.total_counts = full_total_counts_tensor
+        
+        # Auto-detect density if not explicitly set
+        if self.use_dense_mode is None:
+            self.detect_data_density()
+        
+    def detect_data_density(self):
+        """Detect if data is dense enough to benefit from dense operations"""
+        total_elements = self.num_cells * self.num_junctions
+        nnz = self.y.nnz if hasattr(self.y, 'nnz') else self.y._nnz()
+        density = nnz / total_elements
 
+        print(f"Data density: {density:.1%} ({nnz:,} / {total_elements:,})")
+        self.data_density = density
+
+        # Auto-decide: if >30% dense, use dense mode
+        if self.use_dense_mode is None:
+            self.use_dense_mode = density > 0.3
+
+        if self.use_dense_mode:
+            print("🔄 Using DENSE computation mode (memory efficient for dense data)")
+        else:
+            print("✓ Using SPARSE computation mode (memory efficient for sparse data)")
+    
     def initialize_triton_mask(self):
         """Precomputes the binary mask needed for masked matrix multiplication."""
         cell_idx, junc_idx = self.y._indices()
@@ -228,12 +252,17 @@ class LeafletFA:
     
     def sparse_dot_cpu(self, assign, psi, cell_idx, junc_idx):
         """
-        Compute output[k] = assign[cell_idx[k]] @ psi[:, junc_idx[k]]
-        Returns a 1D tensor of shape (nnz,)
+        Adaptive computation: automatically switches between dense and sparse modes
         """
-        assign_rows = assign[cell_idx]             # shape: (nnz, K)
-        psi_cols = psi[:, junc_idx].T              # shape: (nnz, K)
-        return (assign_rows * psi_cols).sum(dim=1) # shape: (nnz,)
+        if hasattr(self, 'use_dense_mode') and self.use_dense_mode:
+            # Dense mode: much more memory efficient for dense data (>30% density)
+            pred_full = torch.matmul(assign, psi)  # (cells x junctions)
+            return pred_full[cell_idx, junc_idx]   # Extract needed values
+        else:
+            # Original sparse mode: memory efficient for sparse data (<30% density)
+            assign_rows = assign[cell_idx]         # shape: (nnz, K)
+            psi_cols = psi[:, junc_idx].T          # shape: (nnz, K)
+            return (assign_rows * psi_cols).sum(dim=1)  # shape: (nnz,)
 
     def model(self, y=None, total_counts=None, K=None, 
               junc_specific_prior=None, input_conc_prior=None):
@@ -355,7 +384,7 @@ class LeafletFA:
             cell_idx, junc_idx = self.y._indices()
             pred = self.sparse_dot_cpu(assign, psi, cell_idx, junc_idx)
             # print("Requires grad:", pred_values.requires_grad)  # Should now be True
-            #pred_vanilla = torch.matmul(assign, psi).to(self.device)
+            red_vanilla = torch.matmul(assign, psi).to(self.device)
             #pred_vanilla_sparse = pred_vanilla[cell_idx, junc_idx]
             log_prob = self.log_prob_calc_sparse(y, total_counts, pred, input_conc)
             # print(f"The log probability via dense matmul {log_prob}")
