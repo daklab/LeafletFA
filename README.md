@@ -1,128 +1,17 @@
-# Leaflet
+## LeafletFA: Bayesian Factor Analysis for Single-Cell Splicing
 
-Leaflet consists of a Bayesian mixture model that identifies latent cell states (or cell types) related to underlying alternative splicing differences in junctions. 
+LeafletFA is a scalable probabilistic Beta-Dirichlet factor model designed to decompose sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). Unlike traditional methods, LeafletFA discovers coordinated modules of splicing events (Alternative Transcript Structure Events - ATSEs) that reflect biological states, such as cellular aging or lineage specification, without requiring pre-defined cell type labels.
 
-## Note: This repostiory is being actively modified, please feel free to submit issues if you have any questions.
+### Key Features
+- Scalable Inference: Powered by Pyro and Stochastic Variational Inference (SVI) for atlas-scale datasets (200,000+ cells).
+- Sparsity Robust: Specifically designed to handle the high dropout and sparse coverage inherent in single-cell splicing data.
+- Biologically Interpretable: Learns a "splicing dictionary" where each factor represents a coordinated regulatory program.
 
-## Compatibility with sequencing platforms 
+### Compatibility
+LeafletFA is optimized for full-length transcript sequencing (e.g., Smart-Seq2) which provides the internal junction coverage necessary for alternative splicing analysis.
 
-- Smart-Seq2
-- Split-seq* 
-- 10X* (although we do not recommend using this data for alternative splicing analysis)
-
-## Graphical Model (update)
-<img src="https://github.com/daklab/Leaflet/assets/23510936/3e147ba5-7ee8-47ae-b84c-5e99e0551acf" width="500">
-
-## Installation
-
-Leaflet is a Python module which currently runs on Python version 3.9 or higher. Leaflet can be directly installed from github using the following command:
-
-```pip install git+https://github.com/daklab/Leaflet.git``` 
-
-This will automatically install any missing package dependencies.
-
-Alternatively, Leaflet can be installed via pyp (coming soon!). 
-
-## To-Do:
-
-- implement mixture model differential splicing given pre-defined cell types (freeze z and theta) only update alpha and beta variational params
-- implement differential splicing for factor model (DONE)
-- fix the concentration parameter to be learned in factor model 
-- make the package installable (at least the mixture model components for now since it is published) 
-- write reproducible tutorial for mixture model 
-- make sure Leaflet models work with Split-seq data (check what you get when compare known cell types with fixed params)
-- re-write beta-binomial test code to use only python code 
-- re-write tutorial for running full pipeline in a jupyter notebook (run intron clustering step within python script rather than in bash, at least show how it can be done)
-
-## Running Leaflet Scripts (in the future will just be internal callable functions from module)
-
-### Step 1: Intron Clustering (identifying alternatively spliced events in your data)
-
-To start using Leaflet, you will first need to perform intron clustering using the `/Leaflet/src/clustering/Leaflet_intron_clustering.py` script. This step involves identifying intron clusters based on alternative splicing events in your single-cell RNA-seq data.
-
-#### Instructions:
-
-Set up paths for data files and parameters. You will need to specify the path to a GTF file for your organism. Here's an example:
-
-```bash
-gtf_file="/path/to/your/organism/genes.gtf"
-output_file="/path/to/output/clustered/intron_file" #additional suffix will be added with params used
-sequencing_type="single_cell" # or "bulk"
-```
-Prepare junction files. You should have junction files generated from your single-cell data for each pseudobulk sample. For example, you can specify the path to the junction files for brain data:
-
-```bash
-junc_files="/path/to/your/junction/files"
-```   
-
-Set the singleton flag to "False" if you want to exclude singleton clusters (no alternative splicing):
-
-```bash
-singleton="False"
-```
-
-Define where you want to store the coordinates of all junctions going into your analysis:
-
-```bash
-junc_bed_file="/path/to/your/junctions.bed"
-```
-
-Set minimum junction reads, the minimum number of cells with a junction, and intron size constraints:
-
-```bash
-min_junc_reads=10
-min_num_cells_wjunc=10
-min_intron=50
-max_intron=500000
-junc_suffix="*.juncswbarcodes" # suffix of files obtained from Regtools (make sure to append barcodes to extracted junctions!)
-```
-
-Optionally, specify whether to filter low junction ratios within clusters:
-
-```bash
-filter_low_juncratios_inclust="yes" # setting this to "no" might contain very lowly used junctions (relative to other junctions in cluster but would significantly speed up this step!)
-strict_filter=True # remove intron clusters with a very high number of junctions 
-```
-
-Once you have configured these parameters, run the ```Leaflet_intron_clustering.py``` script to perform intron clustering and identify Leaflet alternatively spliced event for downstream modeling.
-
-```bash
- python /Leaflet/src/clustering/Leaflet_intron_clustering.py --gtf_file $gtf_file --junc_files $junc_files --output_file $output_file --sequencing_type $sequencing_type --junc_suffix $junc_suffix --filter_low_juncratios_inclust $filter_low_juncratios_inclust
-```
-
-Feel free to adjust these parameters according to your specific dataset and analysis requirements.
-
-### Step 2: Prepare Sparse Inputs for Leaflet Binomial Mixture Model
-
-For this step, you will need the output from the intron clustering process performed in Step 1. The clustered junction file generated in Step 1 is a key input for this script.
-
-#### Script and Usage
-
-Use the following script, `Leaflet/src/beta-binomial-lda/01_prepare_input_coo.py`, to prepare the sparse input format required for the Leaflet binomial mixture model. This step is essential for downstream modeling.
-
-```bash
-# Define the paths to the required input files
-cluster_file_example="/path/to/output/clustered/intron_file_anno_50_500000_5_5_0.01_single_cell.gz"
-output_file="/path/to/BBmixture_Leaflet_input"
-
-# Run the script with the specified parameters
-python Leaflet/src/beta-binomial-lda/01_prepare_input_coo.py --intron_clusters $cluster_file --output_file $output_file --has_genes "yes" --chunk_size 20000 --train_val_test "no"
-```
-
-### Step 3: Run Leaflet Binomial Mixture model to learn latent cell states and differentially spliced junctions 
-
-For now, please use the following jupyter notebook as a reference for how this model can be run using the output obtained in Step 2. 
-
-```
-/Leaflet/notebooks/example_analysis/run_mixture_model_TM_SS2_wanno.ipynb
-```
-
-### To-do: 
-
-1. Add documentation and some tests for how to run the simulation code 
-2. Add 10X/split-seq mode in addition to smart-seq2
-3. Re-write code for running a zero-inflation test 
-4. Adapt repo to align with scVI-tools framework
-5. Extend framework to seurat/scanpy anndata objects
-6. Add notes on generative model and inference method
-7. Craft the module 
+### Ongoing Development
+- [x] Implement Beta-Dirichlet factor model (LeafletFA).
+- [x] Support for cross-species transfer learning.
+- [x] GPU-accelerated mini-batch training.
+- [ ] Comprehensive ReadTheDocs documentation.
