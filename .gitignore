@@ -16,3 +16,7 @@ src/visualization/human_v47_gencode_basic
 src/visualization/human_v47_comp_anno
 src/clustering/gencodeVM19
 gencodeVM19
+# Large data and research archives
+archive/
+src/archive/
+notebooks/
