@@ -1,7 +1,0 @@
-{
-    "python.analysis.extraPaths": [
-        "./src",
-        "./src/simulation",
-        "./src/beta-dirichlet-factor"
-    ]
-}
