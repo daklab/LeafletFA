@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leafletfa"
+version = "0.1.0"
+description = "Bayesian Beta-Dirichlet Factor Analysis for Single-Cell Splicing"
+authors = [{name = "Karin Isaev", email = "karin.isaev@gmail.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    # Core model
+    "torch>=2.0",
+    "pyro-ppl>=1.9",
+    # Data format
+    "anndata>=0.10",
+    "scipy>=1.10",
+    "numpy>=1.24,<2.0",
+    "pandas>=2.0",
+    # Waypoints (used for cell initialization — improves model quality)
+    "scanpy>=1.9",
+    "umap-learn>=0.5",
+    "scikit-learn>=1.2",
+    # Utilities / visualization
+    "tqdm>=4.65",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+]
+
+[project.optional-dependencies]
+# GPU acceleration via Triton kernel (Linux only, requires CUDA)
+gpu = ["triton"]
+# Experiment tracking
+wandb = ["wandb"]
+
+[project.urls]
+Repository = "https://github.com/daklab/LeafletFA"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["leafletfa*"]
