@@ -49,9 +49,10 @@ def setup_cpu_optimizations():
     n_physical_cores = multiprocessing.cpu_count() // 2
     n_threads = min(n_physical_cores, 16)  # Cap at 16 for diminishing returns
     
-    # Set PyTorch threading
+    # Set PyTorch threading (interop threads can only be set once per process)
     torch.set_num_threads(n_threads)
-    torch.set_num_interop_threads(2)  # Usually 1-2 is optimal for inter-op
+    if torch.get_num_interop_threads() == 1:
+        torch.set_num_interop_threads(2)
     
     # Set environment variables for underlying libraries
     os.environ["OMP_NUM_THREADS"] = str(n_threads)
