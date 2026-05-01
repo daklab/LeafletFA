@@ -19,4 +19,17 @@ gencodeVM19
 # Large data and research archives
 archive/
 src/archive/
-notebooks/
+notebooks/archive/
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+__pycache__/
+*.pyc
+
+# Downloaded data files
+*.h5ad
+notebooks/mouse_foundation_splicing.h5ad
+# Exception: small test fixture committed to repo
+!tests/data/test_splicing.h5ad
