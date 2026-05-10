@@ -22,7 +22,7 @@ from pyro.infer.autoguide.initialization import init_to_value
 from pyro import poutine
 
 from pyro.poutine import block
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -199,11 +199,10 @@ class LeafletFA:
         if "cell_by_junction_matrix" not in self.adata.layers.keys():
             raise ValueError("cell_by_junction_matrix not found in adata.layers.")
 
-        # Convert layers to COO locally — never write back to adata.layers
+        # Convert junction layer to COO to get non-zero positions
         junc_coo = coo_matrix(self.adata.layers["cell_by_junction_matrix"])
-        cluster_coo = coo_matrix(self.adata.layers["cell_by_cluster_matrix"])
 
-        # Extract cell and junction indices
+        # Extract cell and junction indices from junction matrix
         cell_index_array = np.array(junc_coo.row)
         junc_index_array = np.array(junc_coo.col)
 
@@ -229,9 +228,16 @@ class LeafletFA:
         if device.type == 'cuda':
             torch.cuda.empty_cache()
 
-        # Extract cluster counts (ATSE counts for all junctions in it)
-        total_counts_array = np.array(cluster_coo.data)
-        del cluster_coo
+        # Extract cluster (ATSE total) counts at the junction non-zero positions.
+        # cluster[c,j] can be non-zero even when junction[c,j] = 0 (other junctions
+        # in the same ATSE have reads), so we must index by junction positions, not
+        # by all cluster non-zeros.
+        cluster_mat = self.adata.layers["cell_by_cluster_matrix"]
+        cluster_csr = cluster_mat if isinstance(cluster_mat, csr_matrix) else csr_matrix(cluster_mat)
+        total_counts_array = np.asarray(
+            cluster_csr[cell_index_array, junc_index_array]
+        ).flatten()
+        del cluster_csr
         total_counts_tensor = torch.tensor(total_counts_array, **float_type)
 
         # Create sparse tensor for total counts
