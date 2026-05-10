@@ -122,6 +122,56 @@ LeafletFA requires an [AnnData](https://anndata.readthedocs.io/) object with two
 
 Each column `j` corresponds to one junction. Multiple columns map to the same ATSE (one per junction in that event). ATSEmapper handles this grouping automatically.
 
+**Sparsity:** Both matrices are typically 70–95 % zeros for Smart-Seq2 data. CSR and COO formats are both accepted; CSR is preferred.
+
+### ATSE → junction layout
+
+One ATSE (e.g. a cassette exon skip) produces multiple junctions. All junctions belonging to the same ATSE share the same `cell_by_cluster_matrix` value in a given cell — it is their common denominator:
+
+```
+ATSE 0 (junctions 0,1,2)          ATSE 1 (junctions 3,4)
+         j0   j1   j2                    j3   j4
+cell 0 [  3    0    1  | cluster=4 ] [  0    2  | cluster=2 ]
+cell 1 [  0    2    0  | cluster=2 ] [  1    0  | cluster=1 ]
+cell 2 [  1    1    0  | cluster=2 ] [  0    0  | cluster=0 ]
+```
+
+`cell_by_junction_matrix[c, j]` = junction read count.  
+`cell_by_cluster_matrix[c, j]` = sum of all junction counts in the same ATSE = the beta-binomial denominator.
+
+### Constructing the input from scratch
+
+If you are not using ATSEmapper and want to assemble the AnnData manually:
+
+```python
+import numpy as np
+import scipy.sparse as sp
+import anndata as ad
+
+# 5 cells, 6 junctions grouped into 2 ATSEs (3 junctions each)
+atse_ids = np.array([0, 0, 0, 1, 1, 1])   # which ATSE each junction belongs to
+
+junc = np.array([
+    [3, 0, 1, 0, 2, 0],
+    [0, 2, 0, 1, 0, 3],
+    [1, 1, 0, 0, 0, 2],
+    [0, 0, 4, 2, 1, 0],
+    [2, 0, 0, 0, 3, 1],
+], dtype=np.float32)
+
+# cluster[c, j] = sum of all junctions in the same ATSE as j, for cell c
+cluster = np.zeros_like(junc)
+for atse in np.unique(atse_ids):
+    cols = atse_ids == atse
+    cluster[:, cols] = junc[:, cols].sum(axis=1, keepdims=True)
+
+adata = ad.AnnData(X=sp.csr_matrix(junc))
+adata.layers["cell_by_junction_matrix"] = sp.csr_matrix(junc)
+adata.layers["cell_by_cluster_matrix"] = sp.csr_matrix(cluster)
+```
+
+`adata.var` should have one row per junction; `adata.obs` one row per cell. Any additional cell metadata (e.g. `cell_type`, `tissue`) can be added to `adata.obs` and will be preserved through training.
+
 ---
 
 ## Key parameters
