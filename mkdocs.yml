@@ -1,0 +1,64 @@
+site_name: LeafletFA
+site_description: Bayesian Factor Analysis for Single-Cell Splicing
+site_url: https://daklab.github.io/LeafletFA
+repo_url: https://github.com/daklab/LeafletFA
+repo_name: daklab/LeafletFA
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: cyan
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            docstring_style: google
+            show_root_heading: true
+            heading_level: 3
+            show_signature_annotations: false
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Data Layer:
+    - SplicingDataset format: data-layer/splicingdataset.md
+    - ATSEmapper: data-layer/atsemapper.md
+  - Models:
+    - LeafletFA: models/leafletfa.md
+    - SpliceVI: models/splicevi.md
+  - Outputs:
+    - Splicing Programs: outputs/splicing-programs.md
+    - Cell Activities: outputs/cell-activities.md
+    - Differential Splicing: outputs/differential.md
+  - Ecosystem: ecosystem.md
+  - API Reference:
+    - Model: api/model.md
+    - Waypoints: api/waypoints.md
+    - Differential splicing: api/differential_splicing.md

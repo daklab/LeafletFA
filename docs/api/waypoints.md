@@ -1,0 +1,3 @@
+# leafletfa.waypoints
+
+::: leafletfa.waypoints

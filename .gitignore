@@ -21,6 +21,9 @@ archive/
 src/archive/
 notebooks/archive/
 
+# MkDocs build output
+site/
+
 # Packaging artifacts
 *.egg-info/
 dist/
