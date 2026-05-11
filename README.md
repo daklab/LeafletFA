@@ -2,6 +2,8 @@
 
 LeafletFA is a scalable probabilistic Beta-Dirichlet factor model designed to decompose sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). It discovers coordinated modules of splicing events (Alternative Transcript Structure Events — ATSEs) that reflect biological states such as cellular aging or lineage specification, without requiring pre-defined cell type labels.
 
+**Documentation:** [daklab.github.io/LeafletFA](https://daklab.github.io/LeafletFA/)
+
 **Related repositories:**
 - [ATSEmapper](https://github.com/daklab/ATSEmapper) — preprocessing pipeline: BAM files → regtools junction extraction → ATSE clustering → `SplicingDataset.h5ad`
 - [Leaflet-analysis](https://github.com/daklab/Leaflet-analysis) — code and Snakemake pipelines used to produce all figures in the paper
@@ -192,5 +194,5 @@ adata.layers["cell_by_cluster_matrix"] = sp.csr_matrix(cluster)
 - [x] Support for cross-species transfer learning
 - [x] GPU-accelerated mini-batch training
 - [x] pip-installable package
-- [ ] ReadTheDocs documentation
+- [x] Documentation site (GitHub Pages)
 - [ ] PyPI release
