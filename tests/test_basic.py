@@ -12,22 +12,34 @@ from pathlib import Path
 TEST_H5AD = Path(__file__).parent / "data" / "test_splicing.h5ad"
 
 
-def make_synthetic_adata(n_cells=30, n_junctions=60, seed=42, fmt="csr"):
+def make_synthetic_adata(n_cells=30, n_junctions=60, n_atses=15, seed=42, fmt="csr"):
     """Build a minimal synthetic AnnData with the two layers LeafletFA requires.
 
-    Both layers must share the same sparsity pattern: if a cell has zero reads
-    at a junction it also has zero reads at that ATSE (the real-data invariant).
+    Invariants (matching real ATSEmapper output):
+    - junction[c,j] > 0  =>  cluster[c,j] > 0  (can't have junction reads without ATSE total)
+    - junction[c,j] = 0 does NOT imply cluster[c,j] = 0  (other junctions in same ATSE may have reads)
+    - sum of junction[c, all j in ATSE k] == cluster[c, j] for all j in ATSE k
     """
     rng = np.random.default_rng(seed)
-    density = rng.poisson(lam=2, size=(n_cells, n_junctions)).astype(np.float32)
-    density[rng.random((n_cells, n_junctions)) < 0.7] = 0
-    # Cluster counts = junction counts + extra reads, but only where junction > 0
-    extra = rng.poisson(lam=1, size=(n_cells, n_junctions)).astype(np.float32)
-    cluster = density + np.where(density > 0, extra, 0)
+
+    # Assign junctions to ATSEs (multiple junctions per ATSE)
+    atse_ids = np.arange(n_junctions) % n_atses  # junction j belongs to ATSE atse_ids[j]
+
+    # Generate per-junction counts with ~70% dropout
+    junc_dense = rng.poisson(lam=2, size=(n_cells, n_junctions)).astype(np.float32)
+    junc_dense[rng.random((n_cells, n_junctions)) < 0.7] = 0
+
+    # Cluster count for each (cell, junction) = sum of all junctions in the same ATSE
+    cluster_dense = np.zeros_like(junc_dense)
+    for atse in range(n_atses):
+        mask = atse_ids == atse
+        atse_total = junc_dense[:, mask].sum(axis=1, keepdims=True)  # (n_cells, 1)
+        cluster_dense[:, mask] = atse_total  # broadcast to all junctions in ATSE
+
     convert = {"csr": sp.csr_matrix, "coo": sp.coo_matrix}[fmt]
-    Y = convert(density)
-    T = convert(cluster)
-    adata = ad.AnnData(X=sp.csr_matrix(density))
+    Y = convert(junc_dense)
+    T = convert(cluster_dense)
+    adata = ad.AnnData(X=sp.csr_matrix(junc_dense))
     adata.layers["cell_by_junction_matrix"] = Y
     adata.layers["cell_by_cluster_matrix"] = T
     return adata
