@@ -20,6 +20,7 @@
 
 ### Other
 
+- [ ] **Implement `analyze_all_junctions_groups`** — high-level wrapper that loops over all junctions for a group-vs-group comparison (equivalent of `analyze_all_factors_psi` but for predefined cell groups). Should call `compute_differential_splicing_groups` per junction, collect into a DataFrame, then call `compute_junctions_significance_groups`. Also fix the docs in `outputs/differential.md` which references a `test_differential_activity` function that does not exist.
 - [ ] **PyPI release** — `python -m build && twine upload`
 - [ ] **Docstrings on key public methods** — `from_anndata`, `train`, `get_all_variables` need
   Google-style Args/Returns blocks so mkdocstrings renders them properly
