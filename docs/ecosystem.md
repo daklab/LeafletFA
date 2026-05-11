@@ -28,7 +28,3 @@ import muon as mu
 
 mdata = mu.MuData({"splicing": adata_splicing, "rna": adata_rna})
 ```
-
-## pyroe / tximeta
-
-If starting from alevin-fry or salmon quantification, pyroe can produce per-cell count matrices that ATSEmapper can consume after junction extraction with regtools.
