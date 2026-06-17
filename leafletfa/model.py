@@ -790,7 +790,13 @@ class LeafletFA:
                 guide.append(AutoDiagonalNormal(block(self.model, expose=['assign'])))
 
             # Guide for everything else (excluding 'psi' and 'assign')
-            guide.append(AutoDiagonalNormal(block(self.model, hide=['psi', 'assign'])))
+            if self.pi_init is not None and self.alpha_pi_init is not None:
+                guide.append(AutoDiagonalNormal(
+                    block(self.model, hide=['psi', 'assign']),
+                    init_loc_fn=init_to_value(values={'pi': self.pi_init, 'alpha_pi': self.alpha_pi_init})
+                ))
+            else:
+                guide.append(AutoDiagonalNormal(block(self.model, hide=['psi', 'assign'])))
 
             # Fit the model
             losses = self.fit(guide)
