@@ -434,9 +434,11 @@ class LeafletFA:
             dir_conc = pyro.sample("dir_conc", dist.Gamma(2., 2.))
             dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6) # Prevent numerical issues
         else:
-            dir_conc = self.dir_conc
+            # Scalar float broadcasts with pi regardless of device (avoids CPU/CUDA mismatch
+            # during AutoDiagonalNormal prototype setup, where pi is sampled on CPU even on GPU)
+            dir_conc = self.dir_conc.item() if isinstance(self.dir_conc, torch.Tensor) else float(self.dir_conc)
 
-        # Sample the factor assignments for cells 
+        # Sample the factor assignments for cells
         assign = pyro.sample("assign", dist.Dirichlet(pi * dir_conc).expand([N]).to_event(1)).to(dtype=torch.float32)
 
         # Ensure no negative values in assign 
