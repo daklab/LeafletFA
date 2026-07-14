@@ -881,3 +881,56 @@ def test_waypoint_init_actually_works_end_to_end():
 
     r = np.median(_hungarian_match(_npy(m.psi), psi_true)[2])
     assert r > 0.4, f"waypoint-initialised fit did not recover psi (r={r:.3f})"
+
+
+def test_chunked_waypoint_warm_start_is_not_silently_discarded():
+    """Under waypoints_use=True the chunk-to-chunk psi warm start must SURVIVE.
+
+    train() has a trap: when waypoints_use=True it IGNORES the psi_init/phi_init ARGUMENTS and
+    re-reads adata.varm[psi_key] / adata.obsm[phi_key] instead. So passing psi_init=psi_w does
+    NOTHING under waypoint init -- every chunk silently restarts from the ORIGINAL waypoint psi and
+    everything learned in previous chunks is thrown away.
+
+    run_training.py dodges it by writing the CARRIED psi back into the waypoint key
+    (run_training.py:392). fit_chunked now does the same.
+
+    Cost of getting this wrong: the Figure-2 benchmark reported waypoints+chunked at psi_r 0.724 /
+    ARI 0.494, which read as "the ATLAS PRODUCTION CONFIG is broken" -- when in fact only the
+    benchmark was. That is a whole false alarm about a production result.
+
+    The test: after chunked training with waypoints, psi must have MOVED AWAY from the waypoint
+    initialisation. If the warm start is being discarded, the final psi is just the last chunk's
+    short fit starting from psi_init -- and, more tellingly, training MORE passes changes nothing.
+    """
+    import io, contextlib, numpy as np
+    from leafletfa.chunked import fit_chunked
+    from leafletfa.waypoints import add_waypoint_initializations
+
+    adata, psi_true, _ = simulate_from_generative_model(n_cells=600, K=3, n_atses=30, seed=0)
+    add_waypoint_initializations(adata, K=3, n_pca=5, n_dim=5, metacell_size=20)
+    psi_wp = np.asarray(adata.varm["psi_init_3_waypoints"]).T.copy()   # (K, J), the INITIALISATION
+
+    common = dict(junc_specific_prior=True, input_conc_prior=None, waypoints_use=True,
+                  print_epochs=10**6, patience=10**6, min_delta=0, min_delta_rel=1e-6,
+                  log_wandb=False, loss_plot=False, use_dense_mode=False, num_samples=10, gamma=0.5)
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        m_short = fit_chunked(adata, K=3, batch_size=200, num_passes=1, seed=0,
+                              num_epochs_first=40, num_epochs_later=40, lr=0.05, **common)
+        m_long  = fit_chunked(adata, K=3, batch_size=200, num_passes=4, seed=0,
+                              num_epochs_first=40, num_epochs_later=40, lr=0.05, **common)
+
+    r_short = np.median(_hungarian_match(_npy(m_short.psi), psi_true)[2])
+    r_long  = np.median(_hungarian_match(_npy(m_long.psi),  psi_true)[2])
+
+    # 1. psi must have MOVED from the waypoint init -- it is not just returning what it was handed.
+    moved = float(np.abs(_npy(m_long.psi) - psi_wp).mean())
+    assert moved > 1e-3, (
+        f"psi barely moved from the waypoint initialisation (mean |delta| = {moved:.2e}). The "
+        f"chunk-to-chunk warm start is being DISCARDED: train() overrides psi_init from "
+        f"adata.varm when waypoints_use=True, so every chunk restarts from the original waypoints.")
+
+    # 2. MORE passes must help. If the warm start is discarded, extra passes accumulate nothing.
+    assert r_long >= r_short - 0.05, (
+        f"4 passes ({r_long:.3f}) did no better than 1 pass ({r_short:.3f}). Learning is not "
+        f"accumulating across chunks -- the psi warm start is being thrown away.")

@@ -68,6 +68,7 @@ def fit_chunked(adata, K, batch_size=8192, num_passes=20, seed=0,
     all_phi = (np.zeros((N, K), dtype=np.float32) if phi_init is None
                else np.asarray(phi_init, dtype=np.float32).copy())
     phi_key = f"phi_init_{K}_waypoints"
+    psi_key = f"psi_init_{K}_waypoints"
     model = None
 
     for pass_idx in range(num_passes):
@@ -79,6 +80,21 @@ def fit_chunked(adata, K, batch_size=8192, num_passes=20, seed=0,
             seen = all_phi[idx].sum() > 0
             if seen:
                 ba.obsm[phi_key] = all_phi[idx]
+
+            # CRITICAL, and easy to get wrong: when waypoints_use=True, train() IGNORES the
+            # psi_init/phi_init ARGUMENTS and re-reads adata.varm[psi_key] / adata.obsm[phi_key]
+            # instead (model.py: "if self.waypoints_use: ... psi_init = varm[psi_key].T"). So passing
+            # psi_init=psi_w does NOTHING under waypoint init -- every chunk silently restarts from
+            # the ORIGINAL waypoint psi and the chunk-to-chunk warm start is thrown away.
+            #
+            # run_training.py works around this by writing the CARRIED psi back into the waypoint key
+            # (run_training.py:392, `batch_adata.varm[...] = global_psi.T`). Mirror that exactly.
+            #
+            # Getting this wrong cost a real result: the benchmark reported waypoints+chunked at
+            # psi_r 0.724 / ARI 0.494 -- looking like the ATLAS PRODUCTION CONFIG was broken -- when
+            # in fact only the benchmark was.
+            if psi_w is not None and model_kwargs.get("waypoints_use"):
+                ba.varm[psi_key] = np.asarray(psi_w, dtype=np.float32).T      # varm is (J, K)
 
             model = LeafletFA(
                 adata=ba, K=K,
