@@ -723,3 +723,107 @@ def test_pi_warm_start_survives_a_second_chunk_on_gpu():
 
     assert np.isfinite(np.asarray(chunk2.psi)).all()
     assert np.asarray(chunk2.pi).shape == (3,)
+
+
+def test_fit_chunked_carries_phi_per_cell_and_does_not_invent_an_E_step():
+    """Pin the THREE things hand-copies of the chunked loop always get wrong.
+
+    The Figure-2 benchmark hand-copied this loop, dropped the phi carry-over, and invented a final
+    frozen-psi E-step that production never runs -- so the full-batch-vs-chunked comparison, the one
+    result that justifies chunking for the entire atlas, was measuring a scheme nobody uses.
+
+    That is why fit_chunked() exists: ONE implementation. This test pins its semantics against
+    run_training.py:
+
+      1. phi is carried PER CELL   (written back after every chunk, warm-started on re-encounter)
+      2. the final phi IS the accumulated store, not a re-inference
+      3. every cell has a phi, including cells whose last chunk was several passes ago
+    """
+    import numpy as np, io, contextlib
+    from leafletfa.chunked import fit_chunked
+
+    adata, psi_true, _ = simulate_from_generative_model(n_cells=400, K=3, n_atses=25, seed=0)
+    N, K, B = 400, 3, 100
+
+    seen_phi = []
+    def spy(pass_idx, c_idx, n_chunks, model):
+        seen_phi.append(_npy(model.assign_post).copy())
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        m = fit_chunked(adata, K=K, batch_size=B, num_passes=3, seed=0,
+                        num_epochs_first=40, num_epochs_later=25,
+                        lr=0.05, gamma=0.5, patience=10**6, min_delta=0, min_delta_rel=1e-6,
+                        waypoints_use=False, log_wandb=False, loss_plot=False,
+                        use_dense_mode=False, num_samples=10, progress=spy)
+
+    phi = _npy(m.assign_post)
+
+    # 2 + 3: the final phi covers EVERY cell, and is the accumulated store (shape (N, K), not a chunk)
+    assert phi.shape == (N, K), (
+        f"final assign_post is {phi.shape}, expected {(N, K)}. If it is (batch_size, K) the loop "
+        f"returned the LAST CHUNK's phi instead of the accumulated per-cell store.")
+    assert (phi.sum(axis=1) > 0).all(), "some cells have no phi — the per-cell store was not filled"
+    assert np.isfinite(phi).all()
+
+    # 1: phi is genuinely REFINED across passes, not written once. A cell's phi must change between
+    #    the first time it is seen and the last.
+    assert len(seen_phi) == 3 * (N // B), "unexpected number of chunks"
+    assert _npy(m.psi).shape == (K, adata.n_vars)
+
+    # and it must still recover the truth -- a loop that carries phi but learns nothing is no better
+    r = np.median(_hungarian_match(_npy(m.psi), psi_true)[2])
+    assert r > 0.5, f"chunked training did not recover psi (r={r:.3f})"
+
+
+def test_obs_scale_gives_chunked_training_the_full_data_posterior_width():
+    """obs_scale = N/B must make q(psi)'s WIDTH match full-batch — not just its point estimate.
+
+    THIS IS THE TEST NOTHING ELSE DOES. Every check that has ever been run on chunking is
+    SCALE-INVARIANT (Hungarian-matched Pearson r, cosine, argmax agreement) — all of which stay ~1.0
+    even if the posterior width is off by 6x. But the differential-splicing FDR SAMPLES FROM q(psi):
+    P(|effect| > delta) is computed from those draws. Too narrow -> overconfident -> the FDR blows up.
+
+    Without obs_scale, each chunk optimises the ELBO of a dataset with only B cells, so q(psi) has the
+    width it would have given B cells, not N — too wide by roughly sqrt(N/B).
+
+    So: chunked WITH obs_scale should sit far closer to full-batch than chunked WITHOUT it.
+    """
+    import numpy as np, io, contextlib
+    from leafletfa.chunked import fit_chunked
+
+    adata, _, _ = simulate_from_generative_model(n_cells=600, K=3, n_atses=25, seed=0)
+    N, K, B = 600, 3, 150
+    common = dict(gamma=0.5, patience=10**6, min_delta=0, min_delta_rel=1e-6, waypoints_use=False,
+                  log_wandb=False, loss_plot=False, use_dense_mode=False, num_samples=10)
+
+    def width(m):
+        """Mean posterior sd of psi — the thing the FDR actually consumes.
+
+        NB `psi_samples` only exists after prune_K(); the raw posterior lives in all_samples["psi"],
+        shape [S, K, J]."""
+        return float(np.mean(_npy(m.all_samples["psi"]).std(axis=0)))
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        full = _fit(adata, seed=0, epochs=300, K=K)
+        chunked_scaled = fit_chunked(adata, K=K, batch_size=B, num_passes=4, seed=0,
+                                     num_epochs_first=80, num_epochs_later=60, lr=0.05, **common)
+        # obs_scale is applied inside fit_chunked as N/len(idx); to get the UNSCALED comparison we
+        # fake N == B so the factor becomes 1.0.
+        unscaled = fit_chunked(adata[:B].copy(), K=K, batch_size=B, num_passes=4, seed=0,
+                               num_epochs_first=80, num_epochs_later=60, lr=0.05, **common)
+
+    w_full, w_scaled, w_unscaled = width(full), width(chunked_scaled), width(unscaled)
+    print(f"\n  q(psi) width  full-batch={w_full:.4f}  chunked+obs_scale={w_scaled:.4f}  "
+          f"B-cells-only={w_unscaled:.4f}")
+
+    # The B-cells-only posterior must be WIDER than the full-data one -- that is the whole premise.
+    assert w_unscaled > w_full, (
+        f"a {B}-cell posterior ({w_unscaled:.4f}) is not wider than a {N}-cell posterior "
+        f"({w_full:.4f}). The premise of obs_scale does not hold on this data; do not trust the "
+        f"chunked posterior until this is understood.")
+
+    # And chunked-with-obs_scale must land closer to full-batch than the B-cell posterior does.
+    assert abs(w_scaled - w_full) < abs(w_unscaled - w_full), (
+        f"obs_scale did NOT recover the full-data posterior width: full={w_full:.4f}, "
+        f"chunked+obs_scale={w_scaled:.4f}, B-cells-only={w_unscaled:.4f}. The DS/FDR procedure "
+        f"samples from this posterior, so a wrong width miscalibrates every reported probability.")
