@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np 
 import pandas as pd
 from tqdm import tqdm
@@ -53,57 +55,116 @@ def max_min_sampling(diffmap_components, n_waypoints, num_components=10, seed=42
     
     return np.array(waypoints)
 
-def initialize_psi_phi_with_random_non_zero(rho_hat, metacell_dict, epsilon=0.01):
+def initialize_psi_phi(rho_hat, metacell_dict, mask=None, epsilon=1e-3, clip=1e-4):
+    """Initialize psi/phi from waypoint metacells: the COVERAGE-AWARE MEAN over each metacell.
+
+    psi[j, k] = mean of rho_hat[c, j] over the cells c in metacell k where junction j's ATSE is
+    actually COVERED. Coverage comes from `mask`, not from `rho_hat != 0`.
+
+    Why this matters (this replaces `initialize_psi_phi_with_random_non_zero`, which was wrong in
+    three compounding ways -- measured on the real 132,706 x 79,768 mouse training matrix):
+
+    1. It took ONE uniformly random non-zero value per junction (`np.random.choice`), not a mean.
+       A psi column was therefore a random mosaic of single cells, not a denoised profile -- the
+       exact opposite of the Methods' stated rationale ("to reduce noise").
+    2. It treated every observed ZERO as missing (`arr > 0`). But **58.6% of stored junc_ratio
+       values are exactly 0.0** -- a junction genuinely unused in a covered ATSE. Dropping them
+       biased the init upward: the sampled pool has mean 0.735 where the coverage-aware mean is
+       0.305.
+    3. It never clipped. **51.7% of the values it could draw were exactly 1.0**, and Pyro maps a
+       Beta site through a logit, so psi_init = 1.0 becomes a guide loc of +15.94 where
+       sigmoid'(loc) ~= 1.2e-7. About HALF the psi matrix started frozen in the flat tail of the
+       sigmoid and never moved. Waypoints exist to break the symmetry (see the saddle-point
+       discussion in METHODS.md §11.1); as written, they could not.
+
+    Parameters
+    ----------
+    rho_hat : (n_cells, n_junctions) array or scipy sparse
+        Observed junction usage ratios y/T. Kept sparse -- never densified.
+    metacell_dict : dict
+        waypoint -> list of cell indices (from `assign_nearest_cells`).
+    mask : (n_cells, n_junctions) array or scipy sparse, optional
+        1 where the junction's ATSE has reads (i.e. rho_hat is OBSERVED, zero or not), 0 where it is
+        missing. Build it as `cell_by_cluster_matrix > 0`, or use the `psi_mask` layer if present.
+        If omitted, falls back to treating non-zeros as observed and WARNS -- that is the old,
+        biased behaviour.
+    epsilon : float
+        Value used for a junction with no coverage anywhere in the metacell.
+    clip : float
+        psi is clipped to [clip, 1 - clip] so the logit does not saturate.
+
+    Returns
+    -------
+    psi : (n_junctions, n_metacells)
+    phi : (n_cells, n_metacells), rows sum to 1
     """
-    Initialize psi and phi using waypoints based on observed rho_hat, choosing random non-zero values for each junction.
+    rho = csr_matrix(rho_hat) if not isinstance(rho_hat, csr_matrix) else rho_hat
 
-    Parameters:
-    rho_hat (ndarray): Observed probabilities (n_cells, n_junctions).
-    metacell_dict (dict): Dictionary of metacells with waypoints as keys and cell indices as values.
-    epsilon (float): Small value to use as fallback if all junction values are zero.
+    if mask is None:
+        warnings.warn(
+            "initialize_psi_phi: no coverage `mask` given, so observed zeros cannot be distinguished "
+            "from missing data. Falling back to 'non-zero == observed', which biases psi_init upward "
+            "(measured mean 0.735 vs 0.305 on the mouse atlas). Pass mask=(cluster_counts > 0).",
+            RuntimeWarning,
+        )
+        cover = (rho != 0)
+    else:
+        cover = csr_matrix(mask)
+        cover = (cover != 0)
+    cover = csr_matrix(cover, dtype=np.float32)
 
-    Returns:
-    psi (ndarray): Initialized psi values (n_junctions, n_metacells).
-    phi (ndarray): Initialized phi values (n_cells, n_metacells) with each row summing to 1.
-    """
+    n_junctions = rho.shape[1]
+    n_metacells = len(metacell_dict)
+    psi = np.full((n_junctions, n_metacells), epsilon, dtype=np.float64)
 
-    # Step 1: Convert rho_hat to dense if it's sparse
-    if hasattr(rho_hat, "toarray"):
-        rho_hat = rho_hat.toarray()
+    for i, cell_indices in enumerate(tqdm(list(metacell_dict.values()), desc="waypoint psi")):
+        idx = np.asarray(cell_indices, dtype=int)
+        # sum of observed rho, and count of covered cells, per junction -- both over ~50 rows only
+        tot = np.asarray(rho[idx].sum(axis=0)).ravel()
+        n_cov = np.asarray(cover[idx].sum(axis=0)).ravel()
+        covered = n_cov > 0
+        psi[covered, i] = tot[covered] / n_cov[covered]     # <-- MEAN over covered cells
 
-    n_junctions = rho_hat.shape[1]  # Number of junctions
-    n_metacells = len(metacell_dict)  # Number of metacells
+    # Keep psi strictly inside (0,1): logit(1.0) saturates and freezes the entry for the whole run.
+    psi = np.clip(psi, clip, 1.0 - clip)
 
-    # Initialize psi with zeros (n_junctions, n_metacells)
-    psi = np.zeros((n_junctions, n_metacells))
+    # phi by least squares, rho_hat ~= phi @ psi.T, solved via the normal equations so we never
+    # materialise rho_hat.T densely (that was 132,706 x 79,768 float64 = 85 GB, and is why the SLURM
+    # job needed 300 GB and why waypoints did not scale).
+    #   phi = (rho @ psi) @ inv(psi.T @ psi)
+    G = psi.T @ psi                                   # (K, K)
+    B = np.asarray(rho @ psi)                         # (C, K) -- sparse x dense, cheap
+    phi = B @ np.linalg.pinv(G)                       # (C, K)
 
-    # Function to select a random non-zero value from the array of cells for a given junction
-    def random_non_zero(arr, epsilon):
-        non_zero_vals = arr[arr > 0]  # Find non-zero values
-        if len(non_zero_vals) == 0:   # If no non-zero values, return epsilon
-            return epsilon
-        return np.random.choice(non_zero_vals)  # Randomly choose one of the non-zero values
-
-    # Iterate over each metacell and initialize psi for each junction in that metacell
-    for i, (metacell, cell_indices) in tqdm(enumerate(metacell_dict.items())):
-        junction_matrix = rho_hat[cell_indices, :]  # Get the junction data for the cells in the metacell
-
-        # Apply random_non_zero for each junction across the metacell and assign the result to psi
-        psi[:, i] = np.apply_along_axis(random_non_zero, 0, junction_matrix, epsilon)
-
-    # Step 3: Solve for phi (n_cells, n_metacells) by solving the equation rho_hat = Phi * psi
-    # Use least squares to solve for phi
-    phi = np.linalg.lstsq(psi, rho_hat.T, rcond=None)[0].T  # (n_cells, n_metacells)
-
-    # Step 4: Clip phi values between epsilon and 1 - epsilon
-    phi = np.clip(phi, epsilon, 1 - epsilon)
-
-    # Step 5: Normalize phi such that for each cell, the proportions sum to 1
+    phi = np.clip(phi, epsilon, 1.0 - epsilon)
     phi /= phi.sum(axis=1, keepdims=True)
-
     return psi, phi
 
-def assign_nearest_cells(waypoints, diffmap_components, num_nearest=5):
+
+def initialize_psi_phi_with_random_non_zero(rho_hat, metacell_dict, epsilon=0.01):
+    """DEPRECATED. Kept only so old scripts do not break; forwards to `initialize_psi_phi`.
+
+    The original implementation is described (and its three bugs quantified) in
+    `initialize_psi_phi`. Do not use it for new runs -- and pass a coverage `mask`.
+    """
+    warnings.warn(
+        "initialize_psi_phi_with_random_non_zero is deprecated: it seeded psi with ONE RANDOM "
+        "non-zero value per junction, treated observed zeros as missing, and left ~52% of entries "
+        "at exactly 1.0 (a saturated logit, gradient ~1e-7, frozen for the whole run). "
+        "Use initialize_psi_phi(rho_hat, metacell_dict, mask=cluster_counts > 0).",
+        DeprecationWarning, stacklevel=2,
+    )
+    return initialize_psi_phi(rho_hat, metacell_dict, mask=None, epsilon=epsilon)
+
+def assign_nearest_cells(waypoints, diffmap_components, num_nearest=50):
+    """Assign the `num_nearest` closest cells to each waypoint, without reuse.
+
+    Default is 50 to match the Methods ("the average ... across the 50 nearest neighbors"). It was
+    5, and the pipeline passed 30 -- three different values, none of them the documented one.
+
+    NB: cells are consumed greedily, so later waypoints get progressively more distant "nearest"
+    neighbours. That is not in the Methods but it is deliberate (metacells must be disjoint).
+    """
     X_diff = diffmap_components
     assigned_cells = set()  # To keep track of already assigned cells
     metacell_dict = {}  # Dictionary to store metacell groupings
@@ -124,7 +185,7 @@ def assign_nearest_cells(waypoints, diffmap_components, num_nearest=5):
     
     return metacell_dict
 
-def generate_initializations(rho_hat, waypoints_dict, metacell_dicts, epsilon=0.01):
+def generate_initializations(rho_hat, waypoints_dict, metacell_dicts, mask=None, epsilon=1e-3):
     """
     Generate multiple psi and phi initializations based on different waypoint sets and metacell dictionaries.
 
@@ -150,8 +211,11 @@ def generate_initializations(rho_hat, waypoints_dict, metacell_dicts, epsilon=0.
         waypoints = waypoints_dict[n_waypoints]
         metacell_dict = metacell_dicts[n_waypoints]
 
-        # Initialize psi and phi for the current metacell dictionary
-        psi, phi = initialize_psi_phi_with_random_non_zero(rho_hat, metacell_dict, epsilon)
+        # Initialize psi and phi for the current metacell dictionary.
+        # `mask` marks where rho_hat is OBSERVED (ATSE covered) rather than missing -- without it,
+        # observed zeros are silently dropped and psi_init is biased upward. Pass
+        # mask = (cell_by_cluster_matrix > 0).
+        psi, phi = initialize_psi_phi(rho_hat, metacell_dict, mask=mask, epsilon=epsilon)
 
         # Store the initialization
         psi_list.append(psi)
@@ -248,3 +312,74 @@ def plot_PCA_with_waypoints(adata, waypoints_dict, color_by='tissue', n_waypoint
         filename = f"PCA_with_waypoints_{n_waypoints}_waypoints.pdf"
         plt.savefig(filename, format='pdf')
     
+
+
+def add_waypoint_initializations(adata, K, n_pca=10, n_dim=10, metacell_size=50, seed=42,
+                                 layer=None, mask_layer=None):
+    """Compute waypoint psi/phi initialisations and WRITE THEM INTO `adata`.
+
+    THIS IS THE GLUE THAT WAS MISSING FROM THE PACKAGE.
+
+    `LeafletFA(waypoints_use=True)` only *reads* `adata.varm[f"psi_init_{K}_waypoints"]` and
+    `adata.obsm[f"phi_init_{K}_waypoints"]` -- and raises ValueError if they are absent. But nothing
+    in the package ever WROTE them: the code that builds them lived only inside the analysis repo's
+    run_training.py. Consequences:
+
+      * the package's own documented quickstart, `LeafletFA(adata, K=20); train()`, raises ValueError
+        (waypoints_use defaults to True)
+      * the Figure-2 benchmark's entire WAYPOINT ARM silently failed -- all 3 fits died with
+        "PSI and PHI initializations for 5 waypoints not found", so the waypoints-vs-random
+        comparison, one of the results the paper needs, produced nothing.
+
+    Call this before `train()` when you want waypoint initialisation.
+
+    Deliberately UNSTRATIFIED: waypoints are chosen by unsupervised max-min sampling over the PC
+    space of junction usage ratios, with NO cell-type labels. The paper claims LeafletFA recovers
+    splicing programs "without prior cell-type labels", so labels must not enter through the
+    initialisation of the very model whose programs are then shown to recover cell types.
+    """
+    import numpy as np
+    from sklearn.decomposition import TruncatedSVD
+
+    # PCA space for waypoint selection
+    if layer is not None:
+        X = adata.layers[layer]
+    elif "junc_ratio_centered" in adata.layers:
+        X = adata.layers["junc_ratio_centered"]
+    elif "junc_ratio" in adata.layers:
+        X = adata.layers["junc_ratio"]
+    else:
+        X = adata.X
+    # NB fit_transform ALREADY returns U*Sigma. Multiplying by singular_values_ again would give
+    # U*Sigma^2 and collapse waypoint selection toward PC1.
+    X_pca = TruncatedSVD(n_components=n_pca, random_state=seed).fit_transform(X)
+
+    wp_idx = max_min_sampling(X_pca, K, num_components=n_dim, seed=seed)
+    metacells = assign_nearest_cells(wp_idx, X_pca, num_nearest=metacell_size)
+
+    rho = adata.layers["junc_ratio"] if "junc_ratio" in adata.layers else adata.X
+    # Coverage mask: 1 where the junction's ATSE HAS READS, so an observed PSI of 0.0 counts as DATA
+    # rather than being silently dropped as "missing".
+    mask = None
+    if mask_layer is not None and mask_layer in adata.layers:
+        mask = adata.layers[mask_layer]
+    elif "psi_mask" in adata.layers:
+        mask = adata.layers["psi_mask"]
+    elif "cell_by_cluster_matrix" in adata.layers:
+        import scipy.sparse as sp
+        C = adata.layers["cell_by_cluster_matrix"]
+        mask = (C > 0) if sp.issparse(C) else (np.asarray(C) > 0)
+
+    psi_init, phi_init = initialize_psi_phi(rho, metacells, mask=mask)
+
+    # initialize_psi_phi returns psi as (J, K) -- which is ALREADY the varm layout (n_vars, K).
+    # train() reads varm[key].T to get its (K, J). Do NOT transpose here.
+    psi_init = np.asarray(psi_init, dtype=np.float32)      # (J, K)
+    phi_init = np.asarray(phi_init, dtype=np.float32)      # (n_cells, K)
+    assert psi_init.shape == (adata.n_vars, K), \
+        f"psi_init is {psi_init.shape}, expected (n_vars={adata.n_vars}, K={K}) for varm"
+    assert phi_init.shape == (adata.n_obs, K), \
+        f"phi_init is {phi_init.shape}, expected (n_obs={adata.n_obs}, K={K}) for obsm"
+    adata.varm[f"psi_init_{K}_waypoints"] = psi_init
+    adata.obsm[f"phi_init_{K}_waypoints"] = phi_init
+    return psi_init, phi_init

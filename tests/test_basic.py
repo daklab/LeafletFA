@@ -827,3 +827,57 @@ def test_obs_scale_gives_chunked_training_the_full_data_posterior_width():
         f"obs_scale did NOT recover the full-data posterior width: full={w_full:.4f}, "
         f"chunked+obs_scale={w_scaled:.4f}, B-cells-only={w_unscaled:.4f}. The DS/FDR procedure "
         f"samples from this posterior, so a wrong width miscalibrates every reported probability.")
+
+
+def test_waypoint_init_actually_works_end_to_end():
+    """`waypoints_use=True` must actually run. It could not, until add_waypoint_initializations().
+
+    LeafletFA(waypoints_use=True) only READS adata.varm[f"psi_init_{K}_waypoints"] and raises
+    ValueError if absent -- but NOTHING IN THE PACKAGE EVER WROTE IT. The builder lived only in the
+    analysis repo's run_training.py. So:
+
+      * the package's documented quickstart `LeafletFA(adata, K=20); train()` raised ValueError,
+        because waypoints_use DEFAULTS TO TRUE;
+      * the Figure-2 benchmark's whole waypoint arm silently failed -- all 3 fits died with
+        "PSI and PHI initializations for 5 waypoints not found", so waypoints-vs-random, a
+        comparison the paper needs, produced nothing at all.
+
+    This test would have caught it on day one.
+    """
+    import io, contextlib, numpy as np
+    from leafletfa import LeafletFA
+    from leafletfa.waypoints import add_waypoint_initializations
+
+    adata, psi_true, _ = simulate_from_generative_model(n_cells=400, K=3, n_atses=30, seed=0)
+
+    # Before: the documented path raises.
+    with pytest.raises(ValueError, match="not found in adata"):
+        m = LeafletFA(adata, K=3, waypoints_use=True, log_wandb=False, loss_plot=False,
+                      num_epochs=5)
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.from_anndata()
+            m.train(num_initializations=1, seeds=[0])
+
+    # After: build the inits, and the same call works.
+    psi_init, phi_init = add_waypoint_initializations(adata, K=3, n_pca=5, n_dim=5, metacell_size=20)
+    assert f"psi_init_3_waypoints" in adata.varm
+    assert f"phi_init_3_waypoints" in adata.obsm
+    assert adata.varm["psi_init_3_waypoints"].shape == (adata.n_vars, 3)   # (J, K)
+    assert adata.obsm["phi_init_3_waypoints"].shape == (adata.n_obs, 3)
+
+    # psi_init must be CLIPPED away from 0/1: logit(1.0) saturates to +15.94 and the entry is frozen
+    # for the whole run (this used to leave ~52% of psi_init at exactly 1.0).
+    assert psi_init.max() < 1.0 and psi_init.min() > 0.0, (
+        f"psi_init hits the boundary (min={psi_init.min()}, max={psi_init.max()}). Saturated logits "
+        f"have vanishing gradient and freeze those entries for the entire fit.")
+
+    m = LeafletFA(adata, K=3, waypoints_use=True, log_wandb=False, loss_plot=False,
+                  num_epochs=250, patience=10**6, lr=0.05, gamma=0.5,
+                  min_delta=0, min_delta_rel=1e-6, use_dense_mode=False, num_samples=10)
+    with contextlib.redirect_stdout(io.StringIO()):
+        m.from_anndata()
+        m.train(num_initializations=1, seeds=[0])
+        m.get_all_variables()
+
+    r = np.median(_hungarian_match(_npy(m.psi), psi_true)[2])
+    assert r > 0.4, f"waypoint-initialised fit did not recover psi (r={r:.3f})"
