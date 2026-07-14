@@ -636,3 +636,41 @@ def test_junction_specific_psi_prior_shrinks_the_programs_together():
         f"(r={r_global:.3f}). METHODS.md 11.4d claims the opposite -- that sharing a_j/b_j across the "
         f"K factors shrinks the programs toward each other. Re-check that analysis before trusting it."
     )
+
+
+def test_early_stopping_is_not_a_hard_epoch_cap_at_patience():
+    """Early stopping must NOT fire while the ELBO is still descending fast.
+
+    Regression test for a bug in the min_delta_rel logic. `best_loss` is initialised to +inf, and the
+    threshold was computed as `max(min_delta, min_delta_rel * abs(best_loss))`. With min_delta_rel > 0
+    that is `1e-5 * inf` = inf, so the improvement test became `loss < inf - inf` -> `loss < nan` ->
+    ALWAYS FALSE. best_loss never left infinity, epochs_since_improvement incremented on every epoch,
+    and the fit broke at EXACTLY `patience` no matter how steeply the loss was still falling.
+
+    Early stopping was therefore not a convergence rule at all -- it was a hard epoch cap at
+    `patience`. On the mouse atlas every batch ran exactly 50 epochs instead of its budgeted 150/60,
+    with the ELBO still dropping ~2e6 nats/epoch when it quit. See METHODS.md 11.3.
+
+    The tell is `n_ran == patience` exactly. This test fails if that returns.
+    """
+    adata, _, _ = simulate_from_generative_model(n_cells=300, K=3, n_atses=30, seed=0)
+
+    import io, contextlib
+    from leafletfa import LeafletFA
+    patience, num_epochs = 10, 60
+    m = LeafletFA(adata, K=3, waypoints_use=False, log_wandb=False, loss_plot=False,
+                  num_epochs=num_epochs, patience=patience, lr=0.05, gamma=0.5,
+                  min_delta=100, min_delta_rel=1e-5,      # the combination that triggered the bug
+                  use_dense_mode=False, num_samples=10)
+    with contextlib.redirect_stdout(io.StringIO()):
+        m.from_anndata()
+        m.train(num_initializations=1, seeds=[0])
+        m.get_all_variables()
+
+    n_ran = len(m.latent_results[m.best_init]["losses"])
+
+    assert n_ran > patience, (
+        f"training stopped after exactly {n_ran} epochs with patience={patience} — early stopping is "
+        f"acting as a HARD EPOCH CAP, not a convergence rule. best_loss is almost certainly still "
+        f"+inf (min_delta_rel * inf = inf, and `loss < inf - inf` is `loss < nan` = always False)."
+    )

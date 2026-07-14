@@ -743,6 +743,54 @@ Use the new **`min_delta_rel`** parameter (scale-free; effective threshold is
 `max(min_delta, min_delta_rel · |best_loss|)`), set `patience` generously, and treat *any* early stop in the
 first ~25% of `num_epochs` as a red flag. The package now warns when this happens.
 
+### 🔴 …and the FIRST version of that fix was itself broken — it turned early stopping into a hard cap
+
+Caught 2026-07-13 on the first live batch of the atlas array (task 18850906_0), which stopped at **exactly
+50 epochs = `patience`** out of a budgeted 150 while the ELBO was **still falling at ~2 × 10⁶ nats/epoch**.
+
+`best_loss` is initialised to `float('inf')`. The threshold was then computed unconditionally:
+
+```python
+best_loss = float('inf')                                       # <-- initial value
+...
+threshold = max(self.min_delta, self.min_delta_rel * abs(best_loss))   # 1e-5 * inf  =  inf
+if loss < best_loss - threshold:                               # loss < (inf - inf) = loss < nan
+    best_loss = loss                                           #   -> ALWAYS FALSE
+    epochs_since_improvement = 0
+else:
+    epochs_since_improvement += 1                              #   -> increments EVERY epoch
+```
+
+`inf - inf` is `nan`, and **every comparison against `nan` is False**. So `best_loss` never left infinity,
+`epochs_since_improvement` incremented on every single epoch, and the fit broke at **exactly `patience`**,
+regardless of how fast the loss was descending.
+
+**Early stopping was not a convergence rule at all — it was a hard epoch cap at `patience`.** It only bites
+when `min_delta_rel > 0`, i.e. *only under the fix that was supposed to repair the original problem*. The old
+inert-`min_delta` rule stopped batches at ~10 epochs; the new one stopped them at exactly 50. Both are
+truncation; the second is just less obviously wrong, because 50 looks like a plausible number.
+
+**Fix:** seed `best_loss` from the first epoch instead of evaluating a relative threshold against infinity.
+
+```python
+if not math.isfinite(best_loss):
+    best_loss = loss
+    epochs_since_improvement = 0
+else:
+    threshold = max(self.min_delta, self.min_delta_rel * abs(best_loss))
+    ...
+```
+
+**The tell is `n_epochs_ran == patience` exactly.** Pinned by
+`tests/test_basic.py::test_early_stopping_is_not_a_hard_epoch_cap_at_patience`, which fails on the old code
+and passes on the new. *(commit: `fix early stopping becoming a hard epoch cap at patience`)*
+
+> **Lesson worth keeping.** Both early-stopping bugs were invisible in the loss curve and invisible in every
+> "is the model healthy" check — `psi_contrast` was a perfectly healthy **0.208** on the truncated batch. The
+> only thing that exposed either of them was **reading the epoch counts against the schedule that was
+> supposed to run.** Log `n_epochs_ran` per batch and compare it to `num_epochs`. If it equals `patience`, or
+> is a suspiciously round fraction of the budget, the fit was cut off, not converged.
+
 ## 11.3b The waypoint arm does not rescue this either — half of ψ starts frozen
 
 Quantified on the actual training h5ad (132,706 cells × 79,768 junctions):
