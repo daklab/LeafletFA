@@ -674,3 +674,52 @@ def test_early_stopping_is_not_a_hard_epoch_cap_at_patience():
         f"acting as a HARD EPOCH CAP, not a convergence rule. best_loss is almost certainly still "
         f"+inf (min_delta_rel * inf = inf, and `loss < inf - inf` is `loss < nan` = always False)."
     )
+
+
+def test_pi_warm_start_survives_a_second_chunk_on_gpu():
+    """The chunk-to-chunk pi/alpha_pi warm start must not pin the guide to the CPU on a GPU run.
+
+    Regression test for the crash that killed the first mouse-atlas array (18850906_0/1) on its
+    SECOND chunk:
+
+        model.py: assign = pyro.sample("assign", dist.Dirichlet(pi * dir_conc).expand([N]) ...)
+        RuntimeError: Expected all tensors to be on the same device, but found cuda:0 and cpu!
+
+    run_training.py carries pi across chunks as `pi_init=torch.tensor(global_pi)` -- a CPU tensor.
+    psi_init and phi_init were moved to self.device before being handed to init_to_value; pi_init and
+    alpha_pi_init were NOT. init_to_value CREATES the guide's loc parameter from the tensor it is
+    given, so the guide's `pi` loc was created on the CPU. The model then built Dirichlet(pi*dir_conc)
+    on the CPU while the `assign` guide supplied a CUDA sample, and the `assign` site blew up.
+
+    It only fires on the SECOND chunk, because chunk 1 has no warm start to carry -- which is exactly
+    why every smoke test passed and the array still died 5 minutes in.
+    """
+    import torch
+    # The crash only MANIFESTS on a GPU (on CPU everything is already on the same device), but the
+    # warm-start path is exercised either way, so the test is still worth running on CPU.
+    adata, _, _ = simulate_from_generative_model(n_cells=200, K=3, n_atses=20, seed=0)
+
+    import io, contextlib
+    from leafletfa import LeafletFA
+
+    def fit(pi_init=None, alpha_pi_init=None):
+        m = LeafletFA(adata, K=3, waypoints_use=False, log_wandb=False, loss_plot=False,
+                      num_epochs=15, patience=10**6, lr=0.05, gamma=0.5, use_dense_mode=False,
+                      num_samples=10, pi_init=pi_init, alpha_pi_init=alpha_pi_init)
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.from_anndata()
+            m.train(num_initializations=1, seeds=[0])
+            m.get_all_variables()
+        return m
+
+    chunk1 = fit()
+
+    # Carry pi forward the way run_training.py does: a CPU tensor, even on a CUDA run.
+    global_pi = torch.tensor(np.asarray(chunk1.pi), dtype=torch.float32)          # CPU, on purpose
+    global_alpha_pi = torch.tensor(float(np.asarray(chunk1.alpha_pi)), dtype=torch.float32)
+    assert global_pi.device.type == "cpu", "the test must hand over a CPU tensor to be meaningful"
+
+    chunk2 = fit(pi_init=global_pi, alpha_pi_init=global_alpha_pi)   # <-- used to RuntimeError on cuda
+
+    assert np.isfinite(np.asarray(chunk2.psi)).all()
+    assert np.asarray(chunk2.pi).shape == (3,)

@@ -919,6 +919,17 @@ class LeafletFA:
             psi_init = torch.as_tensor(psi_init, dtype=torch.float32, device=self.device)
         if phi_init is not None:
             phi_init = torch.as_tensor(phi_init, dtype=torch.float32, device=self.device)
+        # pi_init / alpha_pi_init are the CHUNK-TO-CHUNK warm start, and they arrive as CPU tensors
+        # (run_training.py builds them with torch.tensor(global_pi)). They were the ONLY init tensors
+        # not moved here, which pinned the guide's `pi` loc to the CPU on a GPU run: the model then
+        # built Dirichlet(pi * dir_conc) on the CPU while the `assign` guide supplied a CUDA value,
+        # and the `assign` site died with a device mismatch on the SECOND chunk -- i.e. only once the
+        # warm start actually had something to carry, which is why chunk 1 always looked fine.
+        if self.pi_init is not None:
+            self.pi_init = torch.as_tensor(self.pi_init, dtype=torch.float32, device=self.device)
+        if self.alpha_pi_init is not None:
+            self.alpha_pi_init = torch.as_tensor(self.alpha_pi_init, dtype=torch.float32,
+                                                 device=self.device)
 
         # Only empty CUDA cache if using a GPU
         if self.device.type == 'cuda':
