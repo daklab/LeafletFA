@@ -612,15 +612,56 @@ Two specific bugs, now fixed in all of `04*_evaluate_imputation*.py` and `07c_cl
 
 ### What is measured on the 30%
 
-1. **Imputation** (`04*`) — mask entries within the held-out cells, impute with `φ@ψ`, score RMSE / L1 /
-   Spearman against NMF. **Report calibration, not just rank correlation** (Reviewer 1): predicted vs observed
-   PSI binned across the range, MAE/RMSE in PSI units, and check for a systematic offset or a slope below one.
+1. **Coverage robustness** (`04e`) — **this is read DOWNSAMPLING, not masked-entry imputation.** The
+   held-out cells' **read counts are thinned** to 10 / 25 / 50 / 75 / 90 / 99 / 100 % of the original
+   depth, φ is inferred under the frozen globals, and `φ@ψ` is scored against the **original
+   full-depth PSI** at (cell, junction) pairs that genuinely had coverage. The question is *"how much
+   sequencing depth does the model need before its PSI estimates degrade?"* — the relevant question
+   for a coverage-starved single-cell splicing atlas. Baselines: global per-junction mean (`naive`),
+   coverage-aware Beta-Binomial mean (`mb`), and **the same stratified by cell type (`mb_ct`)** — if
+   LeafletFA does not beat `mb_ct`, the programs add nothing beyond cell-type identity.
+
+   **Report calibration, not just rank correlation** (Reviewer 1). Correlation measures *ranking* and
+   is blind to predictions being systematically **compressed toward the mean** — precisely what a
+   shrinkage-heavy latent-variable model does. Regressing **truth on prediction**, a slope of 1.0 is
+   calibrated and **slope > 1 means the predictions are under-dispersed**. Verified on synthetic
+   data: predictions compressed 0.4× toward the mean still score **Pearson r = 1.000** while the
+   slope correctly reads **2.50**. Reported per method: slope, intercept, RMSE and MAE in PSI units,
+   bias, and the binned observed-vs-predicted calibration curve.
+
+   Full detail: `Leaflet-analysis/GenomeBiology_Submission2026/figures/METHODS_imputation_analysis.md`.
 2. **Cell-type decodability** (`07c`) — decode broad cell type from the **held-out inferred φ**. The
    **train − heldout gap is the memorization estimate.** (`07c`'s docstring already identifies that decoding
    *training* φ was the confound in `07`.)
-3. **Age regression** — within cell type, on held-out φ.
+3. **Age regression** (`07c`) — RidgeCV predicting age from the **held-out inferred φ**, with
+   capacity-matched α via inner CV. Three design decisions, each deliberate:
+
+   - **Grouped by `tissue_cell_type`, NOT `broad_cell_type`.** Pooling across tissue within a broad
+     cell type was considered and rejected: **tissues age differentially**, so pooling would mix
+     aging rates and manufacture (or mask) signal. The cost is smaller groups, handled next.
+   - **Groups below `min_cells` (50) are EXCLUDED, and the summary is the MEDIAN + RANGE across the
+     survivors — not the mean.** Small groups give noisy per-group estimates; a mean over them is
+     dragged by the marginal ones. This is the same low-power trap seen on the simulation, where
+     under-powered programs looked like miscalibration. Reported: median (headline), min, max, IQR,
+     and the mean alongside for comparison.
+   - **Sex is partialled out.** Sex confounds age — if sex differs in both splicing and age
+     composition, part of an apparent age signal is really a sex difference. Both φ and age are
+     residualised on sex dummies **within each group** (Frisch–Waugh–Lovell), so the ridge measures
+     age variation explained **beyond** sex. This is preferred to adding sex as a *feature*, which
+     would let sex predict age directly and inflate R². It no-ops on single-sex groups and where sex
+     is missing. Verified on synthetic data: a purely sex-driven confound drops from r = 0.940 to
+     −0.017, while a genuine age signal is preserved at 0.948.
+
+   Age is additionally computed **within each dataset** (Tabula Muris vs Senis), because dataset and
+   age are confounded in this atlas.
 
 **Model selection across the K sweep must be done on these held-out metrics, not on the ELBO.**
+
+> ⚠️ **Prior held-out results are void.** The 96-run findings recorded in the analysis repo's
+> `WORKFLOW.md` Step 12b (K=50 best; Beta-Binomial collapses at lr = 0.01) came from models trained
+> **before** the training fixes — the early-stopping hard cap at `patience` epochs (§11.3), the
+> chunk-2 device mismatch, the `bb_conc ~ Gamma(10,10)` prior, and the CUDA→numpy crash at save.
+> Those numbers describe a broken optimiser, not the model. Re-derive on the current models.
 
 ## 8. Modeling Aging with Splicing and Expression
 
