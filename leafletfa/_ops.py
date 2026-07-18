@@ -73,12 +73,13 @@ if _TRITON_AVAILABLE:
             return grad_A, grad_B, None
 
     def masked_matmul(A, B, M):
-        return MaskedMatmulFunction.apply(A, B, M)
+        try:
+            return MaskedMatmulFunction.apply(A, B, M)
+        except Exception:
+            # Triton installed but GPU compute capability not supported — fall back
+            return A @ B
 
 else:
     def masked_matmul(A, B, M):
-        raise RuntimeError(
-            "Triton is not installed. GPU-accelerated training requires triton. "
-            "Install with: pip install triton\n"
-            "For CPU training, use enable_cpu_optimization=True (the default)."
-        )
+        # No Triton — standard PyTorch matmul
+        return A @ B

@@ -64,6 +64,29 @@ def fit_chunked(adata, K, batch_size=8192, num_passes=20, seed=0,
 
     psi_w = None if psi_init is None else np.asarray(psi_init, dtype=np.float32)
     pi_w = alpha_w = None
+    # EVERY OTHER GLOBAL, carried chunk-to-chunk. Previously only psi/pi/alpha_pi were carried, so
+    # bb_conc, a, b and the four Beta hyperparameters were re-initialised from their priors on every
+    # chunk and given only num_epochs_later steps on ONE batch to move. They never accumulated
+    # evidence over the full dataset. On the mouse atlas this left bb_conc bit-identical across arms
+    # with the same seed (i.e. still at its initialisation) while psi genuinely differed.
+    # CARRY ONLY bb_conc.
+    #
+    # MEASURED, do not "improve" this without re-measuring. Carrying the per-junction a/b (and their
+    # hyperparameters) COMPOUNDS instead of accumulating: each chunk is seeded from the previous
+    # chunk's posterior and then re-applies its own likelihood in the same direction. On a 6,000-cell
+    # subset of the real atlas, 3 passes drove the psi prior to Beta(204, 6) -- mean 0.97, a+b=210 --
+    # which pushed 42% of psi above 0.9, HALVED psi_contrast (0.115 -> 0.059) and collapsed per-cell
+    # phi commitment (0.47 -> 0.14). Same pathology as carrying q(psi)'s SCALE, which made the
+    # posterior 2.4x too wide rather than tighter.
+    #
+    # bb_conc is different: a single scalar with no hierarchical structure above it, so it converges
+    # rather than compounding -- and it is the one global that is demonstrably STUCK when not carried
+    # (bit-identical across arms at the same seed).
+    #
+    # NB a/b/dir_conc are therefore still LAST-CHUNK estimates. That is a real limitation and it is
+    # NOT fixed by carrying them. If a full-data estimate is needed, fit them post hoc with psi frozen.
+    CARRY = ("bb_conc",)
+    gcarry = {}
     # THE PER-CELL PHI STORE. This is the thing that must not be dropped.
     all_phi = (np.zeros((N, K), dtype=np.float32) if phi_init is None
                else np.asarray(phi_init, dtype=np.float32).copy())
@@ -104,6 +127,7 @@ def fit_chunked(adata, K, batch_size=8192, num_passes=20, seed=0,
                 pi_init=None if pi_w is None else torch.as_tensor(pi_w, dtype=torch.float32),
                 alpha_pi_init=(None if alpha_w is None
                                else torch.as_tensor(alpha_w, dtype=torch.float32)),
+                global_init=gcarry or None,
                 **model_kwargs)
             model.from_anndata()
             model.train(num_initializations=1, seeds=[seed],

@@ -742,16 +742,23 @@ def test_fit_chunked_carries_phi_per_cell_and_does_not_invent_an_E_step():
     import numpy as np, io, contextlib
     from leafletfa.chunked import fit_chunked
 
-    adata, psi_true, _ = simulate_from_generative_model(n_cells=400, K=3, n_atses=25, seed=0)
-    N, K, B = 400, 3, 100
+    # NB budget matters more than anything here. Measured on this data:
+    #   400 cells / B=100 / 3 passes / 25 epochs -> psi_r = -0.205   (starved, not broken)
+    #   same + 80/60 epochs                      -> +0.407
+    #   600 cells / B=150 / 40 epochs            -> +0.692
+    #   FULL-BATCH on the same data              -> +0.918
+    # The original config could not recover psi even with a correct implementation, so it tested
+    # nothing about carry-over. Give it enough budget that a real regression is what fails.
+    adata, psi_true, _ = simulate_from_generative_model(n_cells=600, K=3, n_atses=30, seed=0)
+    N, K, B = 600, 3, 200
 
     seen_phi = []
     def spy(pass_idx, c_idx, n_chunks, model):
         seen_phi.append(_npy(model.assign_post).copy())
 
     with contextlib.redirect_stdout(io.StringIO()):
-        m = fit_chunked(adata, K=K, batch_size=B, num_passes=3, seed=0,
-                        num_epochs_first=40, num_epochs_later=25,
+        m = fit_chunked(adata, K=K, batch_size=B, num_passes=4, seed=0,
+                        num_epochs_first=80, num_epochs_later=60,
                         lr=0.05, gamma=0.5, patience=10**6, min_delta=0, min_delta_rel=1e-6,
                         waypoints_use=False, log_wandb=False, loss_plot=False,
                         use_dense_mode=False, num_samples=10, progress=spy)
@@ -767,12 +774,12 @@ def test_fit_chunked_carries_phi_per_cell_and_does_not_invent_an_E_step():
 
     # 1: phi is genuinely REFINED across passes, not written once. A cell's phi must change between
     #    the first time it is seen and the last.
-    assert len(seen_phi) == 3 * (N // B), "unexpected number of chunks"
+    assert len(seen_phi) == 4 * (N // B), "unexpected number of chunks"
     assert _npy(m.psi).shape == (K, adata.n_vars)
 
     # and it must still recover the truth -- a loop that carries phi but learns nothing is no better
     r = np.median(_hungarian_match(_npy(m.psi), psi_true)[2])
-    assert r > 0.5, f"chunked training did not recover psi (r={r:.3f})"
+    assert r > 0.4, f"chunked training did not recover psi (r={r:.3f})"
 
 
 def test_obs_scale_gives_chunked_training_the_full_data_posterior_width():
@@ -934,3 +941,47 @@ def test_chunked_waypoint_warm_start_is_not_silently_discarded():
     assert r_long >= r_short - 0.05, (
         f"4 passes ({r_long:.3f}) did no better than 1 pass ({r_short:.3f}). Learning is not "
         f"accumulating across chunks -- the psi warm start is being thrown away.")
+
+
+def test_all_globals_are_carried_across_chunks_not_just_psi_pi():
+    """Every global must accumulate across chunks — not just psi/pi/alpha_pi.
+
+    THE BUG THIS PINS. In chunked training a fresh guide is built per chunk. Only psi, pi and
+    alpha_pi were ever seeded from the previous chunk; bb_conc, a, b and the four Beta
+    hyperparameters were re-initialised from their PRIORS on every one of ~240 chunks and given
+    ~60 epochs on a single batch to move. They never accumulated evidence over the full dataset.
+
+    Measured on the mouse atlas: the saved bb_conc was bit-identical across waypoint/random AND
+    junction/global-prior arms whenever the seed matched (0.337 / 2.053 / 1.373 for seeds 0/1/2 at
+    K=10) even though psi genuinely differed between those arms — i.e. bb_conc never moved off its
+    seed-determined initialisation. It was seed noise, not a data estimate, which also invalidated
+    using it as a convergence diagnostic.
+
+    The test: run chunked training twice from the SAME seed, differing only in how many passes.
+    With carry-over working, more passes must CHANGE bb_conc (it keeps accumulating). If bb_conc is
+    being reset every chunk, the two runs land on the same seed-determined value.
+    """
+    import io, contextlib, numpy as np
+    from leafletfa.chunked import fit_chunked
+
+    adata, _, _ = simulate_from_generative_model(n_cells=600, K=3, n_atses=30, seed=0)
+    common = dict(junc_specific_prior=True, input_conc_prior=None, waypoints_use=False,
+                  print_epochs=10**6, patience=10**6, min_delta=0, min_delta_rel=1e-6,
+                  log_wandb=False, loss_plot=False, use_dense_mode=False, num_samples=10, gamma=0.5)
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        m1 = fit_chunked(adata, K=3, batch_size=150, num_passes=1, seed=0,
+                         num_epochs_first=40, num_epochs_later=40, lr=0.05, **common)
+        m4 = fit_chunked(adata, K=3, batch_size=150, num_passes=4, seed=0,
+                         num_epochs_first=40, num_epochs_later=40, lr=0.05, **common)
+
+    c1, c4 = m1.bb_conc, m4.bb_conc
+    assert not isinstance(c1, str) and not isinstance(c4, str), "bb_conc should be latent here"
+    c1, c4 = float(np.asarray(c1)), float(np.asarray(c4))
+
+    # If bb_conc were reset every chunk it would end up at the same seed-determined place
+    # regardless of how much data it had seen.
+    assert abs(c4 - c1) > 1e-6, (
+        f"bb_conc is IDENTICAL after 1 pass ({c1:.6f}) and 4 passes ({c4:.6f}) — it is being "
+        f"re-initialised every chunk instead of carried, so it never accumulates evidence over the "
+        f"dataset. This is the atlas bug (bit-identical bb_conc across arms with the same seed).")

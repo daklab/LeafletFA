@@ -102,7 +102,7 @@ class _ScaleSites(poutine.messenger.Messenger):
 class LeafletFA:
     def __init__(self, adata, K=10, junc_specific_prior=True, input_conc_prior=None, delta_fixed=None,
                  waypoints_use=True, fixed_psi=None, use_dense_mode=None,
-                 pi_init=None, alpha_pi_init=None,
+                 pi_init=None, alpha_pi_init=None, global_init=None,
                  pi_fixed=None, alpha_pi_fixed=None, obs_scale=1.0,
                  log_wandb=False,
                  eps = 1e-6, lr=0.01, gamma = 0.05, num_epochs=500, print_epochs=10,
@@ -171,6 +171,17 @@ class LeafletFA:
         self.fixed_psi = fixed_psi
         self.pi_init = pi_init
         self.alpha_pi_init = alpha_pi_init
+        # WARM-START ANY GLOBAL. dict {site_name: value} seeding the guide's loc for the global
+        # block -- bb_conc, a, b, a_shape, a_rate, b_shape, b_rate, dir_conc.
+        #
+        # WHY THIS EXISTS: in chunked training a fresh guide is built per chunk, and only psi, pi and
+        # alpha_pi were ever carried across. Every OTHER global was re-initialised from its prior on
+        # all ~240 chunks and given ~60 epochs on one batch to move, so it never accumulated evidence
+        # over the full dataset. Measured on the mouse atlas: the saved bb_conc was bit-identical
+        # across waypoint/random and junction/global-prior arms with the same seed (0.337 / 2.053 /
+        # 1.373 for seeds 0/1/2 at K=10) even though psi genuinely differed -- i.e. it never moved off
+        # its seed-determined initialisation. Same hole applied to a, b and the four hyperparameters.
+        self.global_init = dict(global_init) if global_init else {}
         self.pi_fixed = pi_fixed
         self.alpha_pi_fixed = alpha_pi_fixed
         self.obs_scale = float(obs_scale)
@@ -978,10 +989,20 @@ class LeafletFA:
             # (fixed_psi + pi_fixed + fixed dir_conc + Binomial likelihood) nothing is left here, and
             # AutoDiagonalNormal over a model with no latent sites raises — so only append if needed.
             if self._has_global_latents():
+                # Seed EVERY global we have a value for -- not just pi/alpha_pi. Anything absent
+                # falls back to the prior, as before.
+                gvals = {}
                 if self.pi_fixed is None and self.pi_init is not None and self.alpha_pi_init is not None:
+                    gvals['pi'] = self.pi_init
+                    gvals['alpha_pi'] = self.alpha_pi_init
+                for _k, _v in self.global_init.items():
+                    if _v is None:
+                        continue
+                    gvals[_k] = torch.as_tensor(_v, dtype=torch.float32, device=self.device)
+                if gvals:
                     guide.append(AutoDiagonalNormal(
                         block(self.model, hide=['psi', 'assign']),
-                        init_loc_fn=init_to_value(values={'pi': self.pi_init, 'alpha_pi': self.alpha_pi_init})
+                        init_loc_fn=init_to_value(values=gvals)
                     ))
                 else:
                     guide.append(AutoDiagonalNormal(block(self.model, hide=['psi', 'assign'])))
