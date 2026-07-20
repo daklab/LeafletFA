@@ -104,3 +104,4 @@ FATAL: no CUDA device visible (node=ne1dg6-009). This job would silently run on 
 [07-20 11:27] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
 [07-20 11:37] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
 [07-20 11:47] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 11:57] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone

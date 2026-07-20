@@ -1,0 +1,5 @@
+
+===== seed 0: true psi mean=0.3026  observed rate=0.3022 =====
+  plate_fixed_ab     psi 0.3007 (true 0.3026, err 0.0019)  r_psi=0.998  slope=1.012  perp=2.6/5  75.0s
+  plate_learned_ab   psi 0.3018 (true 0.3026, err 0.0008)  r_psi=0.998  slope=1.014  perp=2.6/5  64.4s
+  plate_junc_prior   psi 0.3007 (true 0.3026, err 0.0019)  r_psi=0.998  slope=1.011  perp=2.6/5  53.6s
