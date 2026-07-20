@@ -1,0 +1,71 @@
+   subset 6000 cells
+  [global] a         mean=      1.9074  drift_vs_pass1=1.153e+00  vs_prev=1.110e+00
+  [global] b         mean=      1.2152  drift_vs_pass1=9.701e-01  vs_prev=1.042e+00
+  [global] a_shape   mean=      2.8350  drift_vs_pass1=5.925e-01  vs_prev=7.598e-01
+  [global] a_rate    mean=      1.6709  drift_vs_pass1=6.689e-01  vs_prev=7.878e-01
+  [global] b_shape   mean=      0.9785  drift_vs_pass1=7.948e-01  vs_prev=3.033e-01
+  [global] b_rate    mean=      1.1084  drift_vs_pass1=2.858e-01  vs_prev=6.954e-01
+  [chunk-cv] bb_conc      mean=    1.5487 cv_across_3_chunks=0.012
+  [chunk-cv] a            mean=    2.5053 cv_across_3_chunks=0.028
+  [chunk-cv] b            mean=    1.3345 cv_across_3_chunks=0.127
+  [chunk-cv] a_shape      mean=    1.1035 cv_across_3_chunks=0.735  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] a_rate       mean=    0.5626 cv_across_3_chunks=0.846  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] b_shape      mean=    0.9147 cv_across_3_chunks=0.496
+  [chunk-cv] b_rate       mean=    1.0433 cv_across_3_chunks=0.789  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] dir_conc     mean=    7.8392 cv_across_3_chunks=0.720  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] alpha_pi     mean=    6.6993 cv_across_3_chunks=0.032
+  [chunk-cv] psi_contrast mean=    0.0806 cv_across_3_chunks=0.008
+PASS 4/5
+  psi_contrast (programs differ from each other) : 0.0847
+  psi_contrast (programs differ from each other) : 0.0852
+  psi_contrast (programs differ from each other) : 0.0864
+Pass 4 complete. Average ELBO per cell: 1.4986e+04
+  [global] psi       mean=      0.6555  drift_vs_pass1=9.769e-01  vs_prev=6.361e-01  psi_contrast=0.0864
+  [global] phi       mean=      0.1000  drift_vs_pass1=7.093e-01  vs_prev=3.441e-01  per-cell max=0.171 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=1.063e-01  vs_prev=2.242e-01
+  [global] alpha_pi  mean=      6.8012  drift_vs_pass1=6.445e-02  vs_prev=3.743e-02
+  [global] bb_conc   mean=      1.5344  drift_vs_pass1=2.420e-01  vs_prev=2.583e-02
+  [global] dir_conc  mean=      0.5780  drift_vs_pass1=6.692e+00  vs_prev=5.694e+00
+  [global] a         mean=      1.4180  drift_vs_pass1=1.913e+00  vs_prev=1.453e+00
+  [global] b         mean=      1.1257  drift_vs_pass1=9.923e-01  vs_prev=1.110e+00
+  [global] a_shape   mean=      1.1336  drift_vs_pass1=1.915e-02  vs_prev=1.501e+00
+  [global] a_rate    mean=      2.4984  drift_vs_pass1=7.786e-01  vs_prev=3.312e-01
+  [global] b_shape   mean=      0.4497  drift_vs_pass1=2.905e+00  vs_prev=1.176e+00
+  [global] b_rate    mean=      1.5090  drift_vs_pass1=5.554e-02  vs_prev=2.655e-01
+  [chunk-cv] bb_conc      mean=    1.5889 cv_across_3_chunks=0.038
+  [chunk-cv] a            mean=    1.6795 cv_across_3_chunks=0.098
+  [chunk-cv] b            mean=    1.3023 cv_across_3_chunks=0.055
+  [chunk-cv] a_shape      mean=    1.9780 cv_across_3_chunks=0.330
+  [chunk-cv] a_rate       mean=    1.9571 cv_across_3_chunks=0.126
+  [chunk-cv] b_shape      mean=    0.9205 cv_across_3_chunks=0.371
+  [chunk-cv] b_rate       mean=    0.7334 cv_across_3_chunks=0.521  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] dir_conc     mean=    4.0110 cv_across_3_chunks=1.075  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] alpha_pi     mean=    6.9389 cv_across_3_chunks=0.078
+  [chunk-cv] psi_contrast mean=    0.0854 cv_across_3_chunks=0.009
+PASS 5/5
+  psi_contrast (programs differ from each other) : 0.0879
+  psi_contrast (programs differ from each other) : 0.0876
+  psi_contrast (programs differ from each other) : 0.0871
+Pass 5 complete. Average ELBO per cell: 1.3280e+04
+  [global] psi       mean=      0.6305  drift_vs_pass1=9.935e-01  vs_prev=6.068e-01  psi_contrast=0.0871
+  [global] phi       mean=      0.1000  drift_vs_pass1=8.370e-01  vs_prev=3.452e-01  per-cell max=0.188 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=7.647e-02  vs_prev=1.088e-01
+  [global] alpha_pi  mean=      6.6161  drift_vs_pass1=3.828e-02  vs_prev=2.798e-02
+  [global] bb_conc   mean=      2.1158  drift_vs_pass1=4.503e-01  vs_prev=2.748e-01
+  [global] dir_conc  mean=      1.5370  drift_vs_pass1=1.893e+00  vs_prev=6.239e-01
+  [global] a         mean=      2.3386  drift_vs_pass1=1.228e+00  vs_prev=9.429e-01
+  [global] b         mean=      1.5044  drift_vs_pass1=9.339e-01  vs_prev=9.529e-01
+  [global] a_shape   mean=      0.4804  drift_vs_pass1=1.405e+00  vs_prev=1.360e+00
+  [global] a_rate    mean=      0.1851  drift_vs_pass1=1.988e+00  vs_prev=1.250e+01
+  [global] b_shape   mean=      1.0362  drift_vs_pass1=6.948e-01  vs_prev=5.660e-01
+  [global] b_rate    mean=      0.5910  drift_vs_pass1=1.411e+00  vs_prev=1.553e+00
+  [chunk-cv] bb_conc      mean=    1.8994 cv_across_3_chunks=0.082
+  [chunk-cv] a            mean=    1.7830 cv_across_3_chunks=0.175
+  [chunk-cv] b            mean=    1.3285 cv_across_3_chunks=0.109
+  [chunk-cv] a_shape      mean=    2.1393 cv_across_3_chunks=0.591  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] a_rate       mean=    1.9086 cv_across_3_chunks=0.468
+  [chunk-cv] b_shape      mean=    0.7427 cv_across_3_chunks=0.279
+  [chunk-cv] b_rate       mean=    0.8956 cv_across_3_chunks=0.484
+  [chunk-cv] dir_conc     mean=    7.2048 cv_across_3_chunks=0.848  <-- CHUNK-LOCAL (cv>0.5)
+  [chunk-cv] alpha_pi     mean=    6.3767 cv_across_3_chunks=0.048
+  [chunk-cv] psi_contrast mean=    0.0875 cv_across_3_chunks=0.004

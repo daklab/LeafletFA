@@ -1,0 +1,19 @@
+########## param_id=0 ##########
+  psi_contrast (programs differ from each other) : 0.0806
+  psi_contrast (programs differ from each other) : 0.0800
+  [global] psi       mean=      0.6388  drift_vs_pass1=3.621e-01  vs_prev=3.621e-01  psi_contrast=0.0800
+  [global] dir_conc  mean=      2.5623  drift_vs_pass1=1.102e+00  vs_prev=1.102e+00
+  [chunk-cv] dir_conc     mean=    2.8376 cv_across_2_chunks=0.097
+  [chunk-cv] psi_contrast mean=    0.0803 cv_across_2_chunks=0.003
+########## param_id=1 ##########
+  !! psi_contrast=0.0257 < 0.04: the 10 programs are nearly IDENTICAL to each other (symmetric collapse). This model has not learned program structure, however good its ELBO looks.
+  !! HEALTH CHECK FAILED on batch 4: ['psi_contrast=0.0257 < 0.04: the 10 programs are nearly IDENTICAL to each other (symmetric collapse). This model has not learned program structure, however good its ELBO looks.']
+  [global] psi       mean=      0.1070  drift_vs_pass1=3.544e-01  vs_prev=3.544e-01  psi_contrast=0.0257
+  [global] dir_conc  mean=      1.0000  drift_vs_pass1=0.000e+00  vs_prev=0.000e+00
+  [chunk-cv] dir_conc     mean=    1.0000 cv_across_2_chunks=0.000
+  [chunk-cv] psi_contrast mean=    0.0250 cv_across_2_chunks=0.030
+=== IS delta ACTUALLY PINNED WHEN FIXED? ===
+  delta LEARNED    dir_conc=2.5623  psi_contrast=0.0800  phi_perplexity=9.45/10
+  delta FIXED=1.0  dir_conc=1.0000  psi_contrast=0.0257  phi_perplexity=9.35/10
+
+  delta_fixed WORKS if run_1's dir_conc == 1.0000 exactly

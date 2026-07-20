@@ -1198,7 +1198,45 @@ class LeafletFA:
         # claim ABOUT perplexity (e.g. "SP complexity = 2.46"), not evidence of a broken fit: you
         # cannot tell a biological complexity finding from a restatement of Dirichlet(delta*pi)
         # using perplexity alone. To make that claim, show phi is informative about cell type.
+        # PSI LOCATION / RANGE. psi and the reconstruction phi@psi are both PSI values, so their
+        # distribution must be comparable to the data's. A fit can pass psi_contrast (programs do
+        # differ) and phi_spread (cells do differ) while sitting on completely the wrong part of
+        # [0,1] -- programs that differ from each other but are all far from the observed rate.
+        # Measured on the 2026-07-18 atlas grid: psi median 0.67 against an observed splicing rate
+        # of 0.295, in ALL 39 models regardless of K, init, prior type, or likelihood. Nothing in
+        # the previous checks moved, because none of them look at LOCATION. Report it always.
+        psi_q = np.percentile(psi, [1, 25, 50, 75, 99])
+        psi_loc = {
+            "psi_mean": float(psi.mean()), "psi_median": float(psi_q[2]),
+            "psi_p1": float(psi_q[0]), "psi_p25": float(psi_q[1]),
+            "psi_p75": float(psi_q[3]), "psi_p99": float(psi_q[4]),
+            "psi_frac_below_0.05": float((psi < 0.05).mean()),
+            "psi_frac_above_0.95": float((psi > 0.95).mean()),
+        }
+        # reconstruction phi@psi -- what the model actually predicts per cell
+        try:
+            pred = phi @ psi
+            pq = np.percentile(pred, [1, 50, 99])
+            psi_loc.update({"pred_mean": float(pred.mean()), "pred_median": float(pq[1]),
+                            "pred_p1": float(pq[0]), "pred_p99": float(pq[2]),
+                            "pred_iqr": float(np.percentile(pred, 75) - np.percentile(pred, 25))})
+            del pred
+        except Exception:
+            pass
+
         problems = []
+        # Compare against the observed rate when the caller supplied it (run_training passes it).
+        obs_rate = getattr(self, "observed_psi_rate", None)
+        if obs_rate is not None and np.isfinite(obs_rate):
+            gap = psi_loc["psi_median"] - float(obs_rate)
+            psi_loc["psi_median_minus_observed"] = float(gap)
+            if abs(gap) > 0.15:
+                problems.append(
+                    f"psi_median={psi_loc['psi_median']:.3f} but the observed splicing rate is "
+                    f"{float(obs_rate):.3f} (gap {gap:+.3f}). psi is MISLOCATED: it may still rank "
+                    f"junctions correctly while predicting the wrong absolute PSI, which breaks "
+                    f"imputation and any absolute-scale claim. Check convergence and the psi prior "
+                    f"Beta(a,b) -- a>1 puts zero density at psi=0.")
         if psi_contrast < psi_contrast_min:
             problems.append(
                 f"psi_contrast={psi_contrast:.4f} < {psi_contrast_min}: the {self.K} programs are "
@@ -1228,6 +1266,7 @@ class LeafletFA:
             )
 
         self.health = {
+            **psi_loc,
             "psi_contrast": psi_contrast,
             "phi_spread": phi_spread,
             "phi_perplexity": perp_fit,
@@ -1245,6 +1284,20 @@ class LeafletFA:
             print(f"  phi_spread   (cells differ from each other)    : {phi_spread:.5f}")
             print(f"  phi perplexity  (fitted / prior-alone)         : {perp_fit:.2f} / {perp_prior:.2f}")
             print(f"  epochs ran                                    : {n_ran} / {self.num_epochs}")
+            print(f"  psi LOCATION  mean/median                      : "
+                  f"{psi_loc['psi_mean']:.4f} / {psi_loc['psi_median']:.4f}")
+            print(f"    psi p1/p25/p75/p99                           : "
+                  f"{psi_loc['psi_p1']:.3f} / {psi_loc['psi_p25']:.3f} / "
+                  f"{psi_loc['psi_p75']:.3f} / {psi_loc['psi_p99']:.3f}")
+            print(f"    psi frac <0.05 / >0.95                       : "
+                  f"{psi_loc['psi_frac_below_0.05']*100:.1f}% / {psi_loc['psi_frac_above_0.95']*100:.1f}%")
+            if "pred_mean" in psi_loc:
+                print(f"  phi@psi (predicted PSI) mean/median            : "
+                      f"{psi_loc['pred_mean']:.4f} / {psi_loc['pred_median']:.4f}"
+                      f"   p1={psi_loc['pred_p1']:.3f} p99={psi_loc['pred_p99']:.3f}")
+            if "psi_median_minus_observed" in psi_loc:
+                print(f"  psi_median - OBSERVED rate                    : "
+                      f"{psi_loc['psi_median_minus_observed']:+.4f}  (want ~0)")
             for p in problems:
                 print(f"  !! {p}")
             if problems:

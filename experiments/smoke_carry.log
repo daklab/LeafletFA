@@ -1,0 +1,38 @@
+   subset 6000 cells x 79768 junctions
+1  0.103728       1
+6  0.101765       6
+5  0.100174       5
+9  0.098353       9
+0  0.068763       0
+4  0.047584       4
+✓ Saved pi evolution plots
+✓ Phi PCA plot → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/phi_pca_K10.png
+✓ Phi UMAP → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/phi_umap_K10.png
+  Computed PCA (20 components) for raw UMAP
+✓ Raw data UMAP → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/raw_data_umap.png
+✓ Pi barplot → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/pi_barplot_K10.png
+Warning: health_check failed: 'FinalModel' object has no attribute 'health_check'
+Saved run summary → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/run_summary.csv
+Saving model → /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/SMOKE_CARRY/run_0/leafletfa_model.pkl.gz...
+Model saved. Size: 11.37 MB
+
+============================================================
+RUN COMPLETE
+  Device: cuda
+  Total passes: 3
+  Total batches: 9
+  Final K: 10 (pruned from 10)
+  Final ELBO: 1.1839e+08
+============================================================
+=== DID THE GLOBALS ACCUMULATE? ===
+   bb_conc    mean=1.5283  shape=()
+   a          mean=204.3691  shape=(79768,)
+   b          mean=5.9623  shape=(79768,)
+   a_shape    mean=0.3070  shape=()
+   a_rate     mean=0.0017  shape=()
+   b_shape    mean=0.9143  shape=()
+   b_rate     mean=0.1522  shape=()
+   dir_conc   mean=68.0647  shape=()
+   pi         mean=0.1000  shape=(10,)
+
+*** run_training.py COMPLETES with full global carry ***

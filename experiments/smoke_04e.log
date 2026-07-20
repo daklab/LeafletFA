@@ -1,0 +1,54 @@
+Extracting the latent representation, C x K matrix of factor activities...
+Extracting the learned Pi vector...
+
+--- model health: OK ---
+  psi_contrast (programs differ from each other) : 0.1538
+  phi_spread   (cells differ from each other)    : 0.07711
+  phi perplexity  (fitted / prior-alone)         : 6.89 / 4.65
+  epochs ran                                    : 100 / 100
+    chunk 10: 36864–39812  phi=(2948, 10)
+  LeafletFA imp shape: (39812, 18456)
+
+  [LeafletFA BB] Computing Beta-Binomial posterior mean...
+  LeafletFA BB posterior imp shape: (39812, 18456)
+
+  [MeanBayes] Fitting Beta prior on HVJ subset (18456 junctions)...
+  MeanBayes imp shape: (39812, 18456)
+
+  [MeanBayes-CT] Stratifying by broad_cell_type (39 groups)...
+  MeanBayes-CT imp shape: (39812, 18456)
+
+  [Naive mean] Per-junction mean over observed cells...
+
+  Computing per-junction Pearson (18456 junctions)...
+/gpfs/commons/home/kisaev/Leaflet-analysis/GenomeBiology_Submission2026/pipelines/05_leafletfa/04e_evaluate_imputation_gpu.py:499: ConstantInputWarning: An input array is constant; the correlation coefficient is not defined.
+  r_pearson[j] = float(pearsonr(pred_j, true_j)[0])
+  [all pearson]   lf=0.0004  lf_bb=0.0064  mb=0.0499  mb_ct=0.0426  naive=0.0000  n_junc=12647
+  [all spearman]  lf=0.0010  lf_bb=0.0045  mb=0.0248  mb_ct=0.0219  naive=0.0000
+  [CALIBRATION]   lf slope=0.639 (1.0=calibrated, >1=compressed)  rmse=0.4849  bias=+0.3474
+  [MAE]           naive=0.1222  lf=0.4039  lf_bb=0.4032  mb=0.1256  mb_ct=0.1363
+  [allen_brain_exons]  lf=0.0000  lf_bb=0.0023  mb=0.0221  naive=0.0000  n_cells=16371  n_junc=12099
+  [tabula_muris_senis]  lf=0.0000  lf_bb=0.0120  mb=0.0613  naive=0.0000  n_cells=23441  n_junc=12233
+
+Results → /gpfs/commons/home/kisaev/LeafletFA/experiments/smoke_04e.csv
+ downsampling_pct            dataset  median_pearson_lf  median_pearson_mb  median_pearson_naive  n_junc_eval  n_cells
+               50                all           0.003910           0.803723                   0.0        11978    39812
+               50  allen_brain_exons           0.000588           0.741723                   0.0        11604    16371
+               50 tabula_muris_senis           0.000174           0.895917                   0.0        11874    23441
+              100                all           0.000373           0.049897                   0.0        12647    39812
+              100  allen_brain_exons           0.000000           0.022067                   0.0        12099    16371
+              100 tabula_muris_senis           0.000000           0.061338                   0.0        12233    23441
+=== VERIFY: phi learned + calibration present + accuracy drops with coverage ===
+  columns with calibration: ['calib_slope_lf', 'calib_intercept_lf', 'calib_rmse_lf', 'calib_mae_lf', 'calib_bias_lf', 'calib_bin_pred_lf']
+ downsampling_pct  median_pearson_lf  median_pearson_mb_ct  median_pearson_naive  calib_slope_lf  calib_rmse_lf  mae_lf
+               50             0.0039                0.8055                   0.0          0.7127         0.4628  0.3851
+               50             0.0006                0.7466                   0.0          0.7152         0.4589  0.3848
+               50             0.0002                0.9000                   0.0          0.7064         0.4728  0.3856
+              100             0.0004                0.0426                   0.0          0.6391         0.4849  0.4039
+              100             0.0000                0.0172                   0.0          0.6111         0.4870  0.4082
+              100             0.0000                0.0457                   0.0          0.7045         0.4794  0.3928
+
+  CHECKS:
+   accuracy > naive floor: False
+   accuracy drops at 50% vs 100%: [0.0039100344292819, 0.0005877196672372, 0.0001743627653922, 0.0003733062185347, 0.0, 0.0]
+   calibration slope finite: True

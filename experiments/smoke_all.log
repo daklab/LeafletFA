@@ -1,0 +1,71 @@
+   subset 6000 cells
+  psi_contrast (programs differ from each other) : 0.0785
+  !! psi_contrast=0.0785 is only marginally above the collapse threshold (0.04). The programs have separated a little but may still be mostly wrong -- psi_contrast is NECESSARY but NOT SUFFICIENT: it detects TOTAL collapse (~0.003 vs ~0.10) but not a PARTIAL failure. Observed on the K=5 simulation: psi_contrast=0.045 passed a 0.04 gate while true-psi recovery was only r=0.22 and differential-vs-null AUROC was 0.525 (chance). Do not trust this fit without an external check (held-out imputation, or ground truth if you have it).
+  !! HEALTH CHECK FAILED on batch 5: ['psi_contrast=0.0785 is only marginally above the collapse threshold (0.04). The programs have separated a little but may still be mostly wrong -- psi_contrast is NECESSARY but NOT SUFFICIENT: it detects TOTAL collapse (~0.003 vs ~0.10) but not a PARTIAL failure. Observed on the K=5 simulation: psi_contrast=0.045 passed a 0.04 gate while true-psi recovery was only r=0.22 and differential-vs-null AUROC was 0.525 (chance). Do not trust this fit without an external check (held-out imputation, or ground truth if you have it).']
+  psi_contrast (programs differ from each other) : 0.0781
+  !! psi_contrast=0.0781 is only marginally above the collapse threshold (0.04). The programs have separated a little but may still be mostly wrong -- psi_contrast is NECESSARY but NOT SUFFICIENT: it detects TOTAL collapse (~0.003 vs ~0.10) but not a PARTIAL failure. Observed on the K=5 simulation: psi_contrast=0.045 passed a 0.04 gate while true-psi recovery was only r=0.22 and differential-vs-null AUROC was 0.525 (chance). Do not trust this fit without an external check (held-out imputation, or ground truth if you have it).
+  !! HEALTH CHECK FAILED on batch 6: ['psi_contrast=0.0781 is only marginally above the collapse threshold (0.04). The programs have separated a little but may still be mostly wrong -- psi_contrast is NECESSARY but NOT SUFFICIENT: it detects TOTAL collapse (~0.003 vs ~0.10) but not a PARTIAL failure. Observed on the K=5 simulation: psi_contrast=0.045 passed a 0.04 gate while true-psi recovery was only r=0.22 and differential-vs-null AUROC was 0.525 (chance). Do not trust this fit without an external check (held-out imputation, or ground truth if you have it).']
+Pass 2 complete. Average ELBO per cell: 1.9697e+04
+  [global] psi       mean=      0.6577  drift_vs_pass1=6.706e-01  vs_prev=6.706e-01  psi_contrast=0.0781
+  [global] phi       mean=      0.1000  drift_vs_pass1=5.131e-01  vs_prev=5.131e-01  per-cell max=0.145 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=5.831e-02  vs_prev=5.831e-02
+  [global] alpha_pi  mean=      5.8654  drift_vs_pass1=8.478e-02  vs_prev=8.478e-02
+  [global] bb_conc   mean=      1.3704  drift_vs_pass1=1.515e-01  vs_prev=1.515e-01
+  [global] dir_conc  mean=      0.4023  drift_vs_pass1=1.005e+01  vs_prev=1.005e+01
+  [global] a         mean=      2.4481  drift_vs_pass1=1.051e+00  vs_prev=1.051e+00
+  [global] b         mean=      1.5274  drift_vs_pass1=8.920e-01  vs_prev=8.920e-01
+  [global] a_shape   mean=      0.6811  drift_vs_pass1=6.963e-01  vs_prev=6.963e-01
+  [global] a_rate    mean=      0.3546  drift_vs_pass1=5.601e-01  vs_prev=5.601e-01
+  [global] b_shape   mean=      0.6818  drift_vs_pass1=1.576e+00  vs_prev=1.576e+00
+  [global] b_rate    mean=      0.3377  drift_vs_pass1=3.221e+00  vs_prev=3.221e+00
+PASS 3/5
+  psi_contrast (programs differ from each other) : 0.0801
+  psi_contrast (programs differ from each other) : 0.0801
+  psi_contrast (programs differ from each other) : 0.0815
+Pass 3 complete. Average ELBO per cell: 1.7011e+04
+  [global] psi       mean=      0.6636  drift_vs_pass1=9.120e-01  vs_prev=6.500e-01  psi_contrast=0.0815
+  [global] phi       mean=      0.1000  drift_vs_pass1=6.523e-01  vs_prev=3.738e-01  per-cell max=0.157 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=1.567e-01  vs_prev=1.799e-01
+  [global] alpha_pi  mean=      6.5448  drift_vs_pass1=2.781e-02  vs_prev=1.038e-01
+  [global] bb_conc   mean=      1.5738  drift_vs_pass1=2.611e-01  vs_prev=1.292e-01
+  [global] dir_conc  mean=      3.8689  drift_vs_pass1=1.492e-01  vs_prev=8.960e-01
+  [global] a         mean=      1.9074  drift_vs_pass1=1.153e+00  vs_prev=1.110e+00
+  [global] b         mean=      1.2152  drift_vs_pass1=9.701e-01  vs_prev=1.042e+00
+  [global] a_shape   mean=      2.8350  drift_vs_pass1=5.925e-01  vs_prev=7.598e-01
+  [global] a_rate    mean=      1.6709  drift_vs_pass1=6.689e-01  vs_prev=7.878e-01
+  [global] b_shape   mean=      0.9785  drift_vs_pass1=7.948e-01  vs_prev=3.033e-01
+  [global] b_rate    mean=      1.1084  drift_vs_pass1=2.858e-01  vs_prev=6.954e-01
+PASS 4/5
+  psi_contrast (programs differ from each other) : 0.0847
+  psi_contrast (programs differ from each other) : 0.0852
+  psi_contrast (programs differ from each other) : 0.0864
+Pass 4 complete. Average ELBO per cell: 1.4986e+04
+  [global] psi       mean=      0.6555  drift_vs_pass1=9.769e-01  vs_prev=6.361e-01  psi_contrast=0.0864
+  [global] phi       mean=      0.1000  drift_vs_pass1=7.098e-01  vs_prev=3.433e-01  per-cell max=0.171 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=9.920e-02  vs_prev=2.086e-01
+  [global] alpha_pi  mean=      6.8012  drift_vs_pass1=6.447e-02  vs_prev=3.770e-02
+  [global] bb_conc   mean=      1.5342  drift_vs_pass1=2.420e-01  vs_prev=2.583e-02
+  [global] dir_conc  mean=      0.5780  drift_vs_pass1=6.692e+00  vs_prev=5.694e+00
+  [global] a         mean=      1.4180  drift_vs_pass1=1.913e+00  vs_prev=1.453e+00
+  [global] b         mean=      1.1257  drift_vs_pass1=9.923e-01  vs_prev=1.110e+00
+  [global] a_shape   mean=      1.1336  drift_vs_pass1=1.915e-02  vs_prev=1.501e+00
+  [global] a_rate    mean=      2.4984  drift_vs_pass1=7.786e-01  vs_prev=3.312e-01
+  [global] b_shape   mean=      0.4497  drift_vs_pass1=2.905e+00  vs_prev=1.176e+00
+  [global] b_rate    mean=      1.5090  drift_vs_pass1=5.551e-02  vs_prev=2.655e-01
+PASS 5/5
+  psi_contrast (programs differ from each other) : 0.0879
+  psi_contrast (programs differ from each other) : 0.0876
+  psi_contrast (programs differ from each other) : 0.0871
+Pass 5 complete. Average ELBO per cell: 1.3280e+04
+  [global] psi       mean=      0.6305  drift_vs_pass1=9.935e-01  vs_prev=6.068e-01  psi_contrast=0.0871
+  [global] phi       mean=      0.1000  drift_vs_pass1=8.337e-01  vs_prev=3.412e-01  per-cell max=0.188 (uniform=0.100)
+  [global] pi        mean=      0.1000  drift_vs_pass1=8.290e-02  vs_prev=1.059e-01
+  [global] alpha_pi  mean=      6.6151  drift_vs_pass1=3.816e-02  vs_prev=2.812e-02
+  [global] bb_conc   mean=      2.1155  drift_vs_pass1=4.503e-01  vs_prev=2.748e-01
+  [global] dir_conc  mean=      1.5370  drift_vs_pass1=1.893e+00  vs_prev=6.239e-01
+  [global] a         mean=      2.3386  drift_vs_pass1=1.228e+00  vs_prev=9.429e-01
+  [global] b         mean=      1.5045  drift_vs_pass1=9.339e-01  vs_prev=9.529e-01
+  [global] a_shape   mean=      0.4804  drift_vs_pass1=1.405e+00  vs_prev=1.360e+00
+  [global] a_rate    mean=      0.1851  drift_vs_pass1=1.988e+00  vs_prev=1.250e+01
+  [global] b_shape   mean=      1.0370  drift_vs_pass1=6.935e-01  vs_prev=5.664e-01
+  [global] b_rate    mean=      0.5910  drift_vs_pass1=1.411e+00  vs_prev=1.553e+00

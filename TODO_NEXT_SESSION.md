@@ -91,3 +91,49 @@ CONSEQUENCES:
 
 FIX (next round, with num_passes 8 + best-ELBO-pass selection):
   carry bb_conc chunk-to-chunk exactly as psi/pi/alpha_pi are carried.
+
+## Imputation coverage axis: RESAMPLED_X_PERCENT = % reads REMOVED, not retained (found 2026-07-19)
+
+The resampled test files are labelled by DOWNSAMPLING fraction, NOT coverage retained:
+    10_PERCENT  -> 730M reads (MOST coverage, 90% retained)
+    50_PERCENT  -> 405M
+    90_PERCENT  ->  81M
+   100_PERCENT  -> 0.8M  (near-empty, ~0.1%)
+The _original truth layer is identical across all files (verified).
+
+CONSEQUENCE: the earlier "imputation collapses at 100% coverage" was NOT a bug -- 100_PERCENT is the
+MOST downsampled file, so imputation is correctly worst there. The 04e code is fine (mb=0.80 at
+50%-removed is a healthy point). For Figure 3.1 the x-axis must be plotted as COVERAGE RETAINED
+(= reads, or 100 - removed%), so the curve reads left-to-right as depth decreasing.
+
+Also (per Karin): for testing we dropped the 10k-HVJ restriction and evaluate ALL junctions
+(pass n_hvj huge). Decide for the array whether all-junctions is affordable across 48 models x 7
+levels, or keep HVJ for the array and show all-junctions on the released model only.
+
+OPEN QUESTION from the HVJ smoke test (K=10): mb_ct (cell-type-stratified mean) global_pearson was
+~0.91 at 50%-removed while LeafletFA lf_bb was ~0.66 -- i.e. the mean baseline BEAT the model. Watch
+this on the all-junctions run and across K: if LeafletFA does not beat mb_ct, the programs are
+redundant with cell-type-average splicing for imputation. K=10 may just be too weak.
+
+## Imputation finding (run_0, K=10, ALL junctions, 300G) — 2026-07-19
+
+Coverage direction now correct (10%-removed = most reads):
+  global Pearson   lf_bb: 0.747 (10%rm) -> 0.570 (90%rm)   mb_ct: 0.960 -> 0.861
+  calibration lf_bb slope: 0.99 (high cov) -> 0.87 (low) -- WELL CALIBRATED, not compressed.
+
+HEADLINE: mb_ct (cell-type-stratified mean) BEATS LeafletFA (lf_bb) on imputation at every coverage
+(0.96 vs 0.75, 0.86 vs 0.57). Holds on HVJ and all-junctions.
+
+BUT mb_ct is SUPERVISED -- it is handed the 39 cell-type labels. LeafletFA uses none. So this is not
+a fair imputation bar. Reframe Figure 3.1:
+  - do NOT use mb_ct as the pass/fail bar (it is supervised).
+  - fair bars = naive (global mean) and mb (coverage-weighted mean, unsupervised). Beating those is
+    the honest claim. lf_bb=0.75 vs naive~0 vs mb (check) -- lf_bb clearly beats naive.
+  - show mb_ct as an ADVANTAGED reference ("even a label-conditioned mean only does X better").
+  - LeafletFA's selling point is NOT imputation accuracy; it is the calibrated, LABEL-FREE latent
+    representation. Lead with calibration + coverage-robustness, not "beats mb_ct".
+CAVEAT: K=10 only. K=50 may narrow the gap -- rerun on finalists before finalizing framing.
+
+MEMORY: all-junctions needs ~200-300G/run (5 dense 40k x 80k arrays). NOT feasible for the 48x7
+array under the account quota. Plan: HVJ for any sweep; all-junctions only on released finalists.
+Better: block-process junctions in 04e (score 20k at a time) to run all-junctions at ~50G.

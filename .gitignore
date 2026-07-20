@@ -36,3 +36,18 @@ __pycache__/
 notebooks/mouse_foundation_splicing.h5ad
 # Exception: small test fixture committed to repo
 !tests/data/test_splicing.h5ad
+
+# ── Claude Code / assistant artifacts ──────────────────────────────────────
+.claude/
+.claude*/
+CLAUDE.md
+.anthropic/
+
+# ── Python junk ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# ── Experiment run artifacts (regenerable; symlink into scratch/WD data) ───
+experiments/**/resampled/
+experiments/.overnight_retried
