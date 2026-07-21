@@ -68,7 +68,10 @@ def main():
     print(f"\ndevice={m.device}  K={K}  steps={steps}  batch={batch}  lr={lr}  "
           f"learned_ab={learned_ab}  junc_prior={junc_prior}", flush=True)
     t0 = time.time()
-    losses = m.fit(num_steps=steps, subsample_size=batch, lr=lr, seed=0, log_every=100)
+    # gamma=0.1 (stronger LR decay than the 0.5 default): job 19286437 showed psi drifting
+    # monotonically PAST the observed rate (0.2947 at step 900 -> 0.2807 at 2700) and then a NaN
+    # blow-up at 2745. Faster decay settles psi near the target instead of over-cooking it.
+    losses = m.fit(num_steps=steps, subsample_size=batch, lr=lr, gamma=0.1, seed=0, log_every=100)
     dt = time.time() - t0
 
     psi = m.psi_mean().cpu().numpy()

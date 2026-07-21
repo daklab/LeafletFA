@@ -184,8 +184,20 @@ class LeafletFAMinibatch:
                           **({"init_loc_fn": init_fn} if init_fn is not None else {}))
 
     # ── fit ──────────────────────────────────────────────────────────────────
+    def _param_snapshot(self):
+        """Deep copy of the whole param store, on CPU, for checkpoint/rollback."""
+        return {k: v.detach().cpu().clone()
+                for k, v in pyro.get_param_store().items()}
+
+    def _restore_snapshot(self, snap):
+        store = pyro.get_param_store()
+        for k, v in snap.items():
+            if k in store:
+                with torch.no_grad():
+                    store[k].copy_(v.to(store[k].device))
+
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5,
-            num_particles=1, seed=0, log_every=100, verbose=True):
+            num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -201,14 +213,30 @@ class LeafletFAMinibatch:
         svi = SVI(self.model, self.guide,
                   ClippedAdam({"lr": lr, "lrd": lrd, "clip_norm": 10.0}),
                   Trace_ELBO(num_particles=num_particles))
+        # NaN-GUARD + CHECKPOINT-BEST. Job 19286437 trained cleanly for 2745 steps, then a single
+        # bad gradient blew the loss to NaN and corrupted every saved parameter -- 40 min of good
+        # training lost. We now snapshot the param store on a stable interval and, if a step returns
+        # a non-finite loss, restore the last good snapshot and stop. The returned model is always
+        # the best finite state reached, never the blown-up one.
+        checkpoint_every = checkpoint_every or log_every
         self.losses = []
+        best_snapshot = self._param_snapshot()
+        best_step = -1
         for step in range(num_steps):
-            self.losses.append(svi.step())
+            loss = svi.step()
+            self.losses.append(loss)
+            if not np.isfinite(loss):
+                print(f"  !! non-finite loss at step {step} -- restoring checkpoint from step "
+                      f"{best_step} and stopping (NaN-guard).", flush=True)
+                self._restore_snapshot(best_snapshot)
+                break
+            if step % checkpoint_every == 0:
+                best_snapshot = self._param_snapshot()   # last KNOWN-FINITE state
+                best_step = step
             if verbose and (step % log_every == 0 or step == num_steps - 1):
                 with torch.no_grad():
                     psi = self.psi_mean()
-                print(f"  step {step:>5}  loss={self.losses[-1]:.4e}  psi_mean={psi.mean():.4f}",
-                      flush=True)
+                print(f"  step {step:>5}  loss={loss:.4e}  psi_mean={psi.mean():.4f}", flush=True)
         return self.losses
 
     # ── posterior summaries ──────────────────────────────────────────────────

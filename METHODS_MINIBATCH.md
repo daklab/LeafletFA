@@ -243,6 +243,35 @@ everything: ψ mean must fall toward the observed rate **0.2948**.
 
 ---
 
+## 4b. THE deciding result — real 70% atlas, genuine minibatch (job 19286437)
+
+First run with subsampling actually engaging, on the full 92,894 × 79,768 matrix (K=20, batch 2048,
+lr 0.05, gamma 0.5, 3000 steps). **ψ mean fell from the prior median straight to the observed rate:**
+
+| step | ψ mean | | step | ψ mean |
+|---|---|---|---|---|
+| 0 | 0.4938 | | 900 | **0.2947** ← observed rate = 0.2948 |
+| 100 | 0.3016 | | 1500 | 0.2896 |
+| 300 | 0.2972 | | 2700 | 0.2807 |
+
+**The mislocation is fixed.** Every shipped chunked model sits at ψ ≈ 0.67; the plate model lands on
+the data. Loss dropped 1.89e9 → 9.7e8 and held stable. This is the confirmation the whole
+investigation was after.
+
+**Two things this run also exposed:**
+
+1. **A late-training NaN blow-up.** The loss went non-finite at **step 2745** (after 40 min of
+   stable training) and corrupted every saved parameter. Fixed with a NaN-guard + checkpoint-best in
+   `fit()` (`_param_snapshot`/`_restore_snapshot`): the param store is snapshotted on each stable
+   log interval, and a non-finite loss restores the last good snapshot and stops. The returned model
+   is always the best finite state, never the blown-up one. Verified on a smoke test.
+2. **ψ drifts monotonically past the target** (0.2947 @ 900 → 0.2807 @ 2700) rather than settling.
+   mean(ψ) over the K×J matrix need not exactly equal the read-weighted rate, but the continued
+   descent + eventual blow-up says the LR/step budget over-cooks it. The model was best around step
+   900–1500. Rerun (job 19286831) uses **1500 steps, gamma=0.1** (stronger decay) with the guard on.
+
+---
+
 ## 5. Candidate fixes under test
 
 `experiments/minibatch/compare_variants.py`, simulated data with the atlas's characteristics
@@ -334,8 +363,15 @@ wandb consolidated to one project (`LeafletFA-mouse-atlas-70pct-train`) with the
 - [x] Variant comparison on simulated data — **plate matches full-batch; chunked recovers nothing** (§5)
       — CAVEAT: subsampling was silently off during this sweep; results were effectively full-batch (§4a)
 - [x] Subsampling wiring bug + atlas-scale memory (§4a) — fixed and index-sync verified (`c8cad3d`)
-- [ ] **Real 70% data with genuine minibatching (job 19286437, K=20, 3000 steps) — ψ must land near
-      0.2948.** THE deciding run. Pending on shared knowles_lab GPU quota.
+- [x] **Real 70% data with genuine minibatching (job 19286437) — ψ hit 0.2947 at step 900 = the
+      observed rate 0.2948. MISLOCATION FIXED (§4b).** NaN blow-up at step 2745 → added NaN-guard +
+      checkpoint-best to fit(); gentler rerun (job 19286831, 1500 steps, gamma=0.1) in progress.
+- [x] Array trainer `run_training_minibatch.py` written — drop-in for the 48-config grid (reads the
+      same parameter_combinations.json; honours K/seed/junc_prior; ignores chunked-only knobs). Emits
+      a single continuous ELBO loss curve + psi-location plot per run, and logs health to one wandb
+      project. Smoke-tested (job 19286833). **NOT launched** until the gentler single run confirms
+      the settings.
+- [ ] Launch the 48-config minibatch array once 19286831 confirms ψ settles cleanly with no NaN.
 - [x] 07d (job 19278165): **the E-step does not converge, and early stopping fires prematurely**
 
 ### 07d result — test-time E-step convergence (run_30, K=50, 4096 held-out cells)
