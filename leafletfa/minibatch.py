@@ -109,9 +109,16 @@ class LeafletFAMinibatch:
             self.psi_init = torch.as_tensor(p, dtype=torch.float32, device=self.device)
         self.guide = None
         self.losses = []
+        self._B = None            # active minibatch size, set by fit() before the guide is traced
 
     # ── model ────────────────────────────────────────────────────────────────
     def model(self, subsample_size=None):
+        # Subsample size is an INSTANCE attribute, not a call arg. AutoNormal traces the raw
+        # self.model with no args, so a call-arg subsample_size would be None on the guide side
+        # while B on the SVI side -- the two would disagree, the guide would materialise phi over
+        # all N cells, and phi @ psi would be an (N, J) matrix (29.6 GB at atlas scale -> OOM).
+        # Reading self._B guarantees model and guide use the SAME plate. (Job 19279941 OOM'd here.)
+        subsample_size = self._B if subsample_size is None else subsample_size
         K, J, N = self.K, self.J, self.N
         one = torch.tensor(1.0, device=self.device)
 
@@ -167,7 +174,7 @@ class LeafletFAMinibatch:
         `create_plates`, so q(phi) gets full-size (N, K) parameters indexed by the plate.
         """
         def create_plates(*args, **kwargs):
-            return pyro.plate("cells", self.N, subsample_size=subsample_size)
+            return pyro.plate("cells", self.N, subsample_size=self._B)
 
         init_fn = None
         if self.psi_init is not None:
@@ -179,13 +186,19 @@ class LeafletFAMinibatch:
     # ── fit ──────────────────────────────────────────────────────────────────
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5,
             num_particles=1, seed=0, log_every=100, verbose=True):
-        """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt."""
+        """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
+
+        Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
+        `self._B`, so model and guide trace the identical subsampling plate. Passing the model as a
+        lambda with a call-arg subsample_size to SVI while AutoNormal traced the raw model was the
+        cause of the atlas-scale OOM: the guide ran phi over all N cells.
+        """
         pyro.clear_param_store()
         pyro.set_rng_seed(seed)
-        subsample_size = min(int(subsample_size), self.N)
-        self.guide = self._make_guide(subsample_size)
+        self._B = min(int(subsample_size), self.N)
+        self.guide = self._make_guide(self._B)
         lrd = gamma ** (1.0 / max(num_steps, 1))
-        svi = SVI(lambda: self.model(subsample_size=subsample_size), self.guide,
+        svi = SVI(self.model, self.guide,
                   ClippedAdam({"lr": lr, "lrd": lrd, "clip_norm": 10.0}),
                   Trace_ELBO(num_particles=num_particles))
         self.losses = []

@@ -208,7 +208,48 @@ does not reproduce under the plate model.
 | `phi_perplexity` | near K ⇒ cells hedge ⇒ diffuse φ ⇒ likelihood gradient on ψ diluted ~K×. |
 | `phi_recovery_r` | matched corr on cell loadings. |
 
-**Results: pending (job 19279480).**
+### Results — simulated data, K=5, J=400, N=3000, 1500 steps (seed 0; seed 1 replicates)
+
+| variant | ψ mean (true 0.3026) | ψ location err | r_psi | **β slope** | φ perplexity (max 5) | seconds |
+|---|---|---|---|---|---|---|
+| `full_batch` (ceiling) | 0.3014 | 0.0012 | 0.999 | **1.001** | 2.4 | 157 |
+| `plate_fixed_ab` | 0.3007 | 0.0019 | 0.998 | **1.012** | 2.6 | 75 |
+| `plate_learned_ab` | 0.3018 | 0.0008 | 0.998 | 1.014 | 2.6 | 64 |
+| `plate_junc_prior` | 0.3007 | 0.0019 | 0.998 | 1.011 | 2.6 | 54 |
+| **`chunked_baseline`** | **0.0266** | **0.2760** | **0.017** | **0.006** | **4.5** | 110 |
+
+Seed 1, `plate_fixed_ab`: ψ err 0.0012, r_psi 0.998, slope 1.016, perplexity 2.6 — replicates.
+
+**Findings**
+
+1. **Plate minibatching matches full-batch and is 2-3x faster.** β slope 1.012 vs 1.001 means no
+   effect-size attenuation. This is the number audit §2 asked for as the one thing that decides
+   whether minibatch training shrinks DS effect sizes -- for the PLATE implementation the answer is
+   no attenuation. (It says nothing about the shipped chunked-rebuild approach, whose slope has
+   never been measured on real data.)
+2. **The chunked-rebuild pattern recovers nothing** under identical conditions: r_psi 0.017 is
+   chance, β slope 0.006 is total effect-size collapse, and φ perplexity 4.5/5 means cells hedge
+   across every program -- the same signature as the real atlas (27 of K=50, ~90% of K).
+3. **The a/b hyperprior is exonerated.** `plate_learned_ab` performs identically to
+   `plate_fixed_ab`. It was a symptom, not a cause -- consistent with the ELBO decomposition. Had
+   the prior been "fixed" first, the model would have changed for no reason and possibly masked the
+   real bug.
+4. **The junction-specific prior is neutral** here. Keep it as an ablation arm, not the default.
+
+**Two caveats on the control**
+
+- **The direction of failure differs.** On the real atlas ψ drifts UP (0.67 vs 0.295); in this
+  simulation the chunked baseline collapses DOWN (0.027 vs 0.303). Both are massive mislocation
+  with no recovery, but the simulation does not reproduce the specific upward drift, so it shows
+  *that* the pattern is broken rather than that it breaks by the identical route.
+- **`chunked_baseline` is a simplified reimplementation**, not production `run_training.py`: it
+  lacks the waypoint ψ warm-start via `varm`, φ carry-over, and the real pass/epoch schedule. It is
+  probably worse than production, which does achieve `corr(π@Ψ, observed) = 0.68` on real data.
+  **r_psi = 0.017 must not be read as "production is that bad."**
+
+**Nomination: `plate_fixed_ab`.** All plate variants are statistically indistinguishable, so the
+choice is made on other grounds: it uses `a, b ~ Gamma(1,1)` exactly as METHODS.md documents,
+removing the undocumented hyperprior level (audit §8) at zero measured cost.
 
 ---
 
@@ -231,9 +272,41 @@ wandb consolidated to one project (`LeafletFA-mouse-atlas-70pct-train`) with the
 
 ## 7. Open items
 
-- [ ] Variant comparison on simulated data (job 19279480)
-- [ ] Best variant on real 70% training data, checking ψ lands near 0.295
-- [ ] 07d: does the test-time E-step converge at 300/800/2000 epochs (job 19278165)
+- [x] Variant comparison on simulated data — **plate matches full-batch; chunked recovers nothing** (§5)
+- [ ] Best variant on real 70% data (job 19279941, K=20, 3000 steps) — ψ must land near 0.295
+- [x] 07d (job 19278165): **the E-step does not converge, and early stopping fires prematurely**
+
+### 07d result — test-time E-step convergence (run_30, K=50, 4096 held-out cells)
+
+| epoch budget | epochs actually run | mean_L1 vs prev | corr vs longest | argmax agree vs longest | φ perplexity |
+|---|---|---|---|---|---|
+| 300 | 300 (hit cap) | — | 0.374 | **0.110** | 27.21 |
+| 800 | 800 (hit cap) | 0.738 | 0.818 | 0.495 | 17.40 |
+| 2000 | **1158 (early-stopped)** | 0.515 | 1.000 | 1.000 | 11.79 |
+
+**At the 300-epoch production budget only 11% of cells have the same dominant program as at 1158
+epochs**, and φ perplexity falls monotonically 27.2 → 17.4 → 11.8, i.e. φ is still sharpening
+throughout. Every 04e and 07c number is computed on a 100- or 300-epoch E-step, so all of them are
+computed on a φ that reorders almost completely with more compute. In particular the 07c result
+"φ loses to rank-K NMF on every structure metric" is **not trustworthy** and must be re-run.
+
+Note also that the φ perplexity of 27/50 previously cited as evidence for "diffuse φ / symmetric
+saddle" is substantially **truncation**, not saddle behaviour: at 1158 epochs it is 11.8.
+
+#### Root cause: early stopping is inert in the E-step path
+
+The threshold is `max(min_delta, min_delta_rel * |best_loss|)`. The training array sets
+`min_delta_rel = 1e-5`, but the E-step (04e:421, 07c:152) passed only `min_delta = 0.001` and
+`min_delta_rel` **defaults to 0.0**. Against an E-step ELBO of ~2.87e7 that is a relative tolerance
+of ~3.5e-11 — completely inert — so the rule degenerates to "stop after `patience` epochs with no
+new global best", which single-particle SVI noise triggers on a still-descending curve. It fired at
+epoch 1158 while φ was still moving by mean L1 0.515. This is exactly the audit §6.3 problem, fixed
+for training and never fixed for the E-step. **Fixed: both scripts now pass `min_delta_rel=1e-5`.**
+
+Also note `health["stopped_early"]` is defined as `n_ran < num_epochs AND frac_ran < 0.25`, so it
+reports False for a genuine early stop past 25% of the budget — it reported False at 1158/2000. It
+is a "stopped suspiciously early" flag, not a "stopped early" flag, and should not be read as the
+latter.
 - [x] ELBO decomposition (job 19278771): **confirmed optimiser, not prior** — see §2
 - [ ] Decide whether `learn_ab_hyperprior` is dropped permanently, and reconcile METHODS.md §8
 - [ ] All 39 existing models are affected; Figure 3 cannot be built on them

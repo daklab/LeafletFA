@@ -105,3 +105,12 @@ FATAL: no CUDA device visible (node=ne1dg6-009). This job would silently run on 
 [07-20 11:37] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
 [07-20 11:47] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
 [07-20 11:57] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:07] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:17] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:27] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:37] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:47] array: 44 done, 2 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 12:57] array: 45 done, 1 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 13:07] array: 45 done, 1 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 13:17] array: 46 done, 0 running, 0 pending | smokes: 04e=gone 07c=gone
+[07-20 13:17] === ALL WORK DRAINED -- watchdog exiting ===
