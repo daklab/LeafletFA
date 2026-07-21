@@ -1,0 +1,40 @@
+loading real 70% training data (cells=all, junctions=all)
+  shape=(92894, 79768)  coverage=13.81%
+  READ-WEIGHTED observed rate = 0.2948   <-- psi must land HERE
+  unweighted mean PSI (covered) = 0.2928
+  frac of covered PSI exactly 0 = 58.7%
+[minibatch] data kept on CPU (59.3 GB); moving only the minibatch to cuda
+
+device=cuda  K=20  steps=1500  batch=2048  lr=0.05  learned_ab=False  junc_prior=False
+  step     0  loss=1.8928e+09  psi_mean=0.4938
+  step   100  loss=1.0155e+09  psi_mean=0.3022
+  step   200  loss=9.9548e+08  psi_mean=0.2987
+  step   300  loss=9.7351e+08  psi_mean=0.2975
+  step   400  loss=9.8207e+08  psi_mean=0.2970
+  step   500  loss=1.0021e+09  psi_mean=0.2965
+  step   600  loss=9.5221e+08  psi_mean=0.2961
+  step   700  loss=9.8425e+08  psi_mean=0.2958
+  step   800  loss=9.5133e+08  psi_mean=0.2955
+  step   900  loss=9.7438e+08  psi_mean=0.2953
+  step  1000  loss=1.0005e+09  psi_mean=0.2950
+  step  1100  loss=9.7011e+08  psi_mean=0.2949
+  step  1200  loss=9.7972e+08  psi_mean=0.2947
+  step  1300  loss=9.8338e+08  psi_mean=0.2945
+  step  1400  loss=9.5779e+08  psi_mean=0.2944
+  step  1499  loss=9.7227e+08  psi_mean=0.2943
+
+================ REAL-DATA RESULT ================
+  observed_rate          0.2947748899459839
+  psi_mean               0.29431334137916565
+  psi_median             0.06349700689315796
+  psi_location_err       0.0004615485668182373
+  pred_mean              0.29472965002059937
+  psi_contrast           0.09250745922327042
+  phi_perplexity         5.486202239990234
+  psi_frac_below_005     0.48111711463243406
+  final_loss             972268190.8294934
+  seconds                1185.0
+
+  VERDICT: FIXED -- psi is at the observed rate   (shipped chunked models: psi 0.670 vs rate 0.295, err 0.375)
+
+wrote /gpfs/commons/home/kisaev/LeafletFA/experiments/minibatch/real70/result.json

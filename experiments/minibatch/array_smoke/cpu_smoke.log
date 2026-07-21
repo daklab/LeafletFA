@@ -1,0 +1,96 @@
+=== minibatch task 0: K=10 seed=0 junc_prior=True arm=core_waypoints_juncprior ===
+wandb: Using wandb-core as the SDK backend.  Please refer to https://wandb.me/wandb-core for more information.
+wandb: Currently logged in as: karini925 to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.19.8
+wandb: Run data is saved locally in /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/2026-07-18/mb_run_0/wandb/run-20260721_000832-a1wlr254
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run mb_run_0
+wandb: ⭐️ View project at https://wandb.ai/karini925/LeafletFA-mouse-atlas-70pct-train
+wandb: 🚀 View run at https://wandb.ai/karini925/LeafletFA-mouse-atlas-70pct-train/runs/a1wlr254
+  data (8000, 6000)  coverage=51.83%  observed_rate=0.3089
+  step     0  loss=6.0735e+07  psi_mean=0.4937
+  step    50  loss=3.7009e+07  psi_mean=0.3364
+  step   100  loss=3.3506e+07  psi_mean=0.3032
+  step   150  loss=3.2698e+07  psi_mean=0.2985
+  step   200  loss=3.2517e+07  psi_mean=0.2978
+  step   250  loss=3.3467e+07  psi_mean=0.2977
+  step   300  loss=3.2496e+07  psi_mean=0.2977
+  step   350  loss=3.1957e+07  psi_mean=0.2978
+  step   399  loss=3.1984e+07  psi_mean=0.2978
+
+================ RESULT ================
+  observed_rate        0.30892372131347656
+  psi_mean             0.29782161116600037
+  psi_location_err     0.011102110147476196
+  pred_mean            0.2976369857788086
+  psi_contrast         0.050961364060640335
+  phi_perplexity       4.349582672119141
+  n_finite_steps       400
+  total_steps          400
+  seconds              235.3
+  VERDICT: FIXED   (chunked models: psi 0.67 vs rate 0.295)
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:                  K ▁
+wandb:   K_max_perplexity ▁
+wandb:            bb_conc ▁
+wandb:           dir_conc ▁
+wandb:         final_loss ▁
+wandb:              gamma ▁
+wandb:                 lr ▁
+wandb:            n_cells ▁
+wandb:     n_finite_steps ▁
+wandb:        n_junctions ▁
+wandb:           neg_elbo █▅▄▃▃▂▂▂▂▂▂▂▁▂▁▁▁▁▁▁▁▁▁▁▁▂▁▁▂▁▁▁▁▁▁▁▁▁▁▁
+wandb:          num_steps ▁
+wandb:      observed_rate ▁
+wandb:     phi_perplexity ▁
+wandb:          pred_mean ▁
+wandb:       psi_contrast ▁
+wandb: psi_frac_above_095 ▁
+wandb: psi_frac_below_005 ▁
+wandb:   psi_location_err ▁
+wandb:           psi_mean ▁
+wandb:         psi_median ▁
+wandb:            seconds ▁
+wandb:               seed ▁
+wandb:     subsample_size ▁
+wandb:            task_id ▁
+wandb:        total_steps ▁
+wandb: 
+wandb: Run summary:
+wandb:                  K 10
+wandb:   K_max_perplexity 10
+wandb:            bb_conc 2.94096
+wandb:           dir_conc 4.95329
+wandb:         final_loss 31983970.54379
+wandb:              gamma 0.1
+wandb:         junc_prior True
+wandb:                 lr 0.05
+wandb:            n_cells 8000
+wandb:     n_finite_steps 400
+wandb:        n_junctions 6000
+wandb:           neg_elbo 32020249.76616
+wandb:          num_steps 400
+wandb:      observed_rate 0.30892
+wandb:     phi_perplexity 4.34958
+wandb:          pred_mean 0.29764
+wandb:       psi_contrast 0.05096
+wandb: psi_frac_above_095 0.13572
+wandb: psi_frac_below_005 0.48487
+wandb:   psi_location_err 0.0111
+wandb:           psi_mean 0.29782
+wandb:         psi_median 0.06226
+wandb:            seconds 235.3
+wandb:               seed 0
+wandb:     subsample_size 1024
+wandb:            task_id 0
+wandb:        total_steps 400
+wandb: 
+wandb: 🚀 View run mb_run_0 at: https://wandb.ai/karini925/LeafletFA-mouse-atlas-70pct-train/runs/a1wlr254
+wandb: ⭐️ View project at: https://wandb.ai/karini925/LeafletFA-mouse-atlas-70pct-train
+wandb: Synced 5 W&B file(s), 1 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/2026-07-18/mb_run_0/wandb/run-20260721_000832-a1wlr254/logs
+
+wrote /gpfs/commons/groups/knowles_lab/Karin/Leaflet-analysis-WD/MOUSE_SPLICING_FOUNDATION/LEAFLETFA_MODELS/2026-07-18/mb_run_0/

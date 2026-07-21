@@ -371,7 +371,16 @@ wandb consolidated to one project (`LeafletFA-mouse-atlas-70pct-train`) with the
       a single continuous ELBO loss curve + psi-location plot per run, and logs health to one wandb
       project. Smoke-tested (job 19286833). **NOT launched** until the gentler single run confirms
       the settings.
-- [ ] Launch the 48-config minibatch array once 19286831 confirms ψ settles cleanly with no NaN.
+- [x] **Gentler rerun (job 19286831, 1500 steps, gamma=0.1) CONFIRMED on the full atlas:** psi_mean
+      0.2943 vs observed rate 0.2948 (err 0.00046), psi_median 0.0635, p1/p99 = 9.5e-5/0.9994 (full
+      [0,1] range), 48%<0.05 & 14%>0.95 (U-shaped, matches data), contrast 0.0925, perplexity 5.5/20,
+      NO NaN. Learned a=0.239,b=0.442 (BOTH <1 -> the prior itself is now U-shaped; the old a>1 was
+      an optimiser artifact, not the model). psi held at 0.294 across all 1500 steps -- no drift.
+- [x] **48-config minibatch array LAUNCHED (job 19286917)** by the gated launcher after both the sim
+      and real gates passed. run_training_minibatch.py, 1500 steps / batch 2048 / lr 0.05 / gamma 0.1.
+      Watchdog (array_watch.sh) requeues OOMs and flags any run where psi does not land / collapses /
+      NaNs.
+- [ ] Re-run 04e + 07c on the new minibatch models (early-stopping fix already in) -> rebuild Figure 3.
 - [x] 07d (job 19278165): **the E-step does not converge, and early stopping fires prematurely**
 
 ### 07d result — test-time E-step convergence (run_30, K=50, 4096 held-out cells)

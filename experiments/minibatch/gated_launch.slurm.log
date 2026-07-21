@@ -1,0 +1,5 @@
+[07-21 00:25] === gated launcher started; waiting on real=19286831 sim=19286867 ===
+[07-21 01:30] both finished: real=COMPLETED  sim=COMPLETED
+[07-21 01:30] REAL  PASS: PASS psi_location_err=0.0004615485668182373 < 0.06; PASS psi_contrast=0.09250745922327042 > 0.04; PASS phi_perplexity=5.486202239990234 < 18.0; PASS final_loss finite (972268190.8294934); PASS n_finite_steps=None == total_steps=None
+[07-21 01:30] SIM   PASS: PASS subsampling engaged; PASS recovery within 0.02; PASS beta_slope 0.9-1.1; PASS converged
+[07-21 01:30] ALL PASS -> launched 48-config minibatch array as job 19286917
