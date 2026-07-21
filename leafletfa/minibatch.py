@@ -262,6 +262,18 @@ class LeafletFAMinibatch:
                     out[k] = m[k].detach().cpu().numpy()
             return out
 
+    def psi_loc_scale(self):
+        """The guide's q(psi) loc and scale in LOGIT space (AutoNormal params).
+
+        Returns (loc, scale) each (K, J), or (None, None) if unavailable. 04e samples
+        psi ~ sigmoid(loc + scale*eps) to carry psi posterior uncertainty into imputation instead of
+        plugging in the point estimate; verified sigmoid(loc) == psi median."""
+        st = pyro.get_param_store()
+        if "AutoNormal.locs.psi" not in st or "AutoNormal.scales.psi" not in st:
+            return None, None
+        return (st["AutoNormal.locs.psi"].detach().cpu().numpy(),
+                st["AutoNormal.scales.psi"].detach().cpu().numpy())
+
     def observed_rate(self):
         """Read-weighted splicing rate the likelihood targets: sum(junc)/sum(clus)."""
         with torch.no_grad():
