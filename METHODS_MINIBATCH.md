@@ -149,10 +149,10 @@ with pyro.plate("cells", N, subsample_size=B) as idx:
         obs=junc[idx])
 ```
 
-Per the Pyro docs, the plate:
-- draws subsample indices **once** and uses the same ones in model and guide
-  (*"the indices will only be subsampled once in the guide; the Pyro backend makes sure that the
-  same set of indices are used during execution of the model"*),
+The plate:
+- draws subsample indices **once** in the guide and replays the same ones into the model — *verified*
+  on our wiring, not just assumed; see §4a for the index-identity proof and the bug that had to be
+  fixed before it actually held,
 - **auto-scales** the local terms by N/B — no manual `poutine.scale` bookkeeping,
 - leaves globals (ψ, π, a, b, dir_conc, bb_conc) at weight 1, which is correct.
 
@@ -181,6 +181,65 @@ fitted psi mean=0.3455   TRUE=0.3468   observed=0.3495
 
 ψ moves **down** to the truth. The shipped code moves **up** to 0.71 and stays. The location failure
 does not reproduce under the plate model.
+
+### 4a. Two bugs found AFTER the first smoke test (fixed in `c8cad3d`)
+
+The tiny smoke above and the whole §5 simulation sweep passed while **subsampling was silently not
+engaging**. Both bugs matter for anyone reading this code.
+
+**Bug 1 — the guide traced the full N, so `phi @ psi` was an (N, J) matrix.** SVI optimises the model
+*and* the guide, and both trace the plate independently. The original wiring gave the batch size to
+only one side:
+
+```python
+# BROKEN
+svi   = SVI(lambda: self.model(subsample_size=B), guide, ...)   # model side sees B
+guide = AutoNormal(self.model, create_plates=...)               # traces raw self.model() -> None -> full N
+```
+
+`AutoNormal` wraps the **raw** `self.model` and calls it with no arguments, so on the guide side
+`subsample_size=None` and the `"cells"` plate ran at full N. The guide therefore instantiated `phi`
+over all 92,894 cells and `phi @ psi` became `(92894, 79768)` = **29.6 GB**, which OOM'd the first
+real 70% run (job 19279941) at exactly a 27.61 GiB allocation.
+
+It was invisible on the K=5 / J=400 simulation because a full `(N, J)` matrix there is only ~4.8 MB.
+**Every "plate" result in §5 was therefore silently full-batch, not subsampled** — the plate fix is
+still correct, but subsampling itself was never exercised until atlas scale.
+
+Fix: the batch size is an instance attribute `self._B`, read by both the model and the guide's
+`create_plates`, and the **same** `self.model` object is passed to both `SVI` and `AutoNormal`:
+
+```python
+# FIXED
+self._B = B
+svi   = SVI(self.model, guide, ...)                            # same object, no lambda
+guide = AutoNormal(self.model,
+                   create_plates=lambda *a, **k: pyro.plate("cells", N, subsample_size=self._B))
+```
+
+**Verified, not assumed.** Replaying the model against the guide trace the way `Trace_ELBO` does, the
+two `"cells"` plates use the *identical* index set (this is the correctness-critical part — φ for
+cell *c* must be scored against cell *c*'s reads):
+
+```
+guide 'cells' idx : (256,) [2382, 2336, 884, 3435, 4660, 3142, ...]
+model 'cells' idx : (256,) [2382, 2336, 884, 3435, 4660, 3142, ...]   IDENTICAL: True
+model phi shape   : (256, 4)      # B, not N
+model obs shape   : (256, 300)    # B x J, not N x J
+```
+
+The guide subsamples once; the model's same-named plate is replayed onto those exact indices. A
+smoke test asserting `phi`/`obs` are batch-sized (256), not N-sized (5000), is now part of the
+regression checks — the check the §5 sweep never made.
+
+**Bug 2 — data must not sit dense on the GPU.** The atlas is 92,894 × 79,768 → 29.6 GB per matrix in
+float32, 59 GB for `junc` + `clus`, on a 44.5 GB card. `data_on_cpu` (auto-enabled past ~4 GB per
+matrix) keeps both matrices in host memory and moves only the `(B, J)` minibatch to the device each
+step (~653 MB at B=2048). Verified numerically identical to the all-on-device path on the smoke test.
+
+**Status:** the real 70% run (job 19286437, K=20, 3000 steps, batch 2048) is the first genuine test
+of end-to-end minibatching. Pending on the shared `knowles_lab` GPU quota. The number that decides
+everything: ψ mean must fall toward the observed rate **0.2948**.
 
 ---
 
@@ -273,7 +332,10 @@ wandb consolidated to one project (`LeafletFA-mouse-atlas-70pct-train`) with the
 ## 7. Open items
 
 - [x] Variant comparison on simulated data — **plate matches full-batch; chunked recovers nothing** (§5)
-- [ ] Best variant on real 70% data (job 19279941, K=20, 3000 steps) — ψ must land near 0.295
+      — CAVEAT: subsampling was silently off during this sweep; results were effectively full-batch (§4a)
+- [x] Subsampling wiring bug + atlas-scale memory (§4a) — fixed and index-sync verified (`c8cad3d`)
+- [ ] **Real 70% data with genuine minibatching (job 19286437, K=20, 3000 steps) — ψ must land near
+      0.2948.** THE deciding run. Pending on shared knowles_lab GPU quota.
 - [x] 07d (job 19278165): **the E-step does not converge, and early stopping fires prematurely**
 
 ### 07d result — test-time E-step convergence (run_30, K=50, 4096 held-out cells)
