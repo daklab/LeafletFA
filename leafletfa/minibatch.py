@@ -80,7 +80,8 @@ class LeafletFAMinibatch:
     """
 
     def __init__(self, junc, clus, K, *, junc_specific_prior=False, learn_ab_hyperprior=False,
-                 psi_init=None, device=None, eps=1e-6, clip=1e-4, data_on_cpu=None):
+                 psi_init=None, device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
+                 likelihood="betabinomial"):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -102,6 +103,8 @@ class LeafletFAMinibatch:
         self.K = int(K)
         self.junc_specific_prior = bool(junc_specific_prior)
         self.learn_ab_hyperprior = bool(learn_ab_hyperprior)
+        assert likelihood in ("betabinomial", "binomial")
+        self.likelihood = likelihood   # "binomial" = the input_conc=inf ablation (no overdispersion)
         self.eps, self.clip = float(eps), float(clip)
         self.psi_init = None
         if psi_init is not None:
@@ -141,10 +144,11 @@ class LeafletFAMinibatch:
         alpha_pi = pyro.sample("alpha_pi", dist.Gamma(one, one))
         pi = pyro.sample("pi", dist.Dirichlet((alpha_pi / K).expand([K])))
         dir_conc = pyro.sample("dir_conc", dist.Gamma(one, one))
-        bb_conc = pyro.sample("bb_conc", dist.Gamma(torch.tensor(2.0, device=self.device),
-                                                    torch.tensor(0.1, device=self.device)))
         dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6)
-        bb_conc = torch.clamp(bb_conc, min=1e-3, max=1e6)
+        if self.likelihood == "betabinomial":
+            bb_conc = pyro.sample("bb_conc", dist.Gamma(torch.tensor(2.0, device=self.device),
+                                                        torch.tensor(0.1, device=self.device)))
+            bb_conc = torch.clamp(bb_conc, min=1e-3, max=1e6)
 
         # THE PLATE. Cells are conditionally independent given the globals. Pyro draws the
         # subsample indices once, shares them with the guide, and scales the LOCAL terms by N/B
@@ -157,11 +161,15 @@ class LeafletFAMinibatch:
             b_junc = self.junc[i].to(self.device, non_blocking=True)
             b_clus = self.clus[i].to(self.device, non_blocking=True)
             b_mask = self.mask[i].to(self.device, non_blocking=True)
+            if self.likelihood == "binomial":
+                obs_dist = dist.Binomial(total_count=b_clus, probs=mu)   # no overdispersion (conc=inf)
+            else:
+                obs_dist = dist.BetaBinomial(concentration1=mu * bb_conc,
+                                             concentration0=(1.0 - mu) * bb_conc,
+                                             total_count=b_clus)
             pyro.sample(
                 "obs",
-                dist.BetaBinomial(concentration1=mu * bb_conc,
-                                  concentration0=(1.0 - mu) * bb_conc,
-                                  total_count=b_clus).mask(b_mask).to_event(1),
+                obs_dist.mask(b_mask).to_event(1),
                 obs=b_junc,
             )
 
