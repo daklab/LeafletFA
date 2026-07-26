@@ -417,3 +417,35 @@ latter.
 - [x] ELBO decomposition (job 19278771): **confirmed optimiser, not prior** — see §2
 - [ ] Decide whether `learn_ab_hyperprior` is dropped permanently, and reconcile METHODS.md §8
 - [ ] All 39 existing models are affected; Figure 3 cannot be built on them
+
+---
+
+## 8. Minibatch vs full-batch — fair comparison & the undertraining finding (2026-07-23)
+
+Re-ran full-batch vs minibatch on simulated data (known true Psi) after all fixes, to validate
+minibatch as a substitute for full-batch. Key results:
+
+**Small-N sims are pessimistic / capacity-limited.** At J=400 even full-batch fails at K=20
+(r=0.24) -- a junctions-per-program capacity limit, not minibatch. Scaling J with K fixes full-batch
+(K=20 J=2000 full r=0.93-0.96). And with adequate signal (K=10 J=1000) minibatch B=512 MATCHES
+full-batch (r=0.992 vs 0.996) and more steps don't change it -- converged, no attenuation.
+
+**But at production scale, 1500 steps is UNDERTRAINED.** N=40000 J=2000 K=20:
+
+| setting | recovery r | beta-slope |
+|---|---|---|
+| full-batch | 0.998 | 0.993 |
+| B=2048, 1500 steps (PRODUCTION) | 0.847 | 0.780 |
+| B=2048, 4000 steps | 0.917 | 0.842 |
+
+More steps closes the gap (undertraining, not fundamental), but 1500 steps -- what the 2026-07-18
+atlas array used -- gives ~15-20% recovery loss and ~20% beta (effect-size) attenuation. So:
+  - psi LOCATION / imputation / calibration: unaffected (correct at 1500 steps).
+  - DS effect sizes / Psi recovery / structure: ATTENUATED by undertraining.
+
+Caveat: the sim is J=2000; the atlas has J=79768 (40x more signal per gradient), so the real atlas
+likely converges faster and is less attenuated than the sim implies -- but not necessarily fine.
+
+ACTION: the atlas array should be retrained with more steps and/or larger batch. A batch x steps
+sweep (converge_settings.py) is finding the cheapest setting that recovers full-batch quality
+(r~0.99, slope~0.99). The DS/effect-size figures depend on getting this right.
