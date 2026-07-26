@@ -130,7 +130,7 @@ def main():
 
     import pandas as pd
     df = pd.DataFrame(rows)
-    out = "/gpfs/commons/home/kisaev/LeafletFA/experiments/minibatch/minibatch_vs_fullbatch.csv"
+    out = "/gpfs/commons/home/kisaev/LeafletFA/experiments/minibatch/minibatch_vs_fullbatch_K%d.csv" % K
     df.to_csv(out, index=False)
     print("\n================ mean over seeds ================", flush=True)
     agg = df.groupby("B")[["location_err", "recovery_r", "beta_slope", "contrast",
