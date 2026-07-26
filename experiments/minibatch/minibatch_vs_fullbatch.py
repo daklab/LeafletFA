@@ -116,7 +116,8 @@ def main():
     N = 4000
     rows = []
     for seed in seeds:
-        sim = simulate(N=N, J=400, K=K, seed=seed)
+        J = max(400, 100 * K)   # ~100 junctions/program so higher K stays identifiable
+        sim = simulate(N=N, J=J, K=K, seed=seed)
         print(f"\n===== seed {seed}: true psi mean={sim['psi'].mean():.4f}  "
               f"rate={sim['observed_rate']:.4f}  N={N} =====", flush=True)
         for B in (N, 1024, 512, 256):     # full-batch first as the reference
