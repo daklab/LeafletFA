@@ -170,6 +170,49 @@ want_sim = reference_log_prob([[1., 1.], [5., 2., 1.], [4.]],
 check("dm_log_prob still correct when the stored total disagrees",
       abs(lp_sim - want_sim) < 1e-3, f"{lp_sim:.6f} vs {want_sim:.6f}")
 
+print("\n11. pyro.factor gets the plate's N/B scaling, same as pyro.sample")
+# If the DM factor were NOT scaled, the likelihood would be down-weighted by N/B relative to
+# the prior at every step -- catastrophic and silent. Verified via the ELBO SVI actually sees.
+import pyro                                                          # noqa: E402
+from pyro import poutine                                             # noqa: E402
+from pyro.infer import Trace_ELBO                                    # noqa: E402
+
+NCELL = 1000
+
+
+def _mk(kind, B):
+    def model():
+        with pyro.plate("cells", NCELL, subsample_size=B) as idx:
+            if kind == "factor":
+                pyro.factor("obs", torch.ones(len(idx)))
+            else:
+                pyro.sample("obs", dist.Normal(torch.zeros(len(idx)), 1.0),
+                            obs=torch.zeros(len(idx)))
+    return model
+
+
+scales = []
+for B in (100, 500, 1000):
+    tr = poutine.trace(_mk("factor", B)).get_trace()
+    tr.compute_log_prob()
+    scales.append((B, float(tr.nodes["obs"]["scale"]), float(tr.nodes["obs"]["log_prob"].sum())))
+check("plate scale is N/B at every batch size",
+      all(abs(sc - NCELL / B) < 1e-6 for B, sc, _ in scales), str([(b, s) for b, s, _ in scales]))
+check("scaled log-prob is batch-size invariant",
+      max(v for _, _, v in scales) - min(v for _, _, v in scales) < 1e-3,
+      str([round(v, 2) for _, _, v in scales]))
+
+losses = {}
+for kind in ("factor", "sample"):
+    losses[kind] = [Trace_ELBO(num_particles=20).loss(_mk(kind, B), lambda: None)
+                    for B in (100, 1000)]
+check("ELBO for a factor is batch-size invariant",
+      abs(losses["factor"][0] - losses["factor"][1]) < 1e-3, str(losses["factor"]))
+check("factor and sample branches scale identically",
+      abs(abs(losses["factor"][0]) - NCELL) < 1e-3
+      and abs(losses["sample"][0] - losses["sample"][1]) < 1e-3,
+      f"factor {losses['factor'][0]:.2f}, sample {losses['sample'][0]:.2f}")
+
 print(f"\n{'=' * 62}\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + ", ".join(FAIL))
