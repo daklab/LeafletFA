@@ -38,7 +38,7 @@ from scipy.optimize import linear_sum_assignment
 sys.path.insert(0, "/gpfs/commons/home/kisaev/LeafletFA")
 
 
-def simulate(N=3000, J=400, K=5, seed=0, coverage=0.135, mean_reads=12, psi_a=0.30, psi_b=0.72):
+def simulate(N=3000, J=400, K=5, seed=0, coverage=0.135, mean_reads=12, psi_a=0.30, psi_b=0.72, overdisp_conc=None):
     """Simulate with the real atlas's characteristics.
 
     The mouse training data has ~13.5% coverage, a read-weighted splicing rate of 0.295, and among
@@ -51,7 +51,15 @@ def simulate(N=3000, J=400, K=5, seed=0, coverage=0.135, mean_reads=12, psi_a=0.
     mu = np.clip(phi @ psi, 1e-6, 1 - 1e-6)
     covered = rng.random((N, J)) < coverage
     clus = (covered * (1 + rng.poisson(mean_reads, size=(N, J)))).astype(np.int64)
-    junc = rng.binomial(clus, mu).astype(np.int64)
+    if overdisp_conc is not None:
+        # Beta-Binomial generative (realistic overdispersion, like real splicing): draw a per-entry
+        # rate from Beta(mu*conc,(1-mu)*conc) then Binomial. Lets BB-vs-Binomial be a real comparison.
+        a = np.clip(mu, 1e-4, 1-1e-4) * overdisp_conc
+        b = (1 - np.clip(mu, 1e-4, 1-1e-4)) * overdisp_conc
+        p = rng.beta(a, b).astype(np.float32)
+        junc = rng.binomial(clus, p).astype(np.int64)
+    else:
+        junc = rng.binomial(clus, mu).astype(np.int64)
     return dict(junc=junc, clus=clus, psi=psi, phi=phi,
                 observed_rate=float(junc.sum() / max(clus.sum(), 1)))
 

@@ -59,11 +59,11 @@ def convergence(losses, psi_trace):
     return {"n_finite": int(ok.sum()), "plateau_slope_rel": plateau, "late_psi_drift": late}
 
 
-def run(sim, K, B, steps, seed, device):
+def run(sim, K, B, steps, seed, device, likelihood='betabinomial'):
     from leafletfa.minibatch import LeafletFAMinibatch
     N = sim["junc"].shape[0]
     full = (B >= N)
-    m = LeafletFAMinibatch(sim["junc"], sim["clus"], K=K, device=device)
+    m = LeafletFAMinibatch(sim["junc"], sim["clus"], K=K, device=device, likelihood=likelihood)
     Beff = N if full else B
     engaged = None if full else subsampling_engaged(m, Beff)
     # capture the psi trajectory by logging every 25 steps through fit's own logging is awkward;
@@ -99,7 +99,7 @@ def run(sim, K, B, steps, seed, device):
     perp = float(np.median(np.exp(-(p * np.log(p)).sum(1))))
     conv = convergence(losses, psi_tr)
     return {
-        "B": ("full" if full else B), "subsampling_ok": engaged,
+        "B": ("full" if full else B), "likelihood": likelihood, "subsampling_ok": engaged,
         "psi_mean": float(psi.mean()), "location_err": float(abs(psi.mean() - sim["psi"].mean())),
         "recovery_r": r_psi, "beta_slope": slope,
         "contrast": float(psi.std(0).mean()), "perplexity": perp,
@@ -113,17 +113,18 @@ def main():
     steps = int(sys.argv[2]) if len(sys.argv) > 2 else 3000
     seeds = [int(x) for x in (sys.argv[3].split(",") if len(sys.argv) > 3 else ["0", "1"])]
     device = sys.argv[4] if len(sys.argv) > 4 else "cpu"
-    N = 4000
+    N = 40000   # one consistent (large) dataset so B=8192 (production) is testable at every K
     rows = []
     for seed in seeds:
         J = max(400, 100 * K)   # ~100 junctions/program so higher K stays identifiable
-        sim = simulate(N=N, J=J, K=K, seed=seed)
+        sim = simulate(N=N, J=J, K=K, seed=seed, overdisp_conc=10.0)  # realistic overdispersion
         print(f"\n===== seed {seed}: true psi mean={sim['psi'].mean():.4f}  "
               f"rate={sim['observed_rate']:.4f}  N={N} =====", flush=True)
-        for B in (N, 1024, 512, 256):     # full-batch first as the reference
-            r = run(sim, K, B, steps, seed, device); r["seed"] = seed
+        combos = [(B,"betabinomial") for B in (N,8192,4096,2048)] + [(B,"binomial") for B in (N,8192)]
+        for B, lik in combos:   # full+minibatch for BB; full+B=8192 for Binomial (likelihood ablation)
+            r = run(sim, K, B, steps, seed, device, likelihood=lik); r["seed"] = seed
             rows.append(r)
-            print(f"  B={str(r['B']):>5}  sub_ok={r['subsampling_ok']}  "
+            print(f"  B={str(r['B']):>5} {lik[:3]}  sub_ok={r['subsampling_ok']}  "
                   f"psi={r['psi_mean']:.4f} (err {r['location_err']:.4f})  r={r['recovery_r']:.3f}  "
                   f"slope={r['beta_slope']:.3f}  perp={r['perplexity']:.1f}/{K}  "
                   f"drift={r['late_psi_drift']:.4f}  plateau={r['plateau_slope_rel']:.1e}  "

@@ -51,3 +51,11 @@ __pycache__/
 # ── Experiment run artifacts (regenerable; symlink into scratch/WD data) ───
 experiments/**/resampled/
 experiments/.overnight_retried
+
+# Experiment run artifacts -- experiments/ tracks code, not output.
+# These were tracked by accident and cost a 22k-line diff when a cleanup removed them.
+experiments/**/*.log
+experiments/**/*.npz
+experiments/**/jobid.txt
+experiments/**/jobids.txt
+experiments/**/result.json
