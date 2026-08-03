@@ -55,6 +55,8 @@ from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoNormal, init_to_value
 from pyro.optim import ClippedAdam
 
+from .dirichlet_multinomial import build_atse_index, dm_log_prob, segment_softmax
+
 
 class LeafletFAMinibatch:
     """Beta-Dirichlet splicing factor model with true minibatch SVI over a cells plate.
@@ -86,7 +88,8 @@ class LeafletFAMinibatch:
     def __init__(self, junc, clus, K, *, junc_specific_prior=False, learn_ab_hyperprior=False,
                  psi_init=None, phi_init=None, init_strategy="feasible",
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
-                 likelihood="betabinomial", fix_bb_conc=None):
+                 likelihood="betabinomial", fix_bb_conc=None, event_id=None,
+                 psi_parameterization="beta"):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -108,8 +111,32 @@ class LeafletFAMinibatch:
         self.K = int(K)
         self.junc_specific_prior = bool(junc_specific_prior)
         self.learn_ab_hyperprior = bool(learn_ab_hyperprior)
-        assert likelihood in ("betabinomial", "binomial")
+        assert likelihood in ("betabinomial", "binomial", "dirichletmultinomial")
         self.likelihood = likelihood   # "binomial" = the input_conc=inf ablation (no overdispersion)
+        # "dirichletmultinomial" scores each ATSE ONCE as a count vector instead of scoring its m
+        # junctions independently against a shared denominator. That repetition is what inflates the
+        # effective sample size m-fold and makes the posterior about sqrt(m) too narrow; see
+        # leafletfa/dirichlet_multinomial.py. It needs the junction -> ATSE map, so either pass
+        # event_id here or call set_atse() before fit().
+        # psi_parameterization:
+        #   "beta"    (DEFAULT) psi[k,j] ~ Beta(a, b), independent per junction. Nothing ties the
+        #             junctions of an ATSE together, so a program's usages within an event sum to
+        #             1 only by accident -- measured at 86% of program-ATSE pairs on the atlas,
+        #             and 47% for events with 6+ junctions.
+        #   "simplex" psi[k,j] = softmax over the junctions of the ATSE, so the sum is 1 by
+        #             construction. Required in practice by the Dirichlet-multinomial: the DM
+        #             depends on alpha only through conc * psi, so without this the within-event
+        #             scale of psi is unidentified and drifts (measured: sums land near 1.47).
+        assert psi_parameterization in ("beta", "simplex")
+        self.psi_parameterization = psi_parameterization
+        self.atse_idx = self.rep_idx = self.atse_sizes = None
+        self.n_atse = None
+        if event_id is not None:
+            self.set_atse(event_id)
+        elif likelihood == "dirichletmultinomial" or psi_parameterization == "simplex":
+            raise ValueError(f"likelihood={likelihood!r} / psi_parameterization="
+                             f"{psi_parameterization!r} needs event_id "
+                             "(or a set_atse() call before fit)")
         # fix_bb_conc: if set, hold the Beta-Binomial concentration at this constant instead of
         # learning it. Tests the high-K dispersion-collapse hypothesis (learned bb_conc runs away to
         # high overdispersion, flattening the likelihood so no factor commits) and matches the §7
@@ -177,14 +204,24 @@ class LeafletFAMinibatch:
             else:
                 a_sh = a_rt = b_sh = b_rt = one
 
-            if self.junc_specific_prior:
-                a = pyro.sample("a", dist.Gamma(a_sh, a_rt).expand([J]).to_event(1))
-                b = pyro.sample("b", dist.Gamma(b_sh, b_rt).expand([J]).to_event(1))
+            if self.psi_parameterization == "simplex":
+                # Free logits, normalised within each ATSE. The Beta prior and its a/b
+                # hyperparameters do not apply here -- the constraint lives in the transform, so
+                # the prior is a plain standard Normal on the logit scale.
+                psi_logit = pyro.sample(
+                    "psi_logit",
+                    dist.Normal(torch.zeros(K, J, device=self.device),
+                                torch.ones(K, J, device=self.device)).to_event(2))
+                psi = segment_softmax(psi_logit, self.atse_idx, self.n_atse, clip=self.clip)
             else:
-                a = pyro.sample("a", dist.Gamma(a_sh, a_rt))
-                b = pyro.sample("b", dist.Gamma(b_sh, b_rt))
-            psi = pyro.sample("psi", dist.Beta(a + self.eps, b + self.eps)
-                              .expand([K, J]).to_event(2))
+                if self.junc_specific_prior:
+                    a = pyro.sample("a", dist.Gamma(a_sh, a_rt).expand([J]).to_event(1))
+                    b = pyro.sample("b", dist.Gamma(b_sh, b_rt).expand([J]).to_event(1))
+                else:
+                    a = pyro.sample("a", dist.Gamma(a_sh, a_rt))
+                    b = pyro.sample("b", dist.Gamma(b_sh, b_rt))
+                psi = pyro.sample("psi", dist.Beta(a + self.eps, b + self.eps)
+                                  .expand([K, J]).to_event(2))
         else:
             psi = self.fixed_psi
 
@@ -201,7 +238,10 @@ class LeafletFAMinibatch:
         else:
             dir_conc = self.fixed_dir_conc
         dir_conc = torch.clamp(dir_conc, min=1e-6, max=1e6)
-        if self.likelihood == "betabinomial":
+        # The Dirichlet-multinomial reuses bb_conc: it plays the same role (alpha = conc * mu),
+        # so the site name, prior and freeze_globals path all carry over unchanged. Under the
+        # simplex constraint it is exactly the per-event total concentration A_e.
+        if self.likelihood in ("betabinomial", "dirichletmultinomial"):
             if self.fix_bb_conc is not None:
                 bb_conc = torch.tensor(self.fix_bb_conc, device=self.device)   # held constant, not learned
             else:
@@ -220,17 +260,29 @@ class LeafletFAMinibatch:
             b_junc = self.junc[i].to(self.device, non_blocking=True)
             b_clus = self.clus[i].to(self.device, non_blocking=True)
             b_mask = self.mask[i].to(self.device, non_blocking=True)
-            if self.likelihood == "binomial":
-                obs_dist = dist.Binomial(total_count=b_clus, probs=mu)   # no overdispersion (conc=inf)
+            if self.likelihood == "dirichletmultinomial":
+                # ONE term per ATSE, not one per junction. pyro.factor rather than pyro.sample
+                # because the log-probability is evaluated over ragged segments of the [B, J]
+                # layout -- see leafletfa/dirichlet_multinomial.py for why the distribution
+                # object cannot be used directly. The tensor is [B], so the enclosing plate
+                # scales it by N/B exactly as it scales the .to_event(1) branch below.
+                #
+                # No mask: an ATSE with no reads in this cell has every y_j = 0, so its junction
+                # terms vanish and lgamma(A_e) - lgamma(0 + A_e) = 0. It drops out on its own.
+                pyro.factor("obs", dm_log_prob(b_junc, mu, bb_conc,
+                                               self.atse_idx, self.n_atse, eps=self.eps))
             else:
-                obs_dist = dist.BetaBinomial(concentration1=mu * bb_conc,
-                                             concentration0=(1.0 - mu) * bb_conc,
-                                             total_count=b_clus)
-            pyro.sample(
-                "obs",
-                obs_dist.mask(b_mask).to_event(1),
-                obs=b_junc,
-            )
+                if self.likelihood == "binomial":
+                    obs_dist = dist.Binomial(total_count=b_clus, probs=mu)   # no overdispersion (conc=inf)
+                else:
+                    obs_dist = dist.BetaBinomial(concentration1=mu * bb_conc,
+                                                 concentration0=(1.0 - mu) * bb_conc,
+                                                 total_count=b_clus)
+                pyro.sample(
+                    "obs",
+                    obs_dist.mask(b_mask).to_event(1),
+                    obs=b_junc,
+                )
 
     # ── guide ────────────────────────────────────────────────────────────────
     def _make_guide(self, subsample_size, init_scale=0.1):
@@ -374,6 +426,23 @@ class LeafletFAMinibatch:
         return self.losses
 
     # ── transfer / E-step ────────────────────────────────────────────────────
+    def set_atse(self, event_id):
+        """Attach the junction -> ATSE map that the Dirichlet-multinomial likelihood needs.
+
+        `event_id` is a length-J array of ATSE labels, one per junction column, in the same
+        order as the count matrices. Safe to call on any model; it is only read when
+        likelihood='dirichletmultinomial'.
+        """
+        atse_idx, rep_idx, sizes = build_atse_index(event_id)
+        if len(atse_idx) != self.J:
+            raise ValueError(f"event_id has {len(atse_idx)} entries but the data has {self.J} "
+                             "junction columns")
+        self.atse_idx = atse_idx.to(self.device)
+        self.rep_idx = rep_idx.to(self.device)
+        self.atse_sizes = sizes.to(self.device)
+        self.n_atse = int(len(sizes))
+        return self
+
     def freeze_globals(self, psi=None, pi=None, alpha_pi=None, dir_conc=None, bb_conc=None):
         """Plug trained globals in as constants so only phi is inferred.
 
@@ -424,6 +493,9 @@ class LeafletFAMinibatch:
         if self.fixed_psi is not None:
             return self.fixed_psi.detach()
         with torch.no_grad():
+            if self.psi_parameterization == "simplex":
+                return segment_softmax(self._median()["psi_logit"].detach(),
+                                       self.atse_idx, self.n_atse, clip=self.clip)
             return self._median()["psi"].detach()
 
     def phi_mean(self):
@@ -490,6 +562,30 @@ class LeafletFAMinibatch:
             if self.fix_bb_conc is not None:
                 out["bb_conc"] = np.float32(self.fix_bb_conc)
             return out
+
+    def sample_psi(self, num_samples, seed=0):
+        """Draw psi from q(psi) on the CONSTRAINED scale -> [S, K, J].
+
+        Downstream scoring code used to do `sigmoid(loc + scale*eps)` by hand, which is only
+        correct for the Beta parameterisation. Under `psi_parameterization="simplex"` the guide
+        site is `psi_logit` and the transform is a within-ATSE softmax, not a sigmoid, so doing
+        it by hand silently produces numbers that are not psi. This method owns the transform so
+        callers cannot get it wrong.
+        """
+        site = "psi_logit" if self.psi_parameterization == "simplex" else "psi"
+        st = pyro.get_param_store()
+        lk, sk = f"AutoNormal.locs.{site}", f"AutoNormal.scales.{site}"
+        if lk not in st or sk not in st:
+            raise RuntimeError(f"guide has no {site} site; fit the model first")
+        loc, scale = st[lk].detach(), st[sk].detach()
+        g = torch.Generator(device=loc.device).manual_seed(int(seed))
+        z = loc[None] + scale[None] * torch.randn((num_samples,) + tuple(loc.shape),
+                                                  generator=g, device=loc.device)
+        if self.psi_parameterization == "simplex":
+            S, K, J = z.shape
+            return segment_softmax(z.reshape(S * K, J), self.atse_idx, self.n_atse,
+                                   clip=self.clip).reshape(S, K, J)
+        return torch.sigmoid(z)
 
     def psi_loc_scale(self):
         """The guide's q(psi) loc and scale in LOGIT space (AutoNormal params).
