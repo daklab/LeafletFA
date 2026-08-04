@@ -213,6 +213,38 @@ check("factor and sample branches scale identically",
       and abs(losses["sample"][0] - losses["sample"][1]) < 1e-3,
       f"factor {losses['factor'][0]:.2f}, sample {losses['sample'][0]:.2f}")
 
+print("\n12. the DM must not be SLOWER than the BetaBinomial it replaces")
+# The DM only stays cheap because atse_idx is a flat length-J integer array, so grouping is one
+# index_add pass over a contiguous tensor. A rewrite that loops over events, or pads to max(m),
+# would still be CORRECT and would silently cost ~10x. Measured at atlas shape the DM is ~0.2x
+# the BetaBinomial; assert only "not slower", which is loose enough not to flake on a busy node.
+import time as _time                                                  # noqa: E402
+
+_sizes = np.array([2] * 400 + [3] * 300 + [4] * 120 + [8] * 80)
+_J = int(_sizes.sum())
+_ai, _ri, _sz = build_atse_index(np.repeat(np.arange(len(_sizes)), _sizes))
+_na, _B = len(_sz), 256
+_rng = np.random.default_rng(0)
+_y = torch.from_numpy(_rng.poisson(0.5, size=(_B, _J)).astype(np.float32))
+_mu = torch.rand(_B, _J) * 0.5 + 0.25
+_c = torch.tensor(20.0)
+_cl = torch.from_numpy(_rng.poisson(5, size=(_B, _J)).astype(np.float32)) + 1
+
+
+def _time_it(fn, n=5):
+    fn()
+    t0 = _time.time()
+    for _ in range(n):
+        fn()
+    return (_time.time() - t0) / n
+
+
+_t_dm = _time_it(lambda: dm_log_prob(_y, _mu, _c, _ai, _na))
+_bb = dist.BetaBinomial(concentration1=_mu * _c, concentration0=(1 - _mu) * _c, total_count=_cl)
+_t_bb = _time_it(lambda: _bb.log_prob(_y).sum(-1))
+check("dm_log_prob is not slower than BetaBinomial", _t_dm <= _t_bb,
+      f"DM {_t_dm*1000:.1f} ms vs BB {_t_bb*1000:.1f} ms (ratio {_t_dm/_t_bb:.2f})")
+
 print(f"\n{'=' * 62}\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + ", ".join(FAIL))
