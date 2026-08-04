@@ -55,7 +55,8 @@ from pyro.infer import SVI, Trace_ELBO
 from pyro.infer.autoguide import AutoNormal, init_to_value
 from pyro.optim import ClippedAdam
 
-from .dirichlet_multinomial import build_atse_index, dm_log_prob, segment_softmax
+from .dirichlet_multinomial import (build_atse_index, dm_log_prob, segment_softmax,
+                                    _segment_sum)
 
 
 class LeafletFAMinibatch:
@@ -487,6 +488,25 @@ class LeafletFAMinibatch:
     def _median(self):
         return self.guide.median()
 
+    def _identified_psi(self, psi):
+        """Return the psi that is actually identified by the likelihood in use.
+
+        The Dirichlet-multinomial depends on alpha = conc * psi, and ONLY on alpha. Rescaling psi
+        within an event by c while scaling conc by 1/c gives an identical likelihood, so the raw
+        psi array carries an arbitrary per-event scale and only psi_j / sum_{j in e} psi_j is
+        pinned. Returning the raw array is not just untidy -- every downstream consumer uses it,
+        and TV = 0.5 * sum_j |dphi . psi_:,j| is then rescaled per event, which breaks its
+        comparability against the fixed delta threshold. Measured: normalising raw DM psi moved
+        recovery from r=0.926 to r=0.9956 and within-ATSE validity from 17.5% to 100%.
+
+        Under `psi_parameterization="simplex"` psi already sums to 1 within each event, so this is
+        a no-op there and safe to apply unconditionally for the DM.
+        """
+        if self.likelihood != "dirichletmultinomial":
+            return psi
+        tot = _segment_sum(psi, self.atse_idx, self.n_atse)      # [K, n_atse]
+        return psi / tot.index_select(1, self.atse_idx).clamp_min(1e-12)
+
     def psi_mean(self):
         # When psi is frozen it is a constant, not a guide site, so the posterior median does not
         # contain it — return what was frozen so callers get the dictionary they supplied.
@@ -496,7 +516,7 @@ class LeafletFAMinibatch:
             if self.psi_parameterization == "simplex":
                 return segment_softmax(self._median()["psi_logit"].detach(),
                                        self.atse_idx, self.n_atse, clip=self.clip)
-            return self._median()["psi"].detach()
+            return self._identified_psi(self._median()["psi"].detach())
 
     def phi_mean(self):
         """Posterior median of the per-cell loadings, renormalised to the simplex."""
@@ -585,19 +605,33 @@ class LeafletFAMinibatch:
             S, K, J = z.shape
             return segment_softmax(z.reshape(S * K, J), self.atse_idx, self.n_atse,
                                    clip=self.clip).reshape(S, K, J)
-        return torch.sigmoid(z)
+        psi = torch.sigmoid(z)
+        if self.likelihood == "dirichletmultinomial":
+            # Same identifiability issue as psi_mean: only the within-event composition is pinned.
+            S, K, J = psi.shape
+            psi = self._identified_psi(psi.reshape(S * K, J)).reshape(S, K, J)
+        return psi
 
     def psi_loc_scale(self):
         """The guide's q(psi) loc and scale in LOGIT space (AutoNormal params).
 
         Returns (loc, scale) each (K, J), or (None, None) if unavailable. 04e samples
         psi ~ sigmoid(loc + scale*eps) to carry psi posterior uncertainty into imputation instead of
-        plugging in the point estimate; verified sigmoid(loc) == psi median."""
+        plugging in the point estimate; verified sigmoid(loc) == psi median.
+
+        NOTE the transform differs by parameterisation: sigmoid for "beta", a within-ATSE softmax
+        for "simplex". Use `sample_psi()` rather than applying a transform by hand -- it owns the
+        right one. These raw parameters are for inspecting posterior WIDTH."""
+        # The guide site is "psi" under the Beta parameterisation and "psi_logit" under the
+        # simplex. Hard-coding "psi" made this return (None, None) for every simplex fit, which
+        # is silent: callers that guard on None simply store nothing and the posterior width
+        # becomes unrecoverable after the run. Pick the site that actually exists.
         st = pyro.get_param_store()
-        if "AutoNormal.locs.psi" not in st or "AutoNormal.scales.psi" not in st:
+        site = "psi_logit" if self.psi_parameterization == "simplex" else "psi"
+        lk, sk = f"AutoNormal.locs.{site}", f"AutoNormal.scales.{site}"
+        if lk not in st or sk not in st:
             return None, None
-        return (st["AutoNormal.locs.psi"].detach().cpu().numpy(),
-                st["AutoNormal.scales.psi"].detach().cpu().numpy())
+        return (st[lk].detach().cpu().numpy(), st[sk].detach().cpu().numpy())
 
     def observed_rate(self):
         """Read-weighted splicing rate the likelihood targets: sum(junc)/sum(clus)."""

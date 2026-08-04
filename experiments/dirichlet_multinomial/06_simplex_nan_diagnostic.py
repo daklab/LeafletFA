@@ -112,6 +112,11 @@ def main():
     from pyro.infer import SVI, Trace_ELBO
     from pyro.optim import ClippedAdam
     pyro.set_rng_seed(args.seed)
+    # Replicate fit()'s convention exactly: the batch size is stored on the model and used as the
+    # plate's default, the guide is built for that batch, and svi.step() takes NO arguments.
+    # Passing subsample_size to step() forwards it to the guide, which does not accept it.
+    m._B = min(int(args.batch), m.N)
+    m.guide = m._make_guide(m._B)
     lrd = args.gamma ** (1.0 / max(args.steps, 1))
     svi = SVI(m.model, m.guide, ClippedAdam({"lr": args.lr, "lrd": lrd, "clip_norm": 10.0}),
               Trace_ELBO())
@@ -122,7 +127,7 @@ def main():
     t0 = time.time()
     diverged = False
     for i in range(args.steps):
-        loss = svi.step(subsample_size=min(args.batch, len(cells)))
+        loss = svi.step()
         if i % args.every == 0 or not np.isfinite(loss):
             with torch.no_grad():
                 lg = st["AutoNormal.locs.psi_logit"].detach()
