@@ -90,7 +90,7 @@ class LeafletFAMinibatch:
                  psi_init=None, phi_init=None, init_strategy="feasible",
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
-                 psi_parameterization="beta"):
+                 psi_parameterization="beta", psi_logit_prior_sd=1.0):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -130,6 +130,12 @@ class LeafletFAMinibatch:
         #             scale of psi is unidentified and drifts (measured: sums land near 1.47).
         assert psi_parameterization in ("beta", "simplex")
         self.psi_parameterization = psi_parameterization
+        # Prior sd on the softmax logits. LeafCutter reparameterises its beta through a simplex
+        # with a FREE scale, i.e. effectively weak; a hard Normal(0,1) is not flat -- measured, it
+        # implies a mean maximum within-ATSE usage of 0.60 at m=3 (uniform is 0.33) and 0.305 at
+        # m=11 (uniform 0.091), so it pulls toward uneven compositions. This exposes the width so
+        # that difference from LeafCutter is testable rather than baked in.
+        self.psi_logit_prior_sd = float(psi_logit_prior_sd)
         self.atse_idx = self.rep_idx = self.atse_sizes = None
         self.n_atse = None
         if event_id is not None:
@@ -212,7 +218,8 @@ class LeafletFAMinibatch:
                 psi_logit = pyro.sample(
                     "psi_logit",
                     dist.Normal(torch.zeros(K, J, device=self.device),
-                                torch.ones(K, J, device=self.device)).to_event(2))
+                                torch.full((K, J), self.psi_logit_prior_sd,
+                                           device=self.device)).to_event(2))
                 psi = segment_softmax(psi_logit, self.atse_idx, self.n_atse, clip=self.clip)
             else:
                 if self.junc_specific_prior:
