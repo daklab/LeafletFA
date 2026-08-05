@@ -164,3 +164,98 @@ on an a-priori lr choice. With a live session that is the wrong trade: nine 4.7-
 wastes a night if the guess is wrong. It now fires only the lr/gamma sweep, and production is
 launched from the measured result (`A47_score_lr_sweep.py`, which ranks on psi_contrast and live
 programs rather than on whether the run survived).
+
+---
+
+## 8. m=2 / chi-square on the real atlas, and a correction
+
+**The permuted-phi diagnostic on the atlas (K=20 seed 0, 20,000 cells):**
+
+| nominal | observed | ratio |
+|---|---|---|
+| 0.50 | 0.543 | 1.09 |
+| 0.20 | 0.311 | 1.55 |
+| 0.05 | 0.164 | 3.27 |
+| 0.01 | 0.097 | 9.72 |
+
+By event size the ratio at 0.05 is ~3 at EVERY m (2.95 at m=2, 3.93 at m=3, ~3.1 for m=4-8, ~2.5 at
+m=9-11). **So this is not the m=2 problem it was expected to be** -- the earlier framing that "m=2
+is where Wilks breaks" was wrong; m=2 is among the better-behaved sizes.
+
+**First reading: chi-square is 3x anti-conservative on real data. That reading was wrong.**
+
+The permuted-phi null is only a valid null on TRULY NULL events. Permuting phi on a genuinely
+differential ATSE does not null it -- it converts real between-program variation into an
+overdispersed mixture, which inflates the null. On simulation we can measure both sides:
+
+| effect | permuted-null ratio @0.05 | REALISED FDP ratio @0.05 (vs truth) |
+|---|---|---|
+| 0.25 | 0.71 | 0.90 |
+| 0.50 | 1.70 | 0.54 |
+| 1.00 | 3.82 | 0.20 |
+
+A permuted ratio of 3.82 coexists with a realised FDP of 0.20x nominal, i.e. strongly CONSERVATIVE.
+The atlas's 3.27 sits inside that range, so it is consistent with chi-square being conservative
+there too, with the diagnostic inflated by real signal. The permuted-null ratio is therefore an
+upper bound on trouble, not a measurement of it, wherever real signal exists.
+
+**Empirical calibration (A48) was built, validated, and REJECTED.** Replacing the chi-square
+reference with the permuted null's own quantiles, stratified by event size (df = (m-1)*K, so strata
+cannot be pooled), makes calibration WORSE because the null it calibrates against is the
+contaminated one:
+
+| effect | alpha | chi2 FDP ratio | empirical FDP ratio | chi2 power | emp power |
+|---|---|---|---|---|---|
+| 0.25 | 0.05 | 0.90 | 0.93 | 0.845 | 0.845 |
+| 0.50 | 0.05 | 0.54 | 0.03 | 0.957 | 0.931 |
+| 0.50 | 0.01 | 0.56 | 0.00 | 0.942 | 0.883 |
+
+At effect 0.5 it is wildly over-conservative and gives up real power for no measured gain.
+
+**DECISION: keep the chi-square reference.** Report the permuted-null table as a diagnostic with the
+caveat above. A48 is kept in the repo as a documented negative result, not as the shipping path.
+
+---
+
+## 9. Ablation results: every structural knob REFUTED, lr is the only lever
+
+Run on the deterministic reproducer (K=20 seed 1) with `--steps 16200` so the schedule matches
+production, restarts disabled so the first hit is the verdict.
+
+| arm | diverged at step | vs baseline |
+|---|---|---|
+| baseline | 2,028 | — |
+| **phi-floor 1e-4** | **2,028** | identical |
+| psi-clip 1e-3 | 2,016 | no better |
+| global-conc | 2,016 | no better |
+| batch 4096 | 1,703 | worse |
+| clip-norm 1.0 | 1,023 | much worse |
+
+**The phi-corner mechanism is refuted.** Flooring phi at 1e-4 produced a byte-identical step count,
+so the 18-non-finite-vs-19-below-1e-6 correspondence was a consequence or a coincidence, not a
+cause. The flag was verified to reach the model (final losses differ, `self.phi_floor` set), so this
+is a real negative and not a plumbing failure.
+
+Nothing structural moves it. Only the learning rate does:
+
+| lr at the danger zone | outcome |
+|---|---|
+| 0.0459 (lr0=0.05, gamma=0.5, 16200 steps) | diverges at 2016-2028 |
+| 0.0314 (same, but 3000-step schedule) | survives |
+| 0.0265 (same, 2200-step schedule) | survives |
+| lr0=0.025 | first hit at 3,432 |
+| lr0=0.0125 | clean to at least 3,400 |
+
+**The num_steps trap, caught three times.** `lrd = gamma**(1/num_steps)`, so num_steps sets the
+SCHEDULE, not just the budget. It invalidated (1) the first repro, which failed to reproduce; (2)
+ablation v1, submitted with `--steps 3000`; and (3) the first lr sweep, submitted with
+`--steps 4500` -- where every arm would have sat below the divergence threshold and the sweep would
+have taught nothing. **Any run being compared to production must use `--steps 16200` and be bounded
+by wall-clock instead.**
+
+Two operational notes for whoever reads the logs:
+- Slurm did not flush the ablation `.out` files, so `result.json` in each run directory is the
+  reliable source. An auto-launcher that parsed `.out` concluded "no cure found" from NO DATA; it
+  should check for file existence before deciding.
+- That auto-launcher also had an unbound-variable bug (`IDS` referenced after the production block
+  it defined was removed), so the QC job it was supposed to chain never got submitted.
