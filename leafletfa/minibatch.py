@@ -365,6 +365,30 @@ class LeafletFAMinibatch:
             store[key].copy_(unc)
 
     # ── fit ──────────────────────────────────────────────────────────────────
+    def _report_nonfinite(self, step):
+        """On a non-finite loss, say WHICH tensor went bad -- parameter or gradient, and where.
+
+        The divergence is deterministic (K=20 seed 1 hits step 2016 in independent runs; K=30
+        seed 0 at 1513), so it reproduces on demand and is worth instrumenting rather than
+        guessing at. Every fix so far has been a workaround; this is what would identify the cause.
+        """
+        store = pyro.get_param_store()
+        print(f"  [nan-debug] step {step}", flush=True)
+        for k in sorted(store._params):
+            p = store._params[k]
+            g = p.grad
+            bad_p = int((~torch.isfinite(p)).sum())
+            bad_g = int((~torch.isfinite(g)).sum()) if g is not None else -1
+            finite_p = p[torch.isfinite(p)]
+            rng = (f"[{finite_p.min():.3e}, {finite_p.max():.3e}]" if finite_p.numel() else "all bad")
+            note = ""
+            if g is not None and torch.isfinite(g).any():
+                fg = g[torch.isfinite(g)]
+                note = f"  |grad|max {fg.abs().max():.3e}"
+            if bad_p or bad_g > 0 or True:
+                print(f"    {k:<34} shape {tuple(p.shape)}  nonfinite param {bad_p:,} "
+                      f"grad {bad_g:,}  param range {rng}{note}", flush=True)
+
     def _param_snapshot(self):
         """Deep copy of the whole param store, on CPU, for checkpoint/rollback.
 
@@ -401,7 +425,7 @@ class LeafletFAMinibatch:
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5,
             num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None,
             early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98,
-            max_nan_restarts=6):
+            max_nan_restarts=20, debug_nan=False):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -456,6 +480,8 @@ class LeafletFAMinibatch:
                 # continue past the instability; give up only if it recurs `max_nan_restarts` times,
                 # which distinguishes a transient bad step from a genuinely divergent configuration.
                 self.n_nan_restarts += 1
+                if debug_nan:
+                    self._report_nonfinite(step)
                 self._restore_snapshot(best_snapshot)
                 if self.n_nan_restarts > max_nan_restarts:
                     print(f"  !! non-finite loss at step {step}, and {self.n_nan_restarts-1} "
@@ -471,16 +497,24 @@ class LeafletFAMinibatch:
                 # 2028, i.e. every second step, burning all six restarts in twelve steps. Wiping
                 # the state costs the momentum estimate, which is the right trade for a fit that
                 # would otherwise stop at 12% of its budget.
+                # Halve the lr ONLY when the divergence recurs quickly. A hit 400 steps after the
+                # last one is a fresh transient and the lr was evidently fine in between; halving
+                # unconditionally took it to lr/64 by the sixth event and the run crawled even
+                # where it was recovering cleanly (measured: restarts at 2028, 2311, 2701, 3012,
+                # 3419, 3432 -- mostly hundreds of steps apart).
+                rapid = self.nan_steps and (step - self.nan_steps[-1]) < 100
                 for g in svi.optim.optim_objs.values():
                     st_ = getattr(g, "state", None)
                     if st_ is not None:
                         st_.clear()
-                    for pg in getattr(g, "param_groups", []):       # halve the lr in place
-                        pg["lr"] *= 0.5
-                self.nan_steps.append(int(step))
-                print(f"  !! non-finite loss at step {step} -- restored step {best_step}, lr "
-                      f"halved (restart {self.n_nan_restarts}/{max_nan_restarts}), continuing.",
+                    if rapid:
+                        for pg in getattr(g, "param_groups", []):
+                            pg["lr"] *= 0.5
+                print(f"  !! non-finite loss at step {step} -- restored step {best_step}"
+                      f"{', lr halved' if rapid else ''} "
+                      f"(restart {self.n_nan_restarts}/{max_nan_restarts}), continuing.",
                       flush=True)
+                self.nan_steps.append(int(step))
                 ema = best_ema
                 continue
             ema = loss if ema is None else es_smooth * ema + (1.0 - es_smooth) * loss
