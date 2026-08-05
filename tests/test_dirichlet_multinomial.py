@@ -312,6 +312,57 @@ check("tensor identity survives, so the optimiser keeps its references",
       _ids == {k: id(v) for k, v in _st._params.items()})
 _pyro.clear_param_store()
 
+print("\n15. a NaN must not end the run: restore, clear optimiser state, continue")
+# Restoring parameters alone is not enough. Adam keeps exp_avg / exp_avg_sq per parameter; a
+# non-finite gradient poisons those buffers, and the next update writes NaN straight back into the
+# restored parameters. Measured on the atlas before the state clear: the guard fired at 2016, 2018,
+# 2020, 2022, 2024, 2026, 2028 -- every second step, exhausting all six restarts in twelve steps
+# and ending the fit at 12% of its budget. One injected hit must now cost one restart, not all six.
+import pyro as _p2
+import leafletfa.minibatch as _MB
+from leafletfa.minibatch import LeafletFAMinibatch as _LFA
+
+_rng = np.random.default_rng(0)
+_N, _K = 200, 3
+_ev2 = np.array([f"e{i//3}" for i in range(24)])
+_na2 = len(np.unique(_ev2))
+_Ne = _rng.integers(5, 50, size=(_N, _na2)).astype(np.float32)
+_clus2 = _Ne[:, np.repeat(np.arange(_na2), 3)]
+_junc2 = np.zeros((_N, len(_ev2)), np.float32)
+for _e in range(_na2):
+    _pp = _rng.dirichlet([2, 2, 2])
+    for _i in range(_N):
+        _junc2[_i, 3*_e:3*_e+3] = _rng.multinomial(int(_Ne[_i, _e]), _pp)
+
+_real = _MB.dm_log_prob
+_cnt = {"n": 0}
+
+
+def _flaky(y, mu, conc, atse_idx, n_atse_, eps=1e-2):
+    _cnt["n"] += 1
+    out = _real(y, mu, conc, atse_idx, n_atse_, eps=eps)
+    return out * torch.tensor(float("nan")) if _cnt["n"] == 120 else out
+
+
+_MB.dm_log_prob = _flaky
+try:
+    _p2.clear_param_store()
+    _m2 = _LFA(_junc2, _clus2, K=_K, device="cpu", likelihood="dirichletmultinomial",
+               psi_parameterization="simplex", event_id=_ev2, conc_per_atse=True)
+    _L2 = _m2.fit(num_steps=300, subsample_size=64, lr=0.05, seed=0, verbose=False,
+                  early_stop=False)
+finally:
+    _MB.dm_log_prob = _real
+
+check("one non-finite step costs exactly one restart", _m2.n_nan_restarts == 1,
+      f"restarts={_m2.n_nan_restarts} at steps {_m2.nan_steps}")
+check("the run continues to the full step budget", len(_L2) >= 299 and np.isfinite(_L2[-1]),
+      f"{len(_L2)}/300 steps, final loss {_L2[-1]:.4e}")
+_lc, _sc2 = _m2.psi_loc_scale()
+check("guide loc AND scale are finite afterwards",
+      bool(np.isfinite(_lc).all() and np.isfinite(_sc2).all()))
+_p2.clear_param_store()
+
 print(f"\n{'=' * 62}\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + ", ".join(FAIL))

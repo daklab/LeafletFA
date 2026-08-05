@@ -463,8 +463,19 @@ class LeafletFAMinibatch:
                           flush=True)
                     self.stopped_step = step
                     break
-                for g in svi.optim.optim_objs.values():             # halve the lr in place
-                    for pg in getattr(g, "param_groups", []):
+                # Clearing the OPTIMISER STATE is the part that makes the restart work at all.
+                # Adam carries exp_avg / exp_avg_sq per parameter; once a step produces a
+                # non-finite gradient those buffers are NaN, and restoring the parameters does not
+                # touch them -- so the very next update writes NaN straight back. Measured before
+                # this line existed: the guard fired at steps 2016, 2018, 2020, 2022, 2024, 2026,
+                # 2028, i.e. every second step, burning all six restarts in twelve steps. Wiping
+                # the state costs the momentum estimate, which is the right trade for a fit that
+                # would otherwise stop at 12% of its budget.
+                for g in svi.optim.optim_objs.values():
+                    st_ = getattr(g, "state", None)
+                    if st_ is not None:
+                        st_.clear()
+                    for pg in getattr(g, "param_groups", []):       # halve the lr in place
                         pg["lr"] *= 0.5
                 self.nan_steps.append(int(step))
                 print(f"  !! non-finite loss at step {step} -- restored step {best_step}, lr "
