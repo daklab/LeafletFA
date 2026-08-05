@@ -90,7 +90,8 @@ class LeafletFAMinibatch:
                  psi_init=None, phi_init=None, init_strategy="feasible",
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
-                 psi_parameterization="beta", psi_logit_prior_sd=1.0):
+                 psi_parameterization="beta", psi_logit_prior_sd=1.0,
+                 conc_per_atse=False, dm_alpha_floor=1e-2):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -152,6 +153,18 @@ class LeafletFAMinibatch:
         # Frozen globals for the transfer / E-step path (see `infer_phi`). Set via freeze_globals().
         self.fixed_psi = self.fixed_pi = self.fixed_alpha_pi = self.fixed_dir_conc = None
         self.eps, self.clip = float(eps), float(clip)
+        # SEPARATE from self.eps, which guards the Beta prior's concentrations at line ~231 where
+        # 1e-2 would be a real perturbation. This one floors alpha = conc * mu inside the DM, where
+        # the gradient goes as 1/a. See dirichlet_multinomial.dm_log_prob for the full account.
+        self.dm_alpha_floor = float(dm_alpha_floor)
+        # PER-ATSE CONCENTRATION. A single global scalar has to absorb the overdispersion of every
+        # event at once, and on the atlas it cannot: it collapsed to 0.81-1.99 against the ~48
+        # recovered on simulations, which is what put alpha at the clip and drove the divergence.
+        # LeafCutter fits a concentration per cluster for the same reason. Under the simplex it is
+        # cleanly identified -- psi sums to 1 within an event, so A_e = conc_e exactly, and each
+        # event's concentration is pinned by its own dispersion rather than shared. The cost is
+        # n_atse parameters (24,475 on the atlas) against the K x J already in psi.
+        self.conc_per_atse = bool(conc_per_atse)
         # phi_init: an (N, K) simplex-valued starting point for the per-cell loadings. Unlike
         # psi_init this cannot go through init_to_value -- phi lives under a subsampling plate, so at
         # prototype-trace time the site is batch-shaped (B, K) and a full (N, K) value raises a shape
@@ -252,6 +265,17 @@ class LeafletFAMinibatch:
         if self.likelihood in ("betabinomial", "dirichletmultinomial"):
             if self.fix_bb_conc is not None:
                 bb_conc = torch.tensor(self.fix_bb_conc, device=self.device)   # held constant, not learned
+            elif self.conc_per_atse:
+                # One concentration per ATSE, same Gamma(2, 0.1) prior applied independently. The
+                # site is [n_atse] and is gathered to [J] below, so alpha = conc_e * mu broadcasts
+                # over the [B, J] batch without materialising anything ragged.
+                if self.atse_idx is None:
+                    raise ValueError("conc_per_atse=True needs event_id so ATSEs can be indexed")
+                bb_conc = pyro.sample(
+                    "bb_conc_atse",
+                    dist.Gamma(torch.full((self.n_atse,), 2.0, device=self.device),
+                               torch.full((self.n_atse,), 0.1, device=self.device)).to_event(1))
+                bb_conc = torch.clamp(bb_conc, min=1e-3, max=1e6)[self.atse_idx]   # [n_atse] -> [J]
             else:
                 bb_conc = pyro.sample("bb_conc", dist.Gamma(torch.tensor(2.0, device=self.device),
                                                             torch.tensor(0.1, device=self.device)))
@@ -277,8 +301,8 @@ class LeafletFAMinibatch:
                 #
                 # No mask: an ATSE with no reads in this cell has every y_j = 0, so its junction
                 # terms vanish and lgamma(A_e) - lgamma(0 + A_e) = 0. It drops out on its own.
-                pyro.factor("obs", dm_log_prob(b_junc, mu, bb_conc,
-                                               self.atse_idx, self.n_atse, eps=self.eps))
+                pyro.factor("obs", dm_log_prob(b_junc, mu, bb_conc, self.atse_idx, self.n_atse,
+                                               eps=self.dm_alpha_floor))
             else:
                 if self.likelihood == "binomial":
                     obs_dist = dist.Binomial(total_count=b_clus, probs=mu)   # no overdispersion (conc=inf)
