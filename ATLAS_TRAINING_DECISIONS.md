@@ -136,3 +136,31 @@ wandb. Whether the *structure* has stopped moving is the real criterion.
 - The exact origin of the divergence (the 18-vs-19 phi correspondence is evidence, not proof).
 - phi reproducibility at 0.74.
 - No principled K-selection criterion.
+
+---
+
+## 7. Log
+
+**Ablation v1 was invalid — my own error, same one it was built to diagnose.**
+The arms were submitted with `--steps 3000`, and `lrd = gamma**(1/num_steps)`, so num_steps sets
+the SCHEDULE. At step 2016 those arms sat at lr 0.0314 against production's 0.0459 — already below
+the threshold that kills production. Baseline duly sailed past 2016 without diverging, which is the
+tell. Relaunched with `--steps 16200` (production's schedule) and bounded by wall-clock instead:
+
+| num_steps | lr at step 2016 | outcome |
+|---|---|---|
+| 2,200 | 0.0265 | survives |
+| 3,000 | 0.0314 | survives (the invalid ablation) |
+| 16,200 | 0.0459 | DIVERGES |
+
+**clip_norm 1.0: rejected.** Diverged at step 1023 — *earlier* than baseline's 2016, and on the
+safer schedule at that, so it is worse under any schedule. Informative beyond its own arm: if the
+problem were simply gradient magnitude, tighter clipping should have helped. It made things worse,
+which argues the issue is where the gradients POINT — a handful of corner cells dominating the
+update direction — rather than a global explosion.
+
+**Auto-launcher restricted to the sweep.** It was originally going to submit the 9 production fits
+on an a-priori lr choice. With a live session that is the wrong trade: nine 4.7-hour fits on a guess
+wastes a night if the guess is wrong. It now fires only the lr/gamma sweep, and production is
+launched from the measured result (`A47_score_lr_sweep.py`, which ranks on psi_contrast and live
+programs rather than on whether the run survived).
