@@ -259,3 +259,28 @@ Two operational notes for whoever reads the logs:
   should check for file existence before deciding.
 - That auto-launcher also had an unbound-variable bug (`IDS` referenced after the production block
   it defined was removed), so the QC job it was supposed to chain never got submitted.
+
+### The cells-scaling argument that closes it
+
+The permuted-phi diagnostic was run at two cell counts. If chi-square were genuinely breaking down,
+MORE cells should bring the ratio closer to 1 -- Wilks is asymptotic in sample size. It went the
+other way:
+
+| m | ratio@0.05, 20,000 cells | ratio@0.05, 60,000 cells |
+|---|---|---|
+| 2 | 2.95 | 3.50 |
+| 3 | 3.93 | 5.88 |
+| 5 | 3.06 | 6.14 |
+| 8 | 3.17 | 6.21 |
+| 11 | 3.26 | 6.51 |
+
+Roughly doubling with 3x the cells is the signature of CONTAMINATION, not of a failing
+approximation: with more cells the real differential signal is detected more strongly, so permuting
+phi converts more real between-program variation into an overdispersed mixture and inflates the
+"null" further.
+
+Two independent lines now agree that chi-square is sound here:
+1. on simulation, a permuted ratio of 3.82 coexists with a realised FDP of 0.20x nominal;
+2. on the atlas, the ratio scales WITH sample size instead of against it.
+
+**m=2 is not a special case and the DS test needs no per-m treatment.**
