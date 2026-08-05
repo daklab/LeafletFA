@@ -91,7 +91,7 @@ class LeafletFAMinibatch:
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
                  psi_parameterization="beta", psi_logit_prior_sd=1.0,
-                 conc_per_atse=False, dm_alpha_floor=1e-2):
+                 conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -165,6 +165,14 @@ class LeafletFAMinibatch:
         # event's concentration is pinned by its own dispersion rather than shared. The cost is
         # n_atse parameters (24,475 on the atlas) against the K x J already in psi.
         self.conc_per_atse = bool(conc_per_atse)
+        # PHI FLOOR. phi is Dirichlet-distributed and AutoNormal parameterises it through a
+        # transform whose gradient scales as 1/phi, so a cell driven into a corner of the simplex
+        # carries a gradient ~1e6 while every other cell is ordinary. Measured on the atlas: 19 of
+        # 1,327,060 phi entries sit below 1e-6, and exactly 18 phi entries were non-finite at the
+        # divergence -- the same handful of cells. phi enters the shared loss, so one of them going
+        # non-finite poisons every global parameter in the same step. Flooring phi bounds that
+        # gradient the way clip already bounds psi. 0.0 disables (the behaviour to date).
+        self.phi_floor = float(phi_floor)
         # phi_init: an (N, K) simplex-valued starting point for the per-cell loadings. Unlike
         # psi_init this cannot go through init_to_value -- phi lives under a subsampling plate, so at
         # prototype-trace time the site is batch-shaped (B, K) and a full (N, K) value raises a shape
@@ -286,6 +294,9 @@ class LeafletFAMinibatch:
         # while leaving the globals above at weight 1.
         with pyro.plate("cells", N, subsample_size=subsample_size) as idx:
             phi = pyro.sample("phi", dist.Dirichlet(pi * dir_conc))          # batch [B], event [K]
+            if self.phi_floor > 0:
+                phi = phi.clamp_min(self.phi_floor)
+                phi = phi / phi.sum(-1, keepdim=True)                        # back onto the simplex
             mu = torch.clamp(phi @ psi, self.clip, 1 - self.clip)            # [B, J]
             # When the data lives on the host, index there and move ONLY this minibatch.
             i = idx.to(self.junc.device)
@@ -422,10 +433,10 @@ class LeafletFAMinibatch:
                 if p is not None and p.shape == v.shape:
                     p.data.copy_(v.to(p.device))
 
-    def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5,
+    def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5, clip_norm=10.0,
             num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None,
             early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98,
-            max_nan_restarts=20, debug_nan=False):
+            max_nan_restarts=20, debug_nan=False, track_every=0):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -452,7 +463,7 @@ class LeafletFAMinibatch:
             self._apply_phi_init()
         lrd = gamma ** (1.0 / max(num_steps, 1))
         svi = SVI(self.model, self.guide,
-                  ClippedAdam({"lr": lr, "lrd": lrd, "clip_norm": 10.0}),
+                  ClippedAdam({"lr": lr, "lrd": lrd, "clip_norm": clip_norm}),
                   Trace_ELBO(num_particles=num_particles))
         # NaN-GUARD + CHECKPOINT-BEST. Job 19286437 trained cleanly for 2745 steps, then a single
         # bad gradient blew the loss to NaN and corrupted every saved parameter -- 40 min of good
@@ -470,6 +481,13 @@ class LeafletFAMinibatch:
         self.stopped_step = num_steps
         self.n_nan_restarts = 0
         self.nan_steps = []
+        # PARAMETER TRAJECTORY. The atlas ELBO cannot answer "has this converged": the whole run
+        # moves it <1%, and the last-20% slope flips SIGN between fits, so it is noise-dominated.
+        # What can answer it is whether the STRUCTURE has stopped moving -- psi_contrast (the
+        # across-program spread that IS the differential-splicing effect size), phi_spread, the
+        # program prior pi, and the concentration. Recorded on a fixed interval so convergence is a
+        # measurement rather than an assumption. Costs one psi_mean()/phi_mean() per checkpoint.
+        self.trace = []
         for step in range(num_steps):
             loss = svi.step()
             self.losses.append(loss)
@@ -537,6 +555,30 @@ class LeafletFAMinibatch:
                         self.stopped_early = True
                         self.stopped_step = step
                         break
+            if track_every and (step % track_every == 0 or step == num_steps - 1):
+                with torch.no_grad():
+                    _psi = self.psi_mean()
+                    _phi = self.phi_mean()
+                    _psi = _psi.detach().cpu().numpy() if hasattr(_psi, "detach") else np.asarray(_psi)
+                    _phi = _phi.detach().cpu().numpy() if hasattr(_phi, "detach") else np.asarray(_phi)
+                    _med = self._median()
+                    _pi = _med.get("pi")
+                    _pi = (_pi.detach().cpu().numpy() if hasattr(_pi, "detach")
+                           else (np.asarray(_pi) if _pi is not None else np.zeros(0)))
+                    _c = _med.get("bb_conc_atse", _med.get("bb_conc"))
+                    _c = (_c.detach().cpu().numpy() if hasattr(_c, "detach")
+                          else (np.asarray(_c) if _c is not None else np.zeros(0)))
+                    _occ = np.bincount(_phi.argmax(1), minlength=self.K) / _phi.shape[0]
+                    self.trace.append(dict(
+                        step=int(step), loss=float(loss),
+                        psi_contrast=float(_psi.std(axis=0).mean()),
+                        phi_spread=float(_phi.std(axis=0).mean()),
+                        psi_mean=float(_psi.mean()),
+                        n_live=int((_occ >= 0.01).sum()),
+                        occ_max=float(_occ.max()),
+                        pi=_pi.astype(np.float32).copy(),
+                        conc_median=float(np.median(_c)) if _c.size else float("nan")))
+
             if verbose and (step % log_every == 0 or step == num_steps - 1):
                 with torch.no_grad():
                     psi = self.psi_mean()
