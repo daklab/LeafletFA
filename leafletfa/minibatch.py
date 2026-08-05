@@ -366,20 +366,42 @@ class LeafletFAMinibatch:
 
     # ── fit ──────────────────────────────────────────────────────────────────
     def _param_snapshot(self):
-        """Deep copy of the whole param store, on CPU, for checkpoint/rollback."""
-        return {k: v.detach().cpu().clone()
-                for k, v in pyro.get_param_store().items()}
+        """Deep copy of the whole param store, on CPU, for checkpoint/rollback.
+
+        Snapshots the UNCONSTRAINED tensors via get_state(), not the constrained views returned by
+        items(). ParamStoreDict.__getitem__ builds transform_to(constraint)(unconstrained) fresh on
+        every access, so a snapshot of items() paired with an in-place copy_ back writes into a
+        temporary and is discarded -- silently, and only for constrained parameters. AutoNormal
+        holds every scale under constraints.positive, so the previous version rolled back the guide's
+        locs and left its scales at whatever diverged. That is why a fit whose NaN-guard reported
+        "restoring checkpoint from step 900" was saved with psi_loc finite and psi_scale all-NaN.
+        """
+        state = pyro.get_param_store().get_state()
+        return {"params": {k: v.detach().cpu().clone() for k, v in state["params"].items()},
+                "constraints": dict(state["constraints"])}
 
     def _restore_snapshot(self, snap):
         store = pyro.get_param_store()
-        for k, v in snap.items():
-            if k in store:
-                with torch.no_grad():
-                    store[k].copy_(v.to(store[k].device))
+        if not isinstance(snap, dict) or "params" not in snap:      # legacy items()-style snapshot
+            for k, v in (snap or {}).items():
+                if k in store:
+                    with torch.no_grad():
+                        store[k].copy_(v.to(store[k].device))
+                return
+        # In-place into the UNCONSTRAINED tensors. set_state() would also work for the values, but it
+        # REBINDS store._params to new tensor objects, orphaning the references already held by the
+        # optimiser's param groups -- so training would carry on updating tensors nobody reads.
+        # Copying in place keeps object identity intact for the guide and the optimiser both.
+        with torch.no_grad():
+            for k, v in snap["params"].items():
+                p = store._params.get(k)
+                if p is not None and p.shape == v.shape:
+                    p.data.copy_(v.to(p.device))
 
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5,
             num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None,
-            early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98):
+            early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98,
+            max_nan_restarts=6):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -422,15 +444,34 @@ class LeafletFAMinibatch:
         no_improve = 0
         self.stopped_early = False
         self.stopped_step = num_steps
+        self.n_nan_restarts = 0
+        self.nan_steps = []
         for step in range(num_steps):
             loss = svi.step()
             self.losses.append(loss)
             if not np.isfinite(loss):
-                print(f"  !! non-finite loss at step {step} -- restoring checkpoint from step "
-                      f"{best_step} and stopping (NaN-guard).", flush=True)
+                # RESTORE AND CONTINUE, rather than stop. Every atlas fit diverges somewhere around
+                # step 1,500-2,200, so stopping meant no atlas fit ever got past ~10% of its budget.
+                # Rolling back to the last good state and halving the learning rate lets the run
+                # continue past the instability; give up only if it recurs `max_nan_restarts` times,
+                # which distinguishes a transient bad step from a genuinely divergent configuration.
+                self.n_nan_restarts += 1
                 self._restore_snapshot(best_snapshot)
-                self.stopped_step = step
-                break
+                if self.n_nan_restarts > max_nan_restarts:
+                    print(f"  !! non-finite loss at step {step}, and {self.n_nan_restarts-1} "
+                          f"restarts already used -- restoring step {best_step} and stopping.",
+                          flush=True)
+                    self.stopped_step = step
+                    break
+                for g in svi.optim.optim_objs.values():             # halve the lr in place
+                    for pg in getattr(g, "param_groups", []):
+                        pg["lr"] *= 0.5
+                self.nan_steps.append(int(step))
+                print(f"  !! non-finite loss at step {step} -- restored step {best_step}, lr "
+                      f"halved (restart {self.n_nan_restarts}/{max_nan_restarts}), continuing.",
+                      flush=True)
+                ema = best_ema
+                continue
             ema = loss if ema is None else es_smooth * ema + (1.0 - es_smooth) * loss
             if step % checkpoint_every == 0:
                 # snapshot the BEST (lowest-EMA) state; this is both the early-stop reference and the

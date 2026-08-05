@@ -274,6 +274,44 @@ _ohi = dm_log_prob(_oy, _omu, torch.tensor(50.0), _fai, 1, eps=1e-2)
 check("the floor does not perturb the ordinary regime", torch.allclose(_olo, _ohi, atol=1e-6),
       f"eps=1e-6 {float(_olo.sum()):.6f} vs eps=1e-2 {float(_ohi.sum()):.6f}")
 
+print("\n14. the NaN-guard rollback must restore CONSTRAINED parameters too")
+# ParamStoreDict.__getitem__ returns transform_to(constraint)(unconstrained), built fresh on every
+# access. Snapshotting .items() and copy_()-ing back therefore writes into a temporary and is
+# silently discarded -- for constrained parameters only. AutoNormal holds every scale under
+# constraints.positive, so the old rollback restored the guide's locs and left its scales at
+# whatever value diverged: atlas fits were saved with psi_loc finite and psi_scale all-NaN while
+# the guard reported a successful restore. Identity must also survive, or the optimiser keeps
+# updating tensors nobody reads.
+import pyro as _pyro
+from pyro.distributions import constraints as _constraints
+
+_pyro.clear_param_store()
+_st = _pyro.get_param_store()
+_pyro.param("u_loc", torch.tensor([1.0, 2.0]))
+_pyro.param("c_scale", torch.tensor([1.0, 2.0]), constraint=_constraints.positive)
+_snap = {"params": {k: v.detach().cpu().clone() for k, v in _st.get_state()["params"].items()},
+         "constraints": dict(_st.get_state()["constraints"])}
+_ids = {k: id(v) for k, v in _st._params.items()}
+for _k in list(_st._params):
+    _st._params[_k].data.fill_(float("nan"))
+
+# the same in-place restore LeafletFAMinibatch._restore_snapshot performs
+with torch.no_grad():
+    for _k, _v in _snap["params"].items():
+        _p = _st._params.get(_k)
+        if _p is not None and _p.shape == _v.shape:
+            _p.data.copy_(_v.to(_p.device))
+
+check("rollback restores the UNCONSTRAINED parameter",
+      bool(torch.allclose(_st["u_loc"].detach(), torch.tensor([1.0, 2.0]))),
+      f"u_loc -> {_st['u_loc'].detach().tolist()}")
+check("rollback restores the CONSTRAINED parameter",
+      bool(torch.allclose(_st["c_scale"].detach(), torch.tensor([1.0, 2.0]))),
+      f"c_scale -> {_st['c_scale'].detach().tolist()}")
+check("tensor identity survives, so the optimiser keeps its references",
+      _ids == {k: id(v) for k, v in _st._params.items()})
+_pyro.clear_param_store()
+
 print(f"\n{'=' * 62}\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + ", ".join(FAIL))
