@@ -284,3 +284,43 @@ Two independent lines now agree that chi-square is sound here:
 2. on the atlas, the ratio scales WITH sample size instead of against it.
 
 **m=2 is not a special case and the DS test needs no per-m treatment.**
+
+---
+
+## 10. lr / gamma sweep, and the production launch
+
+All arms on the production schedule (`--steps 16200`), K=20 seed 1, restarts enabled (20) so an arm
+that takes a hit can still show what it learns. Bounded at 2h wall-clock.
+
+| arm | step reached in 2h | restarts used | first NaN |
+|---|---|---|---|
+| lr 0.05, gamma 0.5 | 4,279 (exhausted) | 21 | 2,028 |
+| lr 0.05, gamma 0.01 | 5,654 (exhausted) | 21 | 2,701 |
+| lr 0.025, gamma 0.5 | 12,100 | 8 | 3,432 |
+| **lr 0.025, gamma 0.1** | **12,100** | **6** | 4,711 |
+| lr 0.0125, gamma 0.5 | 6,800 | **0** | none |
+
+- **lr 0.05 is not viable at either gamma** -- both exhausted the full 20-restart budget before a
+  third of the run. Faster decay helps (first hit 2,028 -> 2,701, and 32% further overall) but does
+  not rescue it.
+- **lr 0.025 with gamma 0.1 completes**: 12,100 of 16,200 steps inside 2h using 6 of 20 restarts.
+- **lr 0.0125 took zero restarts**, but ran on a slower node so its step count is not comparable.
+- **Lowering lr costs nothing in structure**: both lr=0.05 arms gave psi_contrast 0.1087 and 7 live
+  programs, identical to each other.
+
+**DECISION: production at lr0=0.025, gamma=0.1.** One extra arm at lr=0.0125 (K=20 seed 0) is run
+alongside so the choice stays checkable against a cleaner-but-slower rate rather than asserted.
+
+**Sweep design flaw, recorded.** `--time 2:00:00` KILLED the three lower-lr arms before they could
+write `result.json`, so the arms that mattered produced no saved metrics; only the two lr=0.05 arms
+appear in the results because they finished early by exhausting restarts. The step counts above were
+recovered from the stdout logs. Any future sweep must either set a wall-clock generous enough to
+finish or checkpoint metrics periodically rather than only at exit.
+
+### Production launch (commit 1aead70)
+
+9 fits: K in {10, 20, 30} x seeds {0, 1, 2}, 16,200 steps (1,000 epochs), batch 8192, lr0 0.025,
+gamma 0.1, early stopping OFF, per-ATSE concentration, alpha floor 1e-2, max 20 NaN restarts,
+trajectory tracked every 200 steps, wandb streaming. All launched from a SINGLE commit -- the
+previous batch straddled a commit and picked up different restart budgets, which made those fits
+non-comparable across K.
