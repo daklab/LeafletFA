@@ -245,6 +245,35 @@ _t_bb = _time_it(lambda: _bb.log_prob(_y).sum(-1))
 check("dm_log_prob is not slower than BetaBinomial", _t_dm <= _t_bb,
       f"DM {_t_dm*1000:.1f} ms vs BB {_t_bb*1000:.1f} ms (ratio {_t_dm/_t_bb:.2f})")
 
+print("\n13. the alpha floor bounds the gradient that broke every atlas fit")
+# Atlas fits drove psi into the clip (1e-4) and learned conc 0.81-1.9, putting alpha near 1e-4
+# where d/da [lgamma(y+a) - lgamma(a)] ~ 1/a reaches 5,000-12,000 per entry. The previous floor of
+# 1e-6 sat 190x below that and never fired, which is why it never prevented anything. This pins
+# both halves: the floor MUST bite in the atlas regime and MUST NOT perturb the ordinary one.
+_fmu = torch.tensor([[0.6, 0.3999, 1e-4]])
+_fy = torch.tensor([[20., 10., 1.]])          # a read on a junction the model called ~0
+_fai, _, _ = build_atse_index(np.array(["e", "e", "e"]))
+
+
+def _maxgrad(floor, conc=1.904):
+    a = (conc * _fmu).clamp_min(floor).clone().requires_grad_(True)
+    per = (torch.lgamma(_fy + a) - torch.lgamma(a)).sum(-1)
+    A, N = a.sum(-1), _fy.sum(-1)
+    (per + torch.lgamma(A) - torch.lgamma(N + A)).sum().backward()
+    return float(a.grad.abs().max())
+
+
+_g_lo, _g_hi = _maxgrad(1e-6), _maxgrad(1e-2)
+check("the floor bounds the atlas-regime gradient", _g_hi < 200 < 1000 < _g_lo,
+      f"eps=1e-6 -> {_g_lo:.0f}, eps=1e-2 -> {_g_hi:.0f}")
+
+_oy = torch.tensor([[30., 12., 8.], [5., 40., 2.]])
+_omu = torch.tensor([[0.5, 0.3, 0.2], [0.1, 0.8, 0.1]])
+_olo = dm_log_prob(_oy, _omu, torch.tensor(50.0), _fai, 1, eps=1e-6)
+_ohi = dm_log_prob(_oy, _omu, torch.tensor(50.0), _fai, 1, eps=1e-2)
+check("the floor does not perturb the ordinary regime", torch.allclose(_olo, _ohi, atol=1e-6),
+      f"eps=1e-6 {float(_olo.sum()):.6f} vs eps=1e-2 {float(_ohi.sum()):.6f}")
+
 print(f"\n{'=' * 62}\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILED: " + ", ".join(FAIL))

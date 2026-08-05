@@ -104,7 +104,7 @@ def _segment_sum(x, atse_idx, n_atse):
     return out.index_add(1, atse_idx, x)
 
 
-def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-6):
+def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-2):
     """Per-cell Dirichlet-multinomial log-probability, summed over ATSEs.
 
     Parameters
@@ -114,6 +114,7 @@ def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-6):
     conc     : scalar overdispersion; alpha = conc * mu
     atse_idx : [J] from `build_atse_index`
     n_atse   : int
+    eps      : floor on alpha. See below -- this is a stability bound, not a numerical guard.
 
     Returns
     -------
@@ -123,6 +124,29 @@ def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-6):
     construction -- see the module docstring. Events with no coverage in a cell contribute
     exactly zero without needing a mask: every y_j is 0, so the junction terms vanish and
     lgamma(A_e) - lgamma(0 + A_e) = 0.
+
+    WHY eps IS 1e-2 AND NOT 1e-6
+    ----------------------------
+    d/da [lgamma(y + a) - lgamma(a)] = digamma(y + a) - digamma(a). For a junction with no reads
+    the two terms cancel exactly, but for y >= 1 the -digamma(a) term survives and grows as 1/a.
+    That is the atlas divergence: every atlas fit drove psi into the `clip = 1e-4` floor by step
+    125, and learned conc between 0.81 and 1.9 -- an order of magnitude below the ~48 recovered on
+    simulations -- so alpha = conc * mu landed at ~1e-4 and per-entry gradients reached 5,000 to
+    12,000 over a [2048, 79768] tensor. ClippedAdam's clip_norm bounds the TOTAL norm, so nothing
+    overflows at once; instead those entries dominate the update direction, psi is pushed harder
+    into the clip and conc falls further to absorb the misfit, until a non-finite loss appears
+    (observed at steps 1161/1433/1513/1663/2113/2249). Larger K fails sooner because more programs
+    are driven to extreme compositions.
+
+    A floor at 1e-6 never binds in that regime -- alpha is 190x above it -- which is why the guard
+    that existed did nothing. Measured at 1e-2, on the term that actually carries the gradient
+    (a clipped junction that nonetheless got a read): max |dL/da| falls from 5,249 to 96.9.
+
+    It is a bound, not an approximation: with conc = 50 and mu >= 0.1 the floor never activates and
+    the log-probability is bit-identical, including on the case verified against LeafCutter's
+    dm_glm.stan. It changes only entries where the model asserts usage below eps/conc AND a read was
+    observed there -- i.e. where the model is already maximally wrong, and where an unbounded
+    penalty is what destroys the fit rather than correcting it.
     """
     a = (conc * mu).clamp_min(eps)                                          # [B, J]
 
