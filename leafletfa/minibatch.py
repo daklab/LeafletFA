@@ -578,9 +578,7 @@ class LeafletFAMinibatch:
                     _pi = _med.get("pi")
                     _pi = (_pi.detach().cpu().numpy() if hasattr(_pi, "detach")
                            else (np.asarray(_pi) if _pi is not None else np.zeros(0)))
-                    _c = _med.get("bb_conc_atse", _med.get("bb_conc"))
-                    _c = (_c.detach().cpu().numpy() if hasattr(_c, "detach")
-                          else (np.asarray(_c) if _c is not None else np.zeros(0)))
+                    _c = self.concentration()          # clamped, i.e. what the model uses
                     _occ = np.bincount(_phi.argmax(1), minlength=self.K) / _phi.shape[0]
                     self.trace.append(dict(
                         step=int(step), loss=float(loss),
@@ -793,6 +791,34 @@ class LeafletFAMinibatch:
             S, K, J = psi.shape
             psi = self._identified_psi(psi.reshape(S * K, J)).reshape(S, K, J)
         return psi
+
+    def concentration(self):
+        """The concentration the model ACTUALLY uses, as a numpy array.
+
+        `_median()` returns the guide's median for the site, which is NOT clamped -- the clamp is
+        applied inside `model()` on the sampled value. Reading the raw median therefore reports
+        something the model never used: with conc_min=2.0 the saved vector had a minimum of 1.536.
+        That is cosmetic for training, which used the bound, but anything downstream reading the
+        saved vector (the DS test takes it as a per-event initialisation) would get values below the
+        floor the fit was trained under.
+
+        Returns shape [n_atse] when conc_per_atse, else a scalar array. Empty if the likelihood has
+        no concentration (the Binomial ablation).
+        """
+        if self.likelihood not in ("betabinomial", "dirichletmultinomial"):
+            return np.zeros(0, np.float32)
+        if self.fix_bb_conc is not None:
+            return np.asarray(self.fix_bb_conc, np.float32)
+        try:
+            med = self._median()
+        except Exception:
+            return np.zeros(0, np.float32)
+        c = med.get("bb_conc_atse", med.get("bb_conc"))
+        if c is None:
+            return np.zeros(0, np.float32)
+        c = c.detach() if hasattr(c, "detach") else torch.as_tensor(np.asarray(c))
+        c = torch.clamp(c, min=self.conc_min, max=1e6)          # the model's own clamp
+        return np.atleast_1d(c.cpu().numpy()).astype(np.float32)
 
     def psi_loc_scale(self):
         """The guide's q(psi) loc and scale in LOGIT space (AutoNormal params).
