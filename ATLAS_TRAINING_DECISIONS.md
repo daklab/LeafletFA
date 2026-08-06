@@ -324,3 +324,54 @@ gamma 0.1, early stopping OFF, per-ATSE concentration, alpha floor 1e-2, max 20 
 trajectory tracked every 200 steps, wandb streaming. All launched from a SINGLE commit -- the
 previous batch straddled a commit and picked up different restart budgets, which made those fits
 non-comparable across K.
+
+### Production results (lr0=0.025, gamma=0.1, commit 1aead70)
+
+**7 of 9 fits completed the full 16,200 steps** -- the first time any atlas fit has finished.
+
+| fit | steps | restarts | psi_contrast | live | settled/interval |
+|---|---|---|---|---|---|
+| K10 s0 | 16,200 | 1 | 0.0720 | 8/10 | 0.075% |
+| K10 s2 | 16,200 | 1 | 0.0686 | 9/10 | 0.209% |
+| K20 s0 | 16,200 | 4 | 0.1062 | 10/20 | 0.152% |
+| K20 s1 | 16,200 | 8 | 0.0985 | 7/20 | 0.129% |
+| K20 s2 | 16,200 | 3 | 0.1114 | 11/20 | 0.044% |
+| K30 s0 | 16,200 | 10 | 0.1153 | 9/30 | 0.049% |
+| K30 s1 | 14,974 | 21 | 0.1195 | 11/30 | 0.075% |
+| K30 s2 | 16,200 | 6 | 0.1253 | 9/30 | 0.358% |
+| K20 s0 @ lr 0.0125 | 16,200 | 2 | 0.1121 | 8/20 | 0.371% |
+
+psi_contrast settled to 0.04-0.37% per interval in every fit -- the convergence evidence the ELBO
+cannot supply. **Live programs rose to 7-11**, against 5-8 in the truncated fits, so the earlier
+"effective K is 5-8" reading was partly an artefact of fits dying at 20-50% of budget.
+
+Seed consistency (all K, completed fits): psi r 0.93-0.96 with the worst-matched program still at
+0.80+, top-2000 junction overlap 0.75-0.80, phi 0.59-0.85. psi sums valid at 100% everywhere.
+
+### Is the loss curve "not dropping much" a problem? No.
+
+The ELBO falls 11.25% from step 0, nearly all in the first ~50 steps, which looks alarming without a
+reference. Measured against proper bounds on 4,000 cells, with the same per-ATSE concentration:
+
+| model | log-likelihood |
+|---|---|
+| null (one composition for all cells) | -143,937,600 |
+| **cell-type pooled (38 known labels)** | **-142,066,240** |
+| K=20 unsupervised programs | -142,096,176 |
+| saturated (each cell's own composition) | -133,825,648 |
+
+**The model captures 98% of what perfect cell-type labels would buy, using no labels at all.**
+
+And the total explainable signal is genuinely small: null -> perfect labels is 1.87M out of 144M,
+about 1.3%. So a small ELBO drop dominated by the first 50 steps is the expected shape -- most of it
+is the model finding the overall composition, with program structure a thin layer on top.
+
+Do NOT use "% of saturated" as the yardstick (it reads 18.2%): the saturated model fits each cell's
+own shot noise, and 8.35M of the entries have 1-2 reads. The cell-type bar is the honest denominator.
+
+### Known gap: a timeout loses the entire fit
+
+K10 seed 1 was killed at the 8h wall at step 10,000 with ZERO restarts -- not diverging, just placed
+on a node running 2.9 s/step against its siblings' 0.6 s/step. Because the fit is written only at
+exit, 8 hours of clean training was lost. Relaunched with a 24h limit. The durable fix is periodic
+checkpointing of psi/phi during training rather than a generous wall-clock.
