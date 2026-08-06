@@ -436,7 +436,7 @@ class LeafletFAMinibatch:
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5, clip_norm=10.0,
             num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None,
             early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98,
-            max_nan_restarts=20, debug_nan=False, track_every=0):
+            max_nan_restarts=20, debug_nan=False, track_every=0, on_track=None):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -578,6 +578,16 @@ class LeafletFAMinibatch:
                         occ_max=float(_occ.max()),
                         pi=_pi.astype(np.float32).copy(),
                         conc_median=float(np.median(_c)) if _c.size else float("nan")))
+                    if on_track is not None:
+                        # Lets the caller persist a usable fit mid-run. Without it a wall-clock
+                        # timeout destroys everything: K=10 seed 1 was killed at 8h at step 10,000
+                        # with ZERO restarts -- not diverging, just placed on a node running 2.9
+                        # s/step against its siblings' 0.6 -- and because the fit was written only
+                        # at exit, all of it was lost.
+                        try:
+                            on_track(int(step), _psi, _phi, self.trace[-1])
+                        except Exception as _e:
+                            print(f"  [checkpoint] skipped at step {step}: {_e}", flush=True)
 
             if verbose and (step % log_every == 0 or step == num_steps - 1):
                 with torch.no_grad():
