@@ -1,5 +1,14 @@
 # LeafletFA — Methods (working copy, reconciled against the source code)
 
+> **SUPERSEDED 2026-08-06 — differential splicing.** The DS rule described below
+> (`prob_de = P(TV > 0.10)` with `bayesian_fdr`) was measured at **2.9x over nominal FDR** at
+> alpha=0.05 on simulations with known truth, and should not be cited. Two replacement tests are
+> documented in `METHODS_differential_splicing.md`: a per-ATSE Dirichlet-multinomial
+> likelihood-ratio test, and a posterior effect-size test. Both are validated at or below nominal.
+> The model sections below remain current; see also `METHODS_dirichlet_multinomial.md` and
+> `ATLAS_TRAINING_DECISIONS.md`.
+
+
 > **Purpose.** This is the paper's Methods section converted to Markdown, with every place the
 > **code disagrees with the text** marked inline, plus a new section (§10) on the failure modes that
 > actually determine whether a run learns anything.

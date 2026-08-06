@@ -375,3 +375,62 @@ K10 seed 1 was killed at the 8h wall at step 10,000 with ZERO restarts -- not di
 on a node running 2.9 s/step against its siblings' 0.6 s/step. Because the fit is written only at
 exit, 8 hours of clean training was lost. Relaunched with a 24h limit. The durable fix is periodic
 checkpointing of psi/phi during training rather than a generous wall-clock.
+
+---
+
+## 11. Head-to-head calibration against LeafCutter, on the same data
+
+LeafCutter's own `permutation_null/` holds 60 runs on this atlas, shuffling donor labels WITHIN a
+single cell type -- a genuine null with no real signal to contaminate it. 453,715 null p-values.
+
+| nominal | LeafCutter observed | LeafCutter ratio | LeafletFA ratio |
+|---|---|---|---|
+| 0.50 | 0.681 | 1.36 | 1.09 |
+| 0.20 | 0.429 | 2.15 | 1.55 |
+| 0.05 | 0.224 | 4.48 | 3.27 |
+| 0.01 | 0.113 | 11.25 | 9.72 |
+
+**LeafletFA is better calibrated at every threshold.** And the event-size dependence runs the
+opposite way:
+
+| m | LeafCutter ratio@0.05 | LeafletFA ratio@0.05 |
+|---|---|---|
+| 2 | 3.23 | 2.95 |
+| 3 | 4.95 | 3.93 |
+| 5 | 7.48 | 3.06 |
+| 8 | 10.38 | 3.17 |
+| 9 | 11.35 | ~2.4 |
+
+LeafCutter degrades sharply with m (3.2x -> 11.4x); LeafletFA stays flat near 3. The explanation is
+sample size, not model: LeafCutter tests **7 vs 8 pseudobulk samples**, where Wilks is far from
+asymptotic and each extra df makes it worse. LeafletFA tests 218-2,870 single cells per arm.
+
+Both caveats favour the conclusion:
+- LeafCutter's null is CLEAN, so 4.48 is an honest measurement of chi-square miscalibration in its
+  regime.
+- LeafletFA's null is CONTAMINATED (permuted phi on data containing real DS, which inflates the
+  ratio -- established in section 8), so 3.27 is an UPPER BOUND and is already below LeafCutter's
+  clean number.
+
+**This resolves the m=2 alarm.** That level of chi-square inflation is what a DM likelihood-ratio
+test does on this data; LeafCutter has it worse; single cells are why we have it less. It also
+supersedes the earlier framing that LeafletFA's low false-positive rate is merely low power -- on a
+matched null, on the same events, our p-values are closer to honest.
+
+### Comparison infrastructure
+
+`A49_ds_vs_leafcutter_lrt.py` replaces A26, which was built on the retired fixed-delta rule
+(`prob_de = P(|delta| > 0.10)` + `bayesian_fdr` on a BetaBinomial fit, measured at 2.9x over nominal).
+The comparison is now like-for-like: LeafCutter reports `loglr`, `df`, `p` from a DM likelihood-ratio
+test, and so do we, on a likelihood verified against `dm_glm.stan`. Under the old rule a posterior
+tail probability was being compared to a p-value; those are different objects.
+
+Two designs, both supported:
+- `--design group`: binary indicator, i.e. LeafCutter's own design. Isolates single-cell vs
+  pseudobulk with the test held fixed.
+- `--design phi`: the learned program loadings -- LeafletFA's actual claim, DS across structure
+  found without labels.
+
+Label matching: the manifest writes `BAT_B_CELL`, the atlas writes `BAT_B CELL`, so a naive join
+matched 8 of 70 contrasts. Normalising both to uppercase-underscore matches all 73 (70 tabula muris
+senis + 3 allen brain), each with at least 218 cells in the smaller arm.
