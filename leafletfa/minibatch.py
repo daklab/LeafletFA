@@ -91,7 +91,7 @@ class LeafletFAMinibatch:
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
                  psi_parameterization="beta", psi_logit_prior_sd=1.0,
-                 conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0):
+                 conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0, conc_min=1e-3):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -173,6 +173,19 @@ class LeafletFAMinibatch:
         # non-finite poisons every global parameter in the same step. Flooring phi bounds that
         # gradient the way clip already bounds psi. 0.0 disables (the behaviour to date).
         self.phi_floor = float(phi_floor)
+        # LOWER BOUND ON CONCENTRATION. Measured on the atlas: conc collapses from 0.975 to 0.518 by
+        # step 1,600 -- before any program structure has formed -- and never moves again, while
+        # psi_contrast peaks at step ~4,000 and then flatlines for 12,000 more steps. 67% of events
+        # end below conc=1. A Dirichlet-multinomial with conc<1 says the composition is nearly
+        # unconstrained, so the likelihood barely rewards a cell for loading on the RIGHT program,
+        # which is the pressure that would otherwise spread phi across programs. The released
+        # BetaBinomial atlas fits sat at bb_conc ~1.97 and separated cell types far better
+        # (Fbln2 ||dphi||_1 1.28 vs 0.23).
+        #
+        # This is the documented "free concentration is an early-optimisation escape valve" failure
+        # that freezing bb_conc fixed at K=50. Bounding rather than freezing keeps the per-event
+        # flexibility that the DS test needs while removing the escape route.
+        self.conc_min = float(conc_min)
         # phi_init: an (N, K) simplex-valued starting point for the per-cell loadings. Unlike
         # psi_init this cannot go through init_to_value -- phi lives under a subsampling plate, so at
         # prototype-trace time the site is batch-shaped (B, K) and a full (N, K) value raises a shape
@@ -283,11 +296,11 @@ class LeafletFAMinibatch:
                     "bb_conc_atse",
                     dist.Gamma(torch.full((self.n_atse,), 2.0, device=self.device),
                                torch.full((self.n_atse,), 0.1, device=self.device)).to_event(1))
-                bb_conc = torch.clamp(bb_conc, min=1e-3, max=1e6)[self.atse_idx]   # [n_atse] -> [J]
+                bb_conc = torch.clamp(bb_conc, min=self.conc_min, max=1e6)[self.atse_idx]
             else:
                 bb_conc = pyro.sample("bb_conc", dist.Gamma(torch.tensor(2.0, device=self.device),
                                                             torch.tensor(0.1, device=self.device)))
-                bb_conc = torch.clamp(bb_conc, min=1e-3, max=1e6)
+                bb_conc = torch.clamp(bb_conc, min=self.conc_min, max=1e6)
 
         # THE PLATE. Cells are conditionally independent given the globals. Pyro draws the
         # subsample indices once, shares them with the guide, and scales the LOCAL terms by N/B
