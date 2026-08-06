@@ -99,3 +99,81 @@ The multinomial coefficient `log(N_e! / prod_j y_j!)` is dropped. It carries no 
 dependence and therefore no gradient. It does mean the reported ELBO carries a constant offset
 and cannot be compared numerically against a BetaBinomial run -- those are different models, so
 that comparison was never meaningful.
+
+---
+
+# Concentration: why it is bounded, and how that was found (2026-08-06)
+
+## The problem
+
+The DM+simplex atlas fits fixed psi -- a program's junction usages sum to 1 within every ATSE,
+100% of 24,475 events, against the released BetaBinomial model's 86.9% (whose sums range 0.000 to
+4.426, so 13% of program-ATSE pairs are not compositions at all). But they broke phi.
+
+Measured on the Fbln2 heart endothelial vs fibroblast contrast, the worked example in Figure 3:
+
+| | psi sums valid | ||dphi||_1 | predicted skip PSI (endo/fibro) |
+|---|---|---|---|
+| released BetaBinomial | 86.9% | 1.44 | 0.83 / 0.08 |
+| DM+simplex | 100% | **0.23** | 0.53 / 0.53 |
+| LeafCutter (measured) | -- | -- | 0.92 / 0.02 |
+
+Both cell types loaded on the SAME program at ~0.74, so their contrast had almost nothing to
+differ by. Systematic across seeds and K: ||dphi||_1 was 0.23-0.47 for every DM+simplex fit against
+1.25-1.44 for every BetaBinomial fit.
+
+It was not confined to one ATSE. Scored under an identical DM likelihood with mu normalised within
+ATSE (so the old model's unconstrained psi scale cannot flatter it), against a null of one shared
+composition and a reference giving each cell its broad_cell_type's pooled composition:
+
+| model | % of the cell-type reference |
+|---|---|
+| released BetaBinomial | 101.2% |
+| DM+simplex | 88.9% |
+
+## The cause
+
+The trajectory tracking added for this investigation (`fit(track_every=N)`) shows concentration
+collapsing from 0.975 to 0.518 by step 1,600 -- BEFORE any program structure has formed -- and never
+moving again. 67% of events end below conc=1. Meanwhile psi_contrast peaks around step 4,000 and
+flatlines for the remaining 12,000 steps.
+
+A Dirichlet-multinomial with conc<1 says the composition is nearly unconstrained, so the likelihood
+barely rewards a cell for loading on the RIGHT program. That is the pressure which spreads phi
+across programs, and without it the model concentrates: top-3 programs hold 61% of all cell mass
+against the released model's 42%, and cells commit to 2.6 programs rather than 3.4.
+
+This is the documented "a free bb_conc is an early-optimisation escape valve" failure that freezing
+bb_conc fixed at K=50, reappearing through the per-event parameterisation. The released model used a
+single global concentration and it sat at 1.97.
+
+## The fix, and its limits
+
+`conc_min` bounds the per-ATSE concentration from below rather than freezing it, keeping the
+per-event flexibility the DS test needs. Measured at K=20 seed 0, 8,000 steps:
+
+| setting | psi valid | ||dphi||_1 | top-3 mass | % of cell-type reference |
+|---|---|---|---|---|
+| free (baseline) | 1.00 | 0.23 | 0.60 | 88.9% |
+| conc_min 1.0 | 1.00 | 0.11 | 0.54 | 95.5% |
+| **conc_min 2.0** | **1.00** | **1.40** | 0.51 | 97.9% |
+| conc_min 5.0 | 1.00 | 1.32 | 0.43 | 96.1% |
+| **global conc** | **1.00** | 0.98 | 0.51 | **101.3%** |
+
+conc_min=1.0 is NOT enough; 2.0 works, which is where the released model's concentration
+independently sat. Both conc_min>=2 and the global-conc arm restore compositional psi AND
+discriminative phi.
+
+**A caveat that must not be dropped.** conc_min=2.0 was selected by scoring the Fbln2 panel -- one
+ATSE, chosen as the showcase example. Selecting a hyperparameter on the illustrative figure is
+exactly the objection a referee should raise, and the likelihood column above is TRAINING
+likelihood, which cannot detect overfitting. `--holdout-frac` was therefore added to the trainer and
+the setting is being re-selected on 10% of cells held out of training, with a fixed split seed so
+every arm is scored on identical cells. The global-conc arm is the cleaner outcome if it holds,
+since it requires no threshold at all.
+
+Note the tension this creates with the DS test: per-event concentration was introduced BECAUSE one
+global value cannot span the observed 0.012-4,750, and it is what makes the DS null robust without
+truth labels (effect-size drift 5.9x -> 1.3x). The DS test estimates concentration per event
+internally regardless of how the model was trained, so a global-conc MODEL and a per-event DS TEST
+are compatible -- but that should be stated rather than assumed.
