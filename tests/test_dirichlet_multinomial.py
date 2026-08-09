@@ -338,9 +338,9 @@ _real = _MB.dm_log_prob
 _cnt = {"n": 0}
 
 
-def _flaky(y, mu, conc, atse_idx, n_atse_, eps=1e-2):
+def _flaky(y, mu, conc, atse_idx, n_atse_, eps=1e-2, event_weight=None):
     _cnt["n"] += 1
-    out = _real(y, mu, conc, atse_idx, n_atse_, eps=eps)
+    out = _real(y, mu, conc, atse_idx, n_atse_, eps=eps, event_weight=event_weight)
     return out * torch.tensor(float("nan")) if _cnt["n"] == 120 else out
 
 

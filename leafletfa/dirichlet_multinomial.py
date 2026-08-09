@@ -104,7 +104,7 @@ def _segment_sum(x, atse_idx, n_atse):
     return out.index_add(1, atse_idx, x)
 
 
-def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-2):
+def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-2, event_weight=None):
     """Per-cell Dirichlet-multinomial log-probability, summed over ATSEs.
 
     Parameters
@@ -115,6 +115,23 @@ def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-2):
     atse_idx : [J] from `build_atse_index`
     n_atse   : int
     eps      : floor on alpha. See below -- this is a stability bound, not a numerical guard.
+
+    event_weight : [n_atse] or None
+        Per-event weight on the log-likelihood. None (default) is the correct likelihood.
+
+        This is a TEMPERED pseudo-likelihood, not a probability model: weighting counts each
+        event w_e times, so the posterior it targets is not the posterior of any generative
+        process and its credible intervals are deliberately too narrow. It exists because the
+        BetaBinomial this model replaced was doing exactly this by ACCIDENT -- scoring each of an
+        ATSE's m junctions against the shared total extracts m units of information where only
+        m-1 are free, an over-count of m/(m-1). Measured, that is 2.00x on the 43.6% of atlas
+        ATSEs with two junctions and 1.508x junction-weighted overall, and it showed up as 95%
+        intervals covering 80.7% of the truth at m=2.
+
+        The over-count is also what gave the old model a discriminative phi: it raised the
+        likelihood's pull on each cell's loading relative to the Dirichlet prior. Setting
+        w_e = m/(m-1) reproduces that DELIBERATELY, so the trade can be measured and stated
+        rather than inherited silently.
 
     Returns
     -------
@@ -151,13 +168,17 @@ def dm_log_prob(y, mu, conc, atse_idx, n_atse, eps=1e-2):
     a = (conc * mu).clamp_min(eps)                                          # [B, J]
 
     # Junction terms -- no grouping needed, each junction belongs to exactly one event.
-    per_junction = (torch.lgamma(y + a) - torch.lgamma(a)).sum(-1)          # [B]
+    j_term = torch.lgamma(y + a) - torch.lgamma(a)                          # [B, J]
 
     A_e = _segment_sum(a, atse_idx, n_atse)                                 # [B, n_atse]
     N_e = _segment_sum(y, atse_idx, n_atse)                                 # [B, n_atse]
-    per_event = (torch.lgamma(A_e) - torch.lgamma(N_e + A_e)).sum(-1)       # [B]
+    e_term = torch.lgamma(A_e) - torch.lgamma(N_e + A_e)                    # [B, n_atse]
 
-    return per_junction + per_event
+    if event_weight is None:
+        return j_term.sum(-1) + e_term.sum(-1)
+    # Weighted pseudo-likelihood. BOTH terms must carry the same weight or the event's
+    # contribution stops being a scaled log-probability and becomes an arbitrary mixture.
+    return (j_term * event_weight[atse_idx]).sum(-1) + (e_term * event_weight).sum(-1)
 
 
 def check_A_e_is_conc(mu, conc, atse_idx, n_atse):

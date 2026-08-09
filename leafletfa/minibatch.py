@@ -91,7 +91,8 @@ class LeafletFAMinibatch:
                  device=None, eps=1e-6, clip=1e-4, data_on_cpu=None,
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
                  psi_parameterization="beta", psi_logit_prior_sd=1.0,
-                 conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0, conc_min=1e-3):
+                 conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0, conc_min=1e-3,
+                 likelihood_weight=None):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
@@ -138,6 +139,11 @@ class LeafletFAMinibatch:
         # that difference from LeafCutter is testable rather than baked in.
         self.psi_logit_prior_sd = float(psi_logit_prior_sd)
         self.atse_idx = self.rep_idx = self.atse_sizes = None
+        # Must be set BEFORE set_atse(), which builds the weight from the ATSE sizes. None = the
+        # correct likelihood; "m_over_m_minus_1" reproduces the BetaBinomial's accidental
+        # over-count deliberately. See dm_log_prob's docstring.
+        self.likelihood_weight = likelihood_weight
+        self.event_weight = None
         self.n_atse = None
         if event_id is not None:
             self.set_atse(event_id)
@@ -326,7 +332,8 @@ class LeafletFAMinibatch:
                 # No mask: an ATSE with no reads in this cell has every y_j = 0, so its junction
                 # terms vanish and lgamma(A_e) - lgamma(0 + A_e) = 0. It drops out on its own.
                 pyro.factor("obs", dm_log_prob(b_junc, mu, bb_conc, self.atse_idx, self.n_atse,
-                                               eps=self.dm_alpha_floor))
+                                               eps=self.dm_alpha_floor,
+                                               event_weight=self.event_weight))
             else:
                 if self.likelihood == "binomial":
                     obs_dist = dist.Binomial(total_count=b_clus, probs=mu)   # no overdispersion (conc=inf)
@@ -622,6 +629,19 @@ class LeafletFAMinibatch:
         self.rep_idx = rep_idx.to(self.device)
         self.atse_sizes = sizes.to(self.device)
         self.n_atse = int(len(sizes))
+        if self.likelihood_weight in (None, "none"):
+            self.event_weight = None
+        elif self.likelihood_weight == "m_over_m_minus_1":
+            m = self.atse_sizes.to(torch.float32)
+            # m = 1 cannot happen for a real ATSE (an event needs >= 2 junctions), but guard it
+            # rather than emit an infinity that would be traced back here days later.
+            self.event_weight = torch.where(m > 1, m / (m - 1), torch.ones_like(m))
+            w = self.event_weight
+            print(f"  [weight] tempered likelihood m/(m-1): mean {float(w.mean()):.3f}, "
+                  f"max {float(w.max()):.3f} over {self.n_atse:,} events. This is NOT a "
+                  f"probability model -- intervals will be too narrow by construction.", flush=True)
+        else:
+            raise ValueError(f"unknown likelihood_weight {self.likelihood_weight!r}")
         return self
 
     def freeze_globals(self, psi=None, pi=None, alpha_pi=None, dir_conc=None, bb_conc=None):
