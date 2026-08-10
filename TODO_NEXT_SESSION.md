@@ -43,6 +43,22 @@ free fit's 0.52 is fewer than one molecule. Written up in `METHODS_dirichlet_mul
 - phi is dominated by cell type (92.8% of variance) not donor (7.2%), so programs are not secretly
   encoding mouse identity.
 
+**Describe the filter accurately.** It is a POST HOC selection: fit K=20, then keep the programs that
+survive across seeds. Say that, rather than "the model finds 8 programs". What makes it defensible
+rather than cherry-picking is (a) the threshold is on REPLICATION, not on the result -- programs are
+selected by cross-seed agreement and biology is tested afterwards, so the aging program passing at
+r=0.982 is a consequence of the ordering, not the reason for it; and (b) the separation is
+unambiguous, 0.978-0.998 against six programs below 0.6 with nothing sitting at the boundary.
+
+It is NOT a way to choose K. Effective K comes out 8-13 whether we ask for 10, 20 or 30, so the
+sweep stays a robustness check; the replication count MEASURES effective K rather than selecting it.
+
+**Cross-K check, still to do.** Hungarian-match programs across K as well as across seeds. If the
+same 8 programs appear at K=10 and K=30, the model is finding structure that survives changing the
+rank -- a much stronger claim. If each K finds its own set, then the 8 are stable GIVEN K=20 but not
+intrinsic, which is the weaker and more careful statement we would have to make instead. Cheap to
+add to the scoring pass.
+
 ## The aging result, and what is missing from it
 
 Program 5 (K20 seed1) rises with age in every cell type tested. Confounds checked and cleared:
