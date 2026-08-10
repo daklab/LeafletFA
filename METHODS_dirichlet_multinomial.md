@@ -172,6 +172,60 @@ the setting is being re-selected on 10% of cells held out of training, with a fi
 every arm is scored on identical cells. The global-conc arm is the cleaner outcome if it holds,
 since it requires no threshold at all.
 
+### The real justification: conc is an EFFECTIVE SAMPLE SIZE, and we can measure it
+
+Everything above argues for the floor from model behaviour. There is a better argument, measured
+directly from the data and independent of any fit.
+
+In the DM, `A_e = sum_j alpha_j = conc`. That is the Dirichlet's total pseudo-count -- literally the
+number of independent observations the model believes a cell contributes to an event. So the
+question "what should conc be?" has a physical answer: how many INDEPENDENT molecules does a cell
+actually contribute?
+
+**Reads are not independent draws.** Restricting to ATSEs whose pooled composition within one cell
+type (microglia, 3,000 cells) is genuinely mixed -- top junction between 0.2 and 0.8, so alternative
+splicing is definitely occurring -- cells put ALL their reads on a single junction far more often
+than independence allows:
+
+| reads in the cell | all on one junction | expected if reads were independent |
+|---|---|---|
+| 5-8 | 0.632 | 0.054 |
+| 10-18 | 0.532 | 0.005 |
+| 20-48 | 0.434 | 0.0001 |
+| 50-198 | 0.238 | ~0 |
+
+At 50-198 reads independence predicts essentially never. Smart-seq2 has no UMIs in standard
+processing, so a cell's reads are duplicates of a few cDNA molecules.
+
+**The effective molecule count follows.** With M independent molecules at composition p,
+`P(all on one) = p^M + (1-p)^M`. Solving at p ~ 0.5:
+
+| reads | P(all on one) | effective molecules |
+|---|---|---|
+| ~6 | 0.632 | 1.66 |
+| ~14 | 0.532 | 1.91 |
+| ~34 | 0.434 | 2.20 |
+| ~124 | 0.238 | 3.07 |
+
+Reads rise 19x while effective molecules rise 2.5x. If each cell held a FIXED number of molecules
+the fraction would not move with depth at all, so the count does grow -- just far more slowly than
+read count, which is the duplication signature.
+
+**This is what justifies the floor.** Measured effective molecules are 1.7-3.1; conc_min = 2.0 sits
+inside that range. The unconstrained fit collapses to 0.52, i.e. FEWER THAN ONE molecule, which is
+not a physically realisable amount of evidence. The free fit was not discovering low overdispersion;
+it was in an impossible regime.
+
+State it this way rather than as "the pooled MLE is 1.9966": the concentration must reflect
+MOLECULAR, not read, sample size, and we measure that count from all-or-nothing behaviour on
+genuinely mixed events. Two limits to keep attached: the estimate assumes p ~ 0.5 on the events used
+to derive it, so it fixes an order of magnitude rather than a precise value -- `>= 2` is defensible,
+`= 2.0 exactly` is not; and it does not by itself separate technical duplication from genuine
+cell-level isoform commitment. Under duplication a low conc is CORRECT and phi should not be asked
+to explain the excess; under commitment the switching is real and is exactly what phi should
+capture. The floor stands either way; what changes is how much structure phi should be expected to
+find. `A58_commitment_structure.py` is the test.
+
 Note the tension this creates with the DS test: per-event concentration was introduced BECAUSE one
 global value cannot span the observed 0.012-4,750, and it is what makes the DS null robust without
 truth labels (effect-size drift 5.9x -> 1.3x). The DS test estimates concentration per event
