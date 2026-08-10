@@ -112,6 +112,46 @@ def group_delta_psi(psi_samples, phi_samples, cells_1, cells_2):
     return torch.einsum("sk,skj->sj", dphi, psi_samples)        # [S, J]
 
 
+def group_phibar_from_q(phi_loc, phi_scale, cells, n_samples, seed=0):
+    """Posterior draws of a group's MEAN phi, [S, K], from AutoNormal's q(phi).
+
+    phi is Dirichlet, so AutoNormal parameterises it in unconstrained space through a
+    stick-breaking transform and the stored trailing dimension is K-1, not K.
+
+    Only the group's own cells are drawn. The full [S, C, K] tensor is 2.1 GB at S=200, C=132,706,
+    K=20, and every cell outside the contrast is irrelevant to it -- so this keeps
+    `group_delta_psi`'s maths unchanged while making phi sampling affordable across 73 contrasts.
+
+    WHY THIS MATTERS. A26 fixed phi at its posterior mean because the 2026-07-26 atlas fit carried
+    no phi posterior -- it was never written, not lost. With phi fixed, ALL the width in the effect
+    size came from psi, so the test could look confident while the per-cell encoding underneath it
+    was unreliable. That is precisely the failure mode the atlas turned out to have, and it is
+    invisible unless phi is sampled.
+    """
+    loc = torch.as_tensor(np.asarray(phi_loc, np.float32))
+    scale = torch.as_tensor(np.asarray(phi_scale, np.float32))
+    if loc.numel() == 0:
+        raise ValueError("fit carries no q(phi) -- retrain with a version of A44 that saves it")
+    cells = np.asarray(cells, dtype=np.int64)
+    lo, sc = loc[cells], scale[cells]
+    sb = torch.distributions.transforms.StickBreakingTransform()
+    g = torch.Generator().manual_seed(int(seed))
+    out = torch.empty(n_samples, lo.shape[0] if lo.dim() == 1 else sb(lo[:1]).shape[-1])
+    for s_i in range(n_samples):
+        eps = torch.randn(lo.shape, generator=g)
+        out[s_i] = sb(lo + sc * eps).mean(0)          # [K] -- the group mean for this draw
+    return out
+
+
+def group_delta_psi_from_q(psi_samples, phi_loc, phi_scale, cells_1, cells_2, seed=0):
+    """As `group_delta_psi`, but drawing phi from q(phi) rather than taking it fixed. [S, J]."""
+    psi_samples = torch.as_tensor(psi_samples)
+    S = psi_samples.shape[0]
+    p1 = group_phibar_from_q(phi_loc, phi_scale, cells_1, S, seed=seed)
+    p2 = group_phibar_from_q(phi_loc, phi_scale, cells_2, S, seed=seed + 1)
+    return torch.einsum("sk,skj->sj", p1 - p2, psi_samples)
+
+
 def _resolve_groups(adata, group_1, group_2, groupby):
     labels = adata.obs[groupby].values
     c1 = np.flatnonzero(labels == group_1)
