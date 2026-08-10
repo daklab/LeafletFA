@@ -1,139 +1,92 @@
-# Remaining Work — LeafletFA Reproducibility
+# Next session — 2026-08-11
 
-## LeafletFA repo — clean, migration complete
+## First thing: the configuration decision
 
-- [x] Add AnnData format tests to `tests/test_basic.py`
-- [x] Add AnnData format description to README and docs
-- [x] Run quickstart notebook end-to-end — `cell_ontology_class` is the column name
-- [x] Pin deps and promote scanpy/umap-learn to core — done in `pyproject.toml`
-- [x] Fix COO sparse FutureWarning / cluster count indexing bug
-- [x] Migrate package from `src/BetaDirichletFactor` to `leafletfa/`
-- [x] Scaffold MkDocs Material docs site
+Both arms were training overnight. Score them and apply the rule in
+`Leaflet-analysis/GenomeBiology_Submission2026/GAMEPLAN_final_models_and_figures.md`.
 
-### Remaining MkDocs pages
+    ATLAS_DM/runs_final/            delta = K  +  m/(m-1) weight   (7/9 done at handoff)
+    ATLAS_DM/runs_final_deltaonly/  delta = K  alone               (0/9 done, ~2-3.5h in)
 
-- [ ] **Fill `outputs/splicing-programs.md`** — what psi means, how to interpret loadings
-- [ ] **Fill `outputs/cell-activities.md`** — assign_post / X_PHI, how to plot
-- [ ] **Fill `outputs/differential.md`** — link to `differential_splicing` module
-- [ ] **Fill `ecosystem.md`** — scanpy / scvi-tools / muon interop
-- [ ] **Deploy docs to GitHub Pages** — add `.github/workflows/docs.yml`
+**The rule: ship delta-only unless it CLEARLY fails.** Not "unless the weighted arm wins by a
+margin". Two reasons:
 
-### Other
+1. The posterior IS the product. The model-based DS test is a posterior test, so a tempered
+   likelihood forces permutation calibration forever.
+2. The weight points the wrong way. It restores the BetaBinomial's over-count (m junctions treated
+   as m independent observations when only m-1 are free) while the measured effective sample size is
+   LOWER than the read count, not higher. `conc` already carries that correction.
 
-- [ ] **Implement `analyze_all_junctions_groups`** — high-level wrapper that loops over all junctions for a group-vs-group comparison (equivalent of `analyze_all_factors_psi` but for predefined cell groups). Should call `compute_differential_splicing_groups` per junction, collect into a DataFrame, then call `compute_junctions_significance_groups`. Also fix the docs in `outputs/differential.md` which references a `test_differential_activity` function that does not exist.
-- [ ] **Efficiency: vectorize group DS over junctions** — currently loops per junction; could instead draw S posterior samples of `(φ, ψ)` once, compute all imputed PSI values as a single matrix multiply `φ @ ψ` → `[S, C, J]`, then compute group means and ΔPSI across all J junctions in one shot rather than one junction at a time.
-- [ ] **PyPI release** — `python -m build && twine upload`
-- [ ] **Docstrings on key public methods** — `from_anndata`, `train`, `get_all_variables` need
-  Google-style Args/Returns blocks so mkdocstrings renders them properly
+Score with:
 
----
+    A54_score_both_properties.py --fits 'label=<fit.npz>' ...
 
-## leafletfa-paper repo — not started
+Weighted arm at handoff: 5 of 6 scored fits recover the Fbln2 direction (fibroblast < 0.1 against
+LeafCutter's 0.020), versus 1 of 9 for the previous production run. One seed still collapses.
 
-> **Purpose:** Frozen reproducibility record. NOT a user-facing tool.
+## The result that changed the model's justification
 
-- [ ] **Rename repo on GitHub:** Settings → Rename → `leafletfa-paper`
-- [ ] **Add figure index to README** — table mapping every paper figure to its script/notebook
-- [ ] **Update analysis script imports** — replace HPC `sys.path` hacks with `from leafletfa import LeafletFA`
+`conc` is an EFFECTIVE SAMPLE SIZE, and we measured it. Reads are not independent draws: on ATSEs
+whose pooled composition within microglia is genuinely mixed, 23.8% of cells put ALL reads on one
+junction at 50-198 reads, where independence predicts ~never. Solving P(all on one) = p^M + (1-p)^M
+gives 1.66-3.07 effective molecules as reads go 6 -> 124. conc_min = 2.0 sits inside that range; the
+free fit's 0.52 is fewer than one molecule. Written up in `METHODS_dirichlet_multinomial.md`.
 
-## Next atlas round — config changes (decided 2026-07-15, apply AFTER array 18866425 finishes)
+## What phi can be claimed to be (A58/A59/A60)
 
-DO NOT edit run_training.py / config while 18866425 has pending tasks — editable install => mixed-code array.
+- **8 of 20 programs replicate across three seeds at r 0.978-0.998.** Six sit at 0.7-0.9, six are
+  degenerate (program 15 at -0.059). The distribution is bimodal, so an average over programs is
+  meaningless -- report per-program replication and interpret only the replicating ones.
+- **Averaging cells does NOT help.** A60 found across-seed agreement flat from n=1 to n=1000. The
+  disagreement is systematic, not noise. The "noisy per cell, reliable in aggregate" framing is
+  WRONG and should not be repeated.
+- phi is dominated by cell type (92.8% of variance) not donor (7.2%), so programs are not secretly
+  encoding mouse identity.
 
-Evidence (from run_14 / run_3 wandb + sim):
-- pass_avg_elbo_per_cell converges by PASS 2-3, then flat-to-slightly-rising (7062 @ pass2 -> 7963 @ pass20).
-  20 passes is overkill; the extra passes add sampling noise + mild sequential drift.
-- FIRST chunk (150 ep) does NOT converge for RANDOM init (still at 1.68e9 @ epoch 125, floor ~7e8).
-  Later chunks (60 ep, warm-started) do roughly settle. So passes and per-chunk epochs are coupled.
-- psi_mac_pass_to_pass plateaus at 0.10 (globals stable); cross-arm (waypoint vs random) agreement 0.95
-  (programs are data-driven, not init-driven).
+## The aging result, and what is missing from it
 
-Changes:
-1. num_passes: 20 -> 8   (test 5/8/20 on the SIM first — fast, has ground truth. Keep 8 as default.)
-2. SELECT THE BEST-ELBO PASS as the final model, not the last pass (last-pass is NOT elbo-best; pass 2
-   was better for run_14). run_training currently keeps the last pass.
-3. lr STAYS 0.05. Do NOT lower it: the model starts on a symmetric saddle and lr is the escape velocity
-   (sim: random lr0.005 -> psi_r 0.45 vs lr0.05 -> 0.86). Lower lr re-introduces the saddle failure.
-   The drift is a passes+selection issue, not an lr issue.
-4. Track phi delta-from-init (currently only psi is tracked, and only for the waypoint arm -> random
-   shows nan). Add phi_mac_vs_init + fix the random-arm reference.
+Program 5 (K20 seed1) rises with age in every cell type tested. Confounds checked and cleared:
+depth (no correlation with library size, +0.021; survives matching in every depth quintile), sex
+(effect tiny and OPPOSITE; 24m is all-male yet highest), batch (single batch), dataset (tested
+within TMS only -- every 2m cell is allen_brain, so 2m must be excluded from any aging claim).
 
-Cheap sim test to run before the next atlas round (GPU, ~30 min, does not touch the atlas):
-   num_passes in {3,5,8,20} x lr in {0.05} for waypoint+chunked, measure final psi_r AND
-   psi_mac_pass_to_pass drift. Locks the pass count with ground truth.
+    male mice only, mouse-level means:  3m [0.053 0.020 0.062 0.053 0.058]
+                                        24m [0.183 0.258 0.287 0.266]
+    complete separation, p = 0.0159 (the MINIMUM attainable with n=5 vs 4)
 
-## bb_conc is never carried across chunks (found 2026-07-16)
+Replicates in 5 of 7 independent fits with complete separation, 6 of 7 in the right direction. It is
+one of the 8 reproducible programs (r = 0.982), which is an independent check that the cross-fit
+match was not luck.
 
-SYMPTOM: trained bb_conc is bit-identical across waypoints/random and junction/global-prior arms
-(same seed => same value to 4 dp) while psi genuinely differs between those arms. It varies only
-with (K, seed): K=10 seed0=0.337, seed1=2.053, seed2=1.373.
+**Missing:** what the program IS. Pull its high-psi junctions and see whether they form a coherent
+set. Until then it is a statistical finding, not a biological one. Redo on the final models.
 
-CAUSE: run_training.py captures global_bb_conc (line ~486) but NEVER FEEDS IT BACK into the next
-chunk. grep: psi/pi have 4 feedback sites, bb_conc has 0. So on each of ~240 chunks bb_conc is
-re-initialised from its seed-determined prior draw and gets ~60 epochs on 8,192 cells. The saved
-value is whatever the LAST chunk landed on -- it never accumulates over the 92,894 cells.
+## Remaining checks before biology
 
-IS LOW bb_conc ITSELF WRONG?  NO -- probably real biology. Beta-Binomial per-cell PSI ~
-Beta(rho*c, (1-rho)*c); c < 1 gives BOTH shape params < 1 => U-shaped => PSI pushed to 0/1 =>
-BIMODAL, which is the known behaviour of splicing (the simulation deliberately uses Beta(0.5,0.5)
-for this reason). The atlas is genuinely more overdispersed than the simulation, which recovered
-~20 only because it was GENERATED at conc=20. So do not "fix" low conc -- fix the fact that it is
-estimated from one chunk instead of the full dataset.
+1. apply the decision rule (above)
+2. A57 indexing checks on the chosen fit -- chained as `final_score`
+3. DS suite re-run: A49 phi + group, A51 (now samples phi AND has `--permute`), A52, A53, A50.
+   Everything currently on file used the collapsed-phi model, including the "0.53% called on a true
+   null" figure, which must NOT be quoted until re-run.
+4. LeafCutter calibration re-run -- the m-dependence result (1.15 vs 3.23 at m=2, 1.93 vs 11.35 at
+   m=9) is the strongest MODEL claim we have and it is from the old fit
+5. A3 held-out imputation. **Bigger than it looked**: scVI and the atlas model were both trained on
+   ALL cells, so a held-out evaluation needs a 70% retrain evaluated on the 30% at each downsampling
+   level. A retrain, not an adapter.
+6. Moran's I of phi_k over the scVI kNN graph -- fine for VISUALISATION, but the existing scVI model
+   saw all cells so it cannot support a generalisation claim.
 
-CONSEQUENCES:
-1. bb_conc CANNOT be used as the convergence diagnostic claimed in METHODS 11.4b (it is seed
-   noise, not a data-determined quantity). Correct that claim.
-2. The held-out E-step inherits it; at conc=0.337 the likelihood is nearly flat so phi leans on
-   the prior. This is the condition the old forced-Binomial workaround existed for -- but forcing
-   Binomial is still wrong (it is not the trained model). The fix is to estimate conc properly.
-3. METHODS 7b says the Gamma(2,0.1) prior "fixes the cause" of tiny bb_conc. NOT SUPPORTED by
-   these models (median 3.04, four below 1). Soften that claim.
+## Also requested
 
-FIX (next round, with num_passes 8 + best-ELBO-pass selection):
-  carry bb_conc chunk-to-chunk exactly as psi/pi/alpha_pi are carried.
+- run allen_brain and tabula_muris_senis separately, not just pooled
+- Figure 2 rebuild: every panel in the current version validates the BetaBinomial and Binomial
+  models, neither of which is shipped. Row 1 (recovery vs NMF, concentration recovery, depth) and
+  row 2 (`FIG2_regime_phi_collapse.png`, built) are specified in the gameplan.
 
-## Imputation coverage axis: RESAMPLED_X_PERCENT = % reads REMOVED, not retained (found 2026-07-19)
+## Known open question
 
-The resampled test files are labelled by DOWNSAMPLING fraction, NOT coverage retained:
-    10_PERCENT  -> 730M reads (MOST coverage, 90% retained)
-    50_PERCENT  -> 405M
-    90_PERCENT  ->  81M
-   100_PERCENT  -> 0.8M  (near-empty, ~0.1%)
-The _original truth layer is identical across all files (verified).
-
-CONSEQUENCE: the earlier "imputation collapses at 100% coverage" was NOT a bug -- 100_PERCENT is the
-MOST downsampled file, so imputation is correctly worst there. The 04e code is fine (mb=0.80 at
-50%-removed is a healthy point). For Figure 3.1 the x-axis must be plotted as COVERAGE RETAINED
-(= reads, or 100 - removed%), so the curve reads left-to-right as depth decreasing.
-
-Also (per Karin): for testing we dropped the 10k-HVJ restriction and evaluate ALL junctions
-(pass n_hvj huge). Decide for the array whether all-junctions is affordable across 48 models x 7
-levels, or keep HVJ for the array and show all-junctions on the released model only.
-
-OPEN QUESTION from the HVJ smoke test (K=10): mb_ct (cell-type-stratified mean) global_pearson was
-~0.91 at 50%-removed while LeafletFA lf_bb was ~0.66 -- i.e. the mean baseline BEAT the model. Watch
-this on the all-junctions run and across K: if LeafletFA does not beat mb_ct, the programs are
-redundant with cell-type-average splicing for imputation. K=10 may just be too weak.
-
-## Imputation finding (run_0, K=10, ALL junctions, 300G) — 2026-07-19
-
-Coverage direction now correct (10%-removed = most reads):
-  global Pearson   lf_bb: 0.747 (10%rm) -> 0.570 (90%rm)   mb_ct: 0.960 -> 0.861
-  calibration lf_bb slope: 0.99 (high cov) -> 0.87 (low) -- WELL CALIBRATED, not compressed.
-
-HEADLINE: mb_ct (cell-type-stratified mean) BEATS LeafletFA (lf_bb) on imputation at every coverage
-(0.96 vs 0.75, 0.86 vs 0.57). Holds on HVJ and all-junctions.
-
-BUT mb_ct is SUPERVISED -- it is handed the 39 cell-type labels. LeafletFA uses none. So this is not
-a fair imputation bar. Reframe Figure 3.1:
-  - do NOT use mb_ct as the pass/fail bar (it is supervised).
-  - fair bars = naive (global mean) and mb (coverage-weighted mean, unsupervised). Beating those is
-    the honest claim. lf_bb=0.75 vs naive~0 vs mb (check) -- lf_bb clearly beats naive.
-  - show mb_ct as an ADVANTAGED reference ("even a label-conditioned mean only does X better").
-  - LeafletFA's selling point is NOT imputation accuracy; it is the calibrated, LABEL-FREE latent
-    representation. Lead with calibration + coverage-robustness, not "beats mb_ct".
-CAVEAT: K=10 only. K=50 may narrow the gap -- rerun on finalists before finalizing framing.
-
-MEMORY: all-junctions needs ~200-300G/run (5 dense 40k x 80k arrays). NOT feasible for the 48x7
-array under the account quota. Plan: HVJ for any sweep; all-junctions only on released finalists.
-Better: block-process junctions in 04e (score 20k at a time) to run all-junctions at ~50G.
+The regime simulation that selected the recipe was mis-calibrated: it thinned to a median of 5 reads
+per ATSE where the atlas has 16, so it tested a regime harsher than reality. The atlas A/B test
+between the two arms does not depend on it, but the DIAGNOSIS of why phi collapses is weaker than it
+looked. `--depth-scale` has been removed; use `--tissue` to change the coverage regime instead,
+since ATSE totals come verbatim from real cells.
