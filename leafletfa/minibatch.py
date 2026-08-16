@@ -291,7 +291,12 @@ class LeafletFAMinibatch:
         # simplex constraint it is exactly the per-event total concentration A_e.
         if self.likelihood in ("betabinomial", "dirichletmultinomial"):
             if self.fix_bb_conc is not None:
-                bb_conc = torch.tensor(self.fix_bb_conc, device=self.device)   # held constant, not learned
+                # held constant, not learned. A scalar broadcasts; a per-ATSE vector is gathered to
+                # [J] exactly as the learned per-ATSE site is below.
+                if torch.is_tensor(self.fix_bb_conc) and self.fix_bb_conc.ndim == 1:
+                    bb_conc = self.fix_bb_conc[self.atse_idx]
+                else:
+                    bb_conc = torch.tensor(float(self.fix_bb_conc), device=self.device)
             elif self.conc_per_atse:
                 # One concentration per ATSE, same Gamma(2, 0.1) prior applied independently. The
                 # site is [n_atse] and is gathered to [J] below, so alpha = conc_e * mu broadcasts
@@ -665,8 +670,22 @@ class LeafletFAMinibatch:
         self.fixed_pi = _t(pi)
         self.fixed_alpha_pi = _t(alpha_pi)
         self.fixed_dir_conc = _t(dir_conc)
-        if bb_conc is not None and np.isfinite(float(bb_conc)):
-            self.fix_bb_conc = float(bb_conc)
+        if bb_conc is not None:
+            arr = np.asarray(bb_conc, dtype=np.float32)
+            if arr.ndim == 0:
+                if np.isfinite(float(arr)):
+                    self.fix_bb_conc = float(arr)
+            else:
+                # Per-ATSE concentration, as the shipped atlas fits learn it. Applying a trained
+                # model to new cells must freeze the SAME concentration each event was fitted with:
+                # collapsing 24,475 per-event values to one scalar would give held-out cells a
+                # different effective sample size per event than training cells had, and the
+                # imputation comparison would then be against a model that was never trained.
+                if not self.conc_per_atse:
+                    raise ValueError("a vector bb_conc needs conc_per_atse=True")
+                if arr.shape != (self.n_atse,):
+                    raise ValueError(f"bb_conc vector is {arr.shape}, expected {(self.n_atse,)}")
+                self.fix_bb_conc = torch.as_tensor(arr, device=self.device)
         return self
 
     def infer_phi(self, num_steps=3000, subsample_size=None, lr=0.1, gamma=0.1, seed=0,
@@ -780,7 +799,9 @@ class LeafletFAMinibatch:
                 if v is not None:
                     out[k] = v.detach().cpu().numpy()
             if self.fix_bb_conc is not None:
-                out["bb_conc"] = np.float32(self.fix_bb_conc)
+                out["bb_conc"] = (self.fix_bb_conc.detach().cpu().numpy()
+                                  if torch.is_tensor(self.fix_bb_conc)
+                                  else np.float32(self.fix_bb_conc))
             return out
 
     def sample_psi(self, num_samples, seed=0):
