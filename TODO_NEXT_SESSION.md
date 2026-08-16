@@ -1,108 +1,85 @@
-# Next session — 2026-08-11
+# Handoff — 2026-08-16 (late)
 
-## First thing: the configuration decision
+## Settled today
 
-Both arms were training overnight. Score them and apply the rule in
-`Leaflet-analysis/GenomeBiology_Submission2026/GAMEPLAN_final_models_and_figures.md`.
+**Gna13 was a program-only call; A65 measures how often that happens.** Posterior TV 0.33-0.41
+in every seed, cells 0.06-0.09; direction real atlas-wide (endothelial vs mesenchymal ~0.15) but
+amplified 3x because psi_10 (mesenchymal) sits below every mesenchymal type's observed usage. Of the
+3,490 LeafletFA-only gated calls, 2,191 have observed pooled TV >= 0.15 and 1,299 do not. Fig 3e
+shows the split (hatched). Example replaced by Mbd3 ATSE1 (brain endo vs oligo, 238/414 cells,
+observed TV 0.35, LC q 0.20). Examples must pass observed TV >= 0.25 AND >= 50 cells/arm.
 
-    ATLAS_DM/runs_final/            delta = K  +  m/(m-1) weight   (7/9 done at handoff)
-    ATLAS_DM/runs_final_deltaonly/  delta = K  alone               (0/9 done, ~2-3.5h in)
+**The posterior test's reach is set by phi distance.** TV_e <= 0.5 ||dphi||_1 (psi sums to 1);
+empirically the contrast's 99th-percentile TV = 0.34 ||dphi||_1 - 0.04 (r 0.95). 29 of 70
+contrasts have no posterior call at any ATSE (LeafCutter makes 8,345 there). Fig 3 supp
+`FIG3_supp_program_sharing` + `FIG3_supp_effect_sizes_by_contrast`. In Methods.
 
-**The rule: ship delta-only unless it CLEARLY fails.** Not "unless the weighted arm wins by a
-margin". Two reasons:
+**Atlas K sweep for the posterior test done** (A67 on A51 K10/K30 x 3 seeds): calls 6,360 / 7,041 /
+6,666 at K 10/20/30; LC agreement 46/50/50%; K20-K30 Jaccard 0.71, TV rank Spearman 0.97; K10-K20
+0.52 / 0.93. LRT and LeafCutter arms do not depend on K. `LEAFCUTTER_CMP_DELTAONLY/ksweep/summary_by_K.tsv`.
 
-1. The posterior IS the product. The model-based DS test is a posterior test, so a tempered
-   likelihood forces permutation calibration forever.
-2. The weight points the wrong way. It restores the BetaBinomial's over-count (m junctions treated
-   as m independent observations when only m-1 are free) while the measured effective sample size is
-   LOWER than the read count, not higher. `conc` already carries that correction.
+**Figure 2 redesigned (v2)**: setup (true-phi UMAP; a DS and a null ATSE with per-program truth +
+observed violins) / recovery (learned-phi UMAP silhouette 0.82 vs NMF 0.41; AUROC/AUPRC of DS-ATSE
+detection from learned psi vs NMF, mean +- SD over 3 seeds) / test (LRT, posterior from effect 0.25,
+LeafCutter: calibration + power) / imputation panel i pending A3. `build_fig2_v2.py`, caption v2.
+LeafCutter WAS run on the sims (08/06: 6 v 6 random pseudobulks per state pair).
 
-Score with:
+**Imputation, what is now known** (A66 v2 on ALL 39,812 held-out cells, HVJ set):
+- all-entry r is inflated by between-junction level: junction-mean baseline scores 0.86, prior 0.87
+- within-junction (ranking cells): prior 0.086, junction-mean 0.000 by construction; posterior mean
+  0.995/0.948 at 0/10% removed on all entries but 0.043 on entries with NO reads left at 10%
+- so imputation of a cell's rank within a junction from nothing is near the floor for every
+  label-free method; the model's honest imputation claims are (i) the junction level, (ii) graceful
+  degradation with the cell's own reads, (iii) calibrated per-cell uncertainty
+- **posterior sd of the imputed value tracks across-seed spread**: Fgfr2 event, Spearman 0.74
+  over cells / 0.76 over cell types, ratio 1.2 (slightly conservative). Worth a panel.
+- Fgfr2 IIIb/IIIc (`FIG2_supp_Fgfr2_IIIb_IIIc`, 3 seeds): epithelial recovered (0.90-0.97 vs
+  raw ~1.0), mesenchymal direction-only and seed-dependent (0.3-0.8 vs raw 0.0; 5-59 covered
+  cells) because mesenchymal types also load SP1/SP4 whose psi_IIIb is unconstrained (cells that
+  do not express Fgfr2). Mammary basal clusters with mesenchymal in all seeds (myoepithelial);
+  bladder epithelial only in seed 0.
 
-    A54_score_both_properties.py --fits 'label=<fit.npz>' ...
+**SP naming**: `figures/_common/programs.py` -- SP1 = largest pi, per fit. Shipped fit: fit-4 -> SP1
+(myeloid), 2 -> SP2, 1 -> SP3, 7 -> SP4 (endothelial), 3 -> SP5, 8 -> SP6 (lymphoid), 6 -> SP7,
+5 -> SP8, 10 -> SP9 (mesenchymal). NOT yet propagated to: Fbln2 decomposition, Fig 3 heatmaps,
+aging, any plot that says "program N".
 
-Weighted arm at handoff: 5 of 6 scored fits recover the Fbln2 direction (fibroblast < 0.1 against
-LeafCutter's 0.020), versus 1 of 9 for the previous production run. One seed still collapses.
+## Running (check first)
 
-## The result that changed the model's justification
+    a3_s0/1/2   IMPUTATION_DM/results/a3_heldout70_seed{0,1,2}.csv   200G GPU, ~3-4 h each
+    a66all      IMPUTATION_DM/a66_all_cells/level_{000,010,050,090}.npz  then A66b NMF on all cells
+    K3/K10 sims DM_SHIPPED_SIM_K3, DM_SHIPPED_SIM_K10  (18 fits, ~13 done at last check)
 
-`conc` is an EFFECTIVE SAMPLE SIZE, and we measured it. Reads are not independent draws: on ATSEs
-whose pooled composition within microglia is genuinely mixed, 23.8% of cells put ALL reads on one
-junction at 50-198 reads, where independence predicts ~never. Solving P(all on one) = p^M + (1-p)^M
-gives 1.66-3.07 effective molecules as reads go 6 -> 124. conc_min = 2.0 sits inside that range; the
-free fit's 0.52 is fewer than one molecule. Written up in `METHODS_dirichlet_multinomial.md`.
+## To do -- Figure 2
 
-## What phi can be claimed to be (A58/A59/A60)
+1. panel i from A3 (3 seeds, mean +- SD): within-junction and within-cell r vs % reads removed,
+   posterior mean vs NMF (mean-impute, 0-impute), on all entries and on lost entries; DROP mb_ct.
+2. sim K sweep: score K3/K10 fits (A45 LRT, A62 posterior delta 0.15, sim_benchmark metrics incl.
+   AUROC/silhouette) -> supp panel: performance vs model K with SD over seeds.
+3. supp figure from the old FIG2_final panels (conc recovery, psi vs depth, phi by regime, delta
+   trade-off, atlas reach, conc-2 DS) with K and seed SD stated.
+4. A66 v2 plot: all cells, rows = posterior mean / NMF / junction-mean baseline, cols = 0/10/50/90%.
+   Needs A66b rerun on all cells x HVJ (dense 39,812 x 31k; mean-impute).
+5. imputation-uncertainty panel (posterior sd vs across-seed sd), maybe generalised beyond Fgfr2.
+6. caption v2: fill i, K sentence, seed sentence.
 
-- **8 of 20 programs replicate across three seeds at r 0.978-0.998.** Six sit at 0.7-0.9, six are
-  degenerate (program 15 at -0.059). The distribution is bimodal, so an average over programs is
-  meaningless -- report per-program replication and interpret only the replicating ones.
-- **Averaging cells does NOT help.** A60 found across-seed agreement flat from n=1 to n=1000. The
-  disagreement is systematic, not noise. The "noisy per cell, reliable in aggregate" framing is
-  WRONG and should not be repeated.
-- phi is dominated by cell type (92.8% of variance) not donor (7.2%), so programs are not secretly
-  encoding mouse identity.
+## To do -- Figure 3
 
-**Describe the filter accurately.** It is a POST HOC selection: fit K=20, then keep the programs that
-survive across seeds. Say that, rather than "the model finds 8 programs". What makes it defensible
-rather than cherry-picking is (a) the threshold is on REPLICATION, not on the result -- programs are
-selected by cross-seed agreement and biology is tested afterwards, so the aging program passing at
-r=0.982 is a consequence of the ordering, not the reason for it; and (b) the separation is
-unambiguous, 0.978-0.998 against six programs below 0.6 with nothing sitting at the boundary.
+1. propagate SP naming (Fbln2 decomposition, heatmaps).
+2. move a/d/f to supp per Karin; main = b, c, e (split bar), g (Apbb2 + Mbd3), + program-sharing?
+3. supp panel: posterior calls vs K (table above) + per-seed counts.
+4. caption: "program-level, amplified" wording for the hatched bar (not "wrong").
+5. methods XX for A3.
 
-It is NOT a way to choose K. Effective K comes out 8-13 whether we ask for 10, 20 or 30, so the
-sweep stays a robustness check; the replication count MEASURES effective K rather than selecting it.
+## Later
+- aging program characterisation on the shipped fit; allen_brain vs TMS separately; Figure 1.
 
-**Cross-K check, still to do.** Hungarian-match programs across K as well as across seeds. If the
-same 8 programs appear at K=10 and K=30, the model is finding structure that survives changing the
-rank -- a much stronger claim. If each K finds its own set, then the 8 are stable GIVEN K=20 but not
-intrinsic, which is the weaker and more careful statement we would have to make instead. Cheap to
-add to the scoring pass.
+## After Fig 2/3 are cleared: per-dataset training (requested 2026-08-16)
 
-## The aging result, and what is missing from it
-
-Program 5 (K20 seed1) rises with age in every cell type tested. Confounds checked and cleared:
-depth (no correlation with library size, +0.021; survives matching in every depth quintile), sex
-(effect tiny and OPPOSITE; 24m is all-male yet highest), batch (single batch), dataset (tested
-within TMS only -- every 2m cell is allen_brain, so 2m must be excluded from any aging claim).
-
-    male mice only, mouse-level means:  3m [0.053 0.020 0.062 0.053 0.058]
-                                        24m [0.183 0.258 0.287 0.266]
-    complete separation, p = 0.0159 (the MINIMUM attainable with n=5 vs 4)
-
-Replicates in 5 of 7 independent fits with complete separation, 6 of 7 in the right direction. It is
-one of the 8 reproducible programs (r = 0.982), which is an independent check that the cross-fit
-match was not luck.
-
-**Missing:** what the program IS. Pull its high-psi junctions and see whether they form a coherent
-set. Until then it is a statistical finding, not a biological one. Redo on the final models.
-
-## Remaining checks before biology
-
-1. apply the decision rule (above)
-2. A57 indexing checks on the chosen fit -- chained as `final_score`
-3. DS suite re-run: A49 phi + group, A51 (now samples phi AND has `--permute`), A52, A53, A50.
-   Everything currently on file used the collapsed-phi model, including the "0.53% called on a true
-   null" figure, which must NOT be quoted until re-run.
-4. LeafCutter calibration re-run -- the m-dependence result (1.15 vs 3.23 at m=2, 1.93 vs 11.35 at
-   m=9) is the strongest MODEL claim we have and it is from the old fit
-5. A3 held-out imputation. **Bigger than it looked**: scVI and the atlas model were both trained on
-   ALL cells, so a held-out evaluation needs a 70% retrain evaluated on the 30% at each downsampling
-   level. A retrain, not an adapter.
-6. Moran's I of phi_k over the scVI kNN graph -- fine for VISUALISATION, but the existing scVI model
-   saw all cells so it cannot support a generalisation claim.
-
-## Also requested
-
-- run allen_brain and tabula_muris_senis separately, not just pooled
-- Figure 2 rebuild: every panel in the current version validates the BetaBinomial and Binomial
-  models, neither of which is shipped. Row 1 (recovery vs NMF, concentration recovery, depth) and
-  row 2 (`FIG2_regime_phi_collapse.png`, built) are specified in the gameplan.
-
-## Known open question
-
-The regime simulation that selected the recipe was mis-calibrated: it thinned to a median of 5 reads
-per ATSE where the atlas has 16, so it tested a regime harsher than reality. The atlas A/B test
-between the two arms does not depend on it, but the DIAGNOSIS of why phi collapses is weaker than it
-looked. `--depth-scale` has been removed; use `--tissue` to change the coverage regime instead,
-since ATSE totals come verbatim from real cells.
+Train LeafletFA on TMS alone and Allen Brain alone, SAME junction set, so cross-dataset batch effects
+cannot leak into programs; repeat imputation within each dataset (70/30 inside each). Files exist --
+see memory `reference_per_dataset_split_files.md`:
+  MODEL_INPUT/20260526/train_70_30_TMS_ONLY_*.h5mu, test_30_70_TMS_ONLY_*.h5mu,
+  resampled/RESAMPLED_{10..100}_PERCENT_test_30_70_TMS_ONLY_*.h5mu (7),
+  AB_ONLY_*.h5mu (NOT split: make the AB 70/30 + resampled set first).
+Recipe: A44 with --holdout-ids from the TMS split, shipped config; A3 on the TMS_ONLY resampled dir.
