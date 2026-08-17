@@ -103,5 +103,7 @@ Yes for the model, no for the packaging:
   `leafletfa.estep`, add a `leafletfa train` entry point wrapping A44's recipe, rewrite README.
 
 ## Human AB training launched 2026-08-17
-`HUMAN_SPLICING_FOUNDATION/LEAFLETFA_MODELS/DM_shipped_2026-08-17/` K20 seeds 0-2 (jobs 20688497-9),
-shipped recipe, full 43,442 cells. For mouse-AB vs human-AB conservation.
+`HUMAN_SPLICING_FOUNDATION/LEAFLETFA_MODELS/DM_shipped_2026-08-17/` K10/20/30 x seeds 0-2 (jobs
+20688497-9 K20, 20691475-80 K10/K30), shipped recipe, full 43,442 cells. For mouse-AB vs human-AB
+conservation. RULE (Karin): every model we train gets K 10/20/30 x 3 seeds -- TMS-only, mouse-AB-only,
+any 70/30 refit -- always the full 9-fit grid.
