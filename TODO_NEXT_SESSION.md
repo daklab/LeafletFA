@@ -107,3 +107,14 @@ Yes for the model, no for the packaging:
 20688497-9 K20, 20691475-80 K10/K30), shipped recipe, full 43,442 cells. For mouse-AB vs human-AB
 conservation. RULE (Karin): every model we train gets K 10/20/30 x 3 seeds -- TMS-only, mouse-AB-only,
 any 70/30 refit -- always the full 9-fit grid.
+
+## Full-grid training launched 2026-08-17 (K 10/20/30 x seeds 0-2 each)
+
+    ATLAS_DM/runs_TMS70/      TMS 70% only (54,694 cells; holdout = AB + TMS test)   9 fits  -> A3 on TMS_ONLY resampled
+    ATLAS_DM/runs_ABonly/     mouse Allen Brain only (54,571 cells; holdout = TMS)   9 fits  -> conservation vs human
+    ATLAS_DM/runs_heldout70/  atlas 70/30 refit, adds K10 + K30 x 3 to the existing K20 x 3   6 fits  -> imputation K-robustness
+    HUMAN .../DM_shipped_2026-08-17/   human AB full, K10/20/30 x 3                    9 fits
+Holdout index files: ATLAS_DM/holdout_idx_for_TMS70_model.txt, holdout_idx_for_ABonly_model.txt
+(verified: TMS train+test = all 78,135 TMS cells, no overlap). Each fit ~3-5 h GPU, 300 GB.
+When done: A57 index sanity, A54 scores, A61 cross-seed/K replication on each grid; pick K20 s0
+unless the scores say otherwise; then package cleanup (see above) once the queue is empty.
