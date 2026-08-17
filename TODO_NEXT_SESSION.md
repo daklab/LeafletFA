@@ -124,3 +124,15 @@ unless the scores say otherwise; then package cleanup (see above) once the queue
 partition of the six K20 fits although psi matches the atlas 16/20. Known phi-encoding degeneracy
 across seeds. A66 cell-type-level metric now queued for 70/30 seeds 1,2 (a66_all_cells_seed{1,2});
 report mean and range, flag seed 0. A3 already spans 3 seeds.
+
+## Landed 2026-08-17 (late)
+- A66 cell-type-level within-junction r (seed 0, 90% removed): prior phi.psi 0.386 median over 27,107
+  junctions; posterior mean 0.830; junction mean undefined. -> Fig 2 imputation text + supp.
+- A68: 7.5M entries, Spearman(post_sd, cross_sd) 0.878; 90% CI coverage of other seeds 0.871
+  (0.83-0.91 across sd bins). -> supp panel "imputation uncertainty is calibrated" (build from
+  IMPUTATION_DM/a68_uncertainty.tsv.gz).
+- sim K3/K10 scoring arrays COMPLETED -> aggregate DM_SHIPPED_SIM_K{3,10}/ds/*.tsv into the K panel.
+- A66 seeds 1 (running) and 2 (done) + seed-0 phi run (running) -> SP train-vs-heldout heatmap
+  (build_sp_train_vs_heldout.py) and mean/range of the cell-type-level r.
+- A66b (NMF all cells) resubmitted on CPU with LEAFLET_ALLOW_CPU=1.
+- A3 seeds 1-2 finishing; then rebuild Fig 2 (panel i mean +- SD).
