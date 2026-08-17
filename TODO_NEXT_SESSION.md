@@ -77,9 +77,11 @@ aging, any plot that says "program N".
 ## After Fig 2/3 are cleared: per-dataset training (requested 2026-08-16)
 
 Train LeafletFA on TMS alone and Allen Brain alone, SAME junction set, so cross-dataset batch effects
-cannot leak into programs; repeat imputation within each dataset (70/30 inside each). Files exist --
+cannot leak into programs. Imputation repeated on the TMS 70/30 split ONLY; the AB-only model feeds
+downstream analyses (conservation with human brain), no AB split needed. Files exist --
 see memory `reference_per_dataset_split_files.md`:
   MODEL_INPUT/20260526/train_70_30_TMS_ONLY_*.h5mu, test_30_70_TMS_ONLY_*.h5mu,
   resampled/RESAMPLED_{10..100}_PERCENT_test_30_70_TMS_ONLY_*.h5mu (7),
-  AB_ONLY_*.h5mu (NOT split: make the AB 70/30 + resampled set first).
-Recipe: A44 with --holdout-ids from the TMS split, shipped config; A3 on the TMS_ONLY resampled dir.
+  AB_ONLY_*.h5mu (full, unsplit -- train on all of it).
+Recipe: TMS: A44 with --holdout-ids from the TMS split, shipped config, then A3 on the TMS_ONLY resampled
+dir. AB: A44 on AB_ONLY, no holdout.
