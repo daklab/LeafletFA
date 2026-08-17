@@ -118,3 +118,9 @@ Holdout index files: ATLAS_DM/holdout_idx_for_TMS70_model.txt, holdout_idx_for_A
 (verified: TMS train+test = all 78,135 TMS cells, no overlap). Each fit ~3-5 h GPU, 300 GB.
 When done: A57 index sanity, A54 scores, A61 cross-seed/K replication on each grid; pick K20 s0
 unless the scores say otherwise; then package cleanup (see above) once the queue is empty.
+
+## 70/30 seed 0 merges endothelial with mesenchymal (found 2026-08-17)
+||dphi||_1 endo-fibro 0.08 (vs 0.97-1.27 in atlas s0/s1 and 70/30 s1), silhouette 0.009 -- weakest
+partition of the six K20 fits although psi matches the atlas 16/20. Known phi-encoding degeneracy
+across seeds. A66 cell-type-level metric now queued for 70/30 seeds 1,2 (a66_all_cells_seed{1,2});
+report mean and range, flag seed 0. A3 already spans 3 seeds.
