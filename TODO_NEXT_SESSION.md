@@ -85,3 +85,23 @@ see memory `reference_per_dataset_split_files.md`:
   AB_ONLY_*.h5mu (full, unsplit -- train on all of it).
 Recipe: TMS: A44 with --holdout-ids from the TMS split, shipped config, then A3 on the TMS_ONLY resampled
 dir. AB: A44 on AB_ONLY, no holdout.
+
+## Package status (asked 2026-08-17): is the DM/minibatch model in the LeafletFA source?
+
+Yes for the model, no for the packaging:
+- IN the package: `leafletfa/minibatch.py` (`LeafletFAMinibatch`: likelihood="dirichletmultinomial",
+  psi_parameterization="simplex", conc_per_atse, conc_min, event_id, likelihood_weight; NaN rollback;
+  psi_mean/sample_psi normalised within ATSE; freeze_globals with per-ATSE conc), `leafletfa/
+  dirichlet_multinomial.py` (dm_log_prob, segment_softmax, denominator_consistency), tests
+  (test_dirichlet_multinomial.py 33/33).
+- NOT yet: defaults are still betabinomial/beta; `leafletfa/__init__.py` exports only the legacy
+  `LeafletFA` (model.py); README still says "Beta-Dirichlet factor model"; the E-step for new cells
+  (`estep_minibatch.py`) and the training driver with the shipped recipe (A44: schedule, conc
+  floor, delta=K, checkpoints) live in the ANALYSIS repo, not the package.
+- To do before release: flip defaults (or add `LeafletFA.dm()` constructor), export
+  LeafletFAMinibatch + infer_phi in __init__, move estep_minibatch into the package as
+  `leafletfa.estep`, add a `leafletfa train` entry point wrapping A44's recipe, rewrite README.
+
+## Human AB training launched 2026-08-17
+`HUMAN_SPLICING_FOUNDATION/LEAFLETFA_MODELS/DM_shipped_2026-08-17/` K20 seeds 0-2 (jobs 20688497-9),
+shipped recipe, full 43,442 cells. For mouse-AB vs human-AB conservation.
