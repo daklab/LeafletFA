@@ -136,3 +136,14 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
   (build_sp_train_vs_heldout.py) and mean/range of the cell-type-level r.
 - A66b (NMF all cells) resubmitted on CPU with LEAFLET_ALLOW_CPU=1.
 - A3 seeds 1-2 finishing; then rebuild Fig 2 (panel i mean +- SD).
+
+## 2026-08-18 morning
+- All grids done except atlas 70/30 K10/K30 (4 running). Four K30 fits hit the 41-NaN-restart cap and
+  stopped early (TMS s0 11.4k, s2 13.2k; ABonly s0 4.7k; human s0 11.9k steps) -> moved to
+  *_INCOMPLETE_cap41 and relaunched with --max-nan-restarts 150. Atlas K30 needed 3-13 restarts.
+- A44's silhouette_celltype was MISALIGNED under --holdout-ids (labels in atlas order vs training-only
+  phi) -> every held-out fit showed -0.3; fixed in A44 (maps through ho_idx). Ignore the stored values.
+- A66 cell-type-level within-junction r: prior 0.39 (all 3 seeds, 0 and 90% removed), posterior mean
+  0.88 / 0.83. A68 panel built (FIG2_supp_imputation_uncertainty). SP train-vs-heldout heatmap built.
+  A66b (NMF, with cell-type accumulators) rerunning on CPU. Sim K panel: LRT rerun for K3/K10 (A45
+  matching bug at K != 5 fixed); K5 posterior rows now from delta 0.15 sweep.
