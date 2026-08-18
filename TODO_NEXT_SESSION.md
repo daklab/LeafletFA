@@ -147,3 +147,17 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
   0.88 / 0.83. A68 panel built (FIG2_supp_imputation_uncertainty). SP train-vs-heldout heatmap built.
   A66b (NMF, with cell-type accumulators) rerunning on CPU. Sim K panel: LRT rerun for K3/K10 (A45
   matching bug at K != 5 fixed); K5 posterior rows now from delta 0.15 sweep.
+
+## 2026-08-18 afternoon
+- K30 at lr 0.025 does NOT converge on the smaller datasets (TMS-only, AB-only, human): NaN every ~30
+  steps, hit the 41 and then 150 restart caps at 4-13k steps. Relaunched K30 x 3 seeds for all three
+  at lr 0.015 (--max-nan-restarts 60) into <grid>/K30_lr0.015/ (jobs *K30s*L). Incomplete dirs kept as
+  *_INCOMPLETE_cap41 / _INCOMPLETE_lr0.025. Methods: state that K=30 on <60k-cell datasets used lr 0.015.
+- A61 on all grids (ATLAS_DM/a61_replication_all_grids.tsv): cross-seed at K20 replicating at r>=0.9:
+  atlas 11/20, 70/30 12/20, TMS-only 13/20, AB-only 14/20, human 12/20; K10 6-8/10; K10->K20 6-9/10.
+  K30 rows provisional (included incomplete fits) -> rerun A61 after lr0.015 fits land (also fix
+  arm_fits to skip *_INCOMPLETE* dirs).
+- SP-by-cell-type heatmaps for TMS-only / AB-only / human K20 x 3 seeds: figures/FIGURE4_programs/plots.
+- Sim K sweep done and in results draft; NMF cell-type-level r 0.41.
+- Still running: hoK30s0/s2 (atlas 70/30), tmsK30s2r (lr 0.025), 9 x K30 lr0.015 queued.
+- Package cleanup: still waiting for the GPU queue to drain.
