@@ -161,3 +161,15 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
 - Sim K sweep done and in results draft; NMF cell-type-level r 0.41.
 - Still running: hoK30s0/s2 (atlas 70/30), tmsK30s2r (lr 0.025), 9 x K30 lr0.015 queued.
 - Package cleanup: still waiting for the GPU queue to drain.
+
+## 2026-08-18 evening
+- Atlas 70/30 grid complete (K10/20/30 x 3). A57 on its K20 s0: 17/17 pass.
+- K30 lr0.015: TMS x3 done (16.2k steps, ~19 restarts each); AB s0 and human s0 done; AB s1/s2 and
+  human s1/s2 running. Grids now expose K30 via symlinks -> K30_lr0.015/ (old lr0.025 dirs kept as
+  *_lr0.025_complete_INCOMPLETEGRID / *_INCOMPLETE_*).
+- A61 across all grids (a61_replication_all_grids.tsv), programs replicating across seeds at r>=0.9:
+    K10  atlas 6, 70/30 8, TMS 8, AB 8, human 6   (of 10)
+    K20  atlas 11, 70/30 12, TMS 13, AB 14, human 12   (of 20)
+    K30  atlas 17, 70/30 18, TMS 20, AB 18*, human 21*  (of 30; * = mixed lr until s1/s2 land)
+  cross-K K10->K20 6-9/10, K20->K30 11-15/20. Same effective-K picture on every dataset.
+- After the last 4 fits: rerun A61 once more, SP heatmaps at K30, then package cleanup.
