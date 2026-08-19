@@ -619,6 +619,22 @@ class LeafletFAMinibatch:
         return self.losses
 
     # ── transfer / E-step ────────────────────────────────────────────────────
+    @classmethod
+    def dm(cls, junc, clus, K, event_id, **kw):
+        """The shipped configuration: Dirichlet-multinomial likelihood over whole ATSEs with a
+        within-ATSE simplex psi and a per-ATSE concentration floored at 2 (the measured effective
+        sample size of Smart-seq2 reads; see METHODS). `event_id` is the per-junction ATSE label,
+        required because the DM groups junctions by event. Defaults are overridable via **kw.
+
+            model = LeafletFAMinibatch.dm(junc, clus, K=20, event_id=event_ids)
+            model.fit(num_steps=16200, subsample_size=8192, lr=0.025, gamma=0.1, early_stop=False)
+        """
+        kw.setdefault("likelihood", "dirichletmultinomial")
+        kw.setdefault("psi_parameterization", "simplex")
+        kw.setdefault("conc_per_atse", True)
+        kw.setdefault("conc_min", 2.0)
+        return cls(junc, clus, K, event_id=event_id, **kw)
+
     def set_atse(self, event_id):
         """Attach the junction -> ATSE map that the Dirichlet-multinomial likelihood needs.
 

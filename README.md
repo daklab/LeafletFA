@@ -1,6 +1,6 @@
 # LeafletFA: Bayesian Factor Analysis for Single-Cell Splicing
 
-LeafletFA is a scalable probabilistic Beta-Dirichlet factor model designed to decompose sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). It discovers coordinated modules of splicing events (Alternative Transcript Structure Events — ATSEs) that reflect biological states such as cellular aging or lineage specification, without requiring pre-defined cell type labels.
+LeafletFA is a scalable probabilistic factor model that decomposes sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). The shipped model is a **Dirichlet-multinomial over whole ATSEs** (Alternative Transcript Structure Events): each event's junction counts are modelled jointly against the event total, each program's junction composition lives on a within-ATSE simplex, and a per-ATSE concentration — floored at 2, the measured effective number of RNA molecules behind a Smart-seq2 read pile — carries the overdispersion. It discovers coordinated splicing modules reflecting biological states such as lineage or aging, without pre-defined cell type labels. (The earlier Beta-Dirichlet/BetaBinomial parameterisation remains available as an option.)
 
 **Documentation:** [daklab.github.io/LeafletFA](https://daklab.github.io/LeafletFA/)
 
@@ -16,10 +16,31 @@ BAM files (per cell)
      ↓  splice graph construction → ATSE clustering
 SplicingDataset.h5ad
      ↓  [LeafletFA]  ← this repo
-     ↓  Beta-Dirichlet factor model fitting
+     ↓  Dirichlet-multinomial factor model fitting (within-ATSE simplex psi)
      ↓  Splicing Programs (K factors) + cell activities
 Results
 ```
+
+### Quick start (shipped model)
+```python
+from leafletfa import LeafletFAMinibatch
+
+# junc, clus: (cells x junctions) counts; event_id: per-junction ATSE label
+model = LeafletFAMinibatch.dm(junc, clus, K=20, event_id=event_id)
+model.fit(num_steps=16200, subsample_size=8192, lr=0.025, gamma=0.1, early_stop=False)
+psi = model.psi_mean()        # (K x junctions), sums to 1 within each ATSE
+phi = model.phi_mean()        # (cells x K) program activities
+
+# infer phi for NEW cells against a frozen fit (the E-step)
+from leafletfa.estep import infer_phi_minibatch
+```
+Or from the command line on a model-ready h5ad:
+```
+python -m leafletfa.train --h5 data.h5ad --K 20 --seed 0 --out runs/
+```
+Train every model at K in {10, 20, 30} x 3 seeds and check program replication across seeds
+(Hungarian matching on psi) before interpreting programs. For datasets under ~60k cells at K = 30,
+use `--lr 0.015`.
 
 ### Key Features
 - **Scalable inference:** Powered by Pyro and Stochastic Variational Inference (SVI) for atlas-scale datasets (200,000+ cells)
