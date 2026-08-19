@@ -200,3 +200,9 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
   transfer-learning arm, per-event conserved/diverged classes, sequence filter.
 - Methods: aging section rewritten (per-mouse test, ANOVA, content); conservation section updated
   (scripted 2026 map + deviation metric + baseline). Results skeletons: RESULTS_DRAFT_Fig4_Fig5_bullets.md.
+
+## 2026-08-19 evening: TMS-only imputation numbers (seeds 1-2; seed 0 finishing)
+- IMPUTATION_TMS/results/a3_tms70_seed{1,2}.csv. All-covered within-junction r, posterior mean:
+  0.92/0.91/0.88/0.80/0.68/0.32/0.09 at 10..100% removed (atlas 70/30: 0.85/0.83/0.77/0.66/0.50/
+  0.22/0.07); junction mean 0.95 vs 0.89 -> TMS junctions more polarised, gain partly the dataset.
+  Prior 0.054; NMF-mean 0.12; lost-entry floor unchanged. TMS-only >= atlas everywhere.
