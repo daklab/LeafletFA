@@ -173,3 +173,15 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
     K30  atlas 17, 70/30 18, TMS 20, AB 18*, human 21*  (of 30; * = mixed lr until s1/s2 land)
   cross-K K10->K20 6-9/10, K20->K30 11-15/20. Same effective-K picture on every dataset.
 - After the last 4 fits: rerun A61 once more, SP heatmaps at K30, then package cleanup.
+
+## 2026-08-19
+- All 36 training fits COMPLETE (all grids K10/20/30 x 3 seeds; K30 on small datasets at lr 0.015,
+  4-22 restarts, full 16.2k steps). Final A61 (a61_replication_all_grids.tsv): r>=0.9 across seeds
+  K10 6-8/10, K20 11-14/20, K30 17-20/30 on every dataset; K10->K20 6-9/10, K20->K30 11-15/20.
+- K30 SP heatmaps: figures/FIGURE4_programs/plots/SP_by_celltype_{TMSonly,ABonly,humanAB}_K30.
+- PACKAGE CLEANUP DONE (v0.2.0): LeafletFAMinibatch.dm(), leafletfa/estep.py, leafletfa/train.py
+  (python -m leafletfa.train), exports in __init__, README rewritten. 33 DM tests + phi_init pass;
+  smoke fit ok. Defaults NOT flipped (would break constructor calls without event_id) -- .dm() is
+  the front door.
+- Next: TMS-only A3 imputation (models ready); Fig 4 aging characterisation on shipped fit; Fig 5
+  mouse-AB vs human-AB conservation (both grids ready).
