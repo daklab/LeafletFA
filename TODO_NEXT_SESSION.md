@@ -185,3 +185,18 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
   the front door.
 - Next: TMS-only A3 imputation (models ready); Fig 4 aging characterisation on shipped fit; Fig 5
   mouse-AB vs human-AB conservation (both grids ready).
+
+## 2026-08-19 (day): Fig 4/5 drafted, TMS imputation running
+- TMS-only imputation: A3 x 3 seeds running on IMPUTATION_TMS (TMS_ONLY resampled, runs_TMS70 K20).
+- Fig 4 aging on shipped fit (A69 + FIGURE4_programs/FIG4_aging_draft): aging program = the one at
+  the mouse-level p floor (0.016) that RISES in 94-99% of cell types in all 3 seeds (seed0 prog6=SP4,
+  seed1 prog2, seed2 prog9; psi r 0.95-0.97). Top genes Sos1, Frmd4b, Ppfibp2, Lipe, Fbln2, Cald1...
+  Panels: variance partition / violins+mouse dots / delta dot heatmap / top junctions.
+  2025 archaeology in the two Explore reports (results embedded in RESULTS skeleton); RBP mediation excluded.
+- Fig 5: scripted junction map (pipelines/10_cross_species/00_, CROSS_SPECIES_2026/): 20,583 pairs,
+  49% exact, 5,804 events with >=2 matched junctions. Program conservation (01_): junction-mean
+  baseline r=0.64; on deviation-psi the SPECIFIC programs (mouse SP14-20) are conserved (r 0.57-0.67
+  all 9 seed pairs), broad programs are not (0.13-0.34). To do: name conserved pairs by cell type,
+  transfer-learning arm, per-event conserved/diverged classes, sequence filter.
+- Methods: aging section rewritten (per-mouse test, ANOVA, content); conservation section updated
+  (scripted 2026 map + deviation metric + baseline). Results skeletons: RESULTS_DRAFT_Fig4_Fig5_bullets.md.
