@@ -157,7 +157,7 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
   atlas 11/20, 70/30 12/20, TMS-only 13/20, AB-only 14/20, human 12/20; K10 6-8/10; K10->K20 6-9/10.
   K30 rows provisional (included incomplete fits) -> rerun A61 after lr0.015 fits land (also fix
   arm_fits to skip *_INCOMPLETE* dirs).
-- SP-by-cell-type heatmaps for TMS-only / AB-only / human K20 x 3 seeds: figures/FIGURE4_programs/plots.
+- SP-by-cell-type heatmaps for TMS-only / AB-only / human K20 x 3 seeds: figures/FIGURE4_aging/plots.
 - Sim K sweep done and in results draft; NMF cell-type-level r 0.41.
 - Still running: hoK30s0/s2 (atlas 70/30), tmsK30s2r (lr 0.025), 9 x K30 lr0.015 queued.
 - Package cleanup: still waiting for the GPU queue to drain.
@@ -178,7 +178,7 @@ report mean and range, flag seed 0. A3 already spans 3 seeds.
 - All 36 training fits COMPLETE (all grids K10/20/30 x 3 seeds; K30 on small datasets at lr 0.015,
   4-22 restarts, full 16.2k steps). Final A61 (a61_replication_all_grids.tsv): r>=0.9 across seeds
   K10 6-8/10, K20 11-14/20, K30 17-20/30 on every dataset; K10->K20 6-9/10, K20->K30 11-15/20.
-- K30 SP heatmaps: figures/FIGURE4_programs/plots/SP_by_celltype_{TMSonly,ABonly,humanAB}_K30.
+- K30 SP heatmaps: figures/FIGURE4_aging/plots/SP_by_celltype_{TMSonly,ABonly,humanAB}_K30.
 - PACKAGE CLEANUP DONE (v0.2.0): LeafletFAMinibatch.dm(), leafletfa/estep.py, leafletfa/train.py
   (python -m leafletfa.train), exports in __init__, README rewritten. 33 DM tests + phi_init pass;
   smoke fit ok. Defaults NOT flipped (would break constructor calls without event_id) -- .dm() is
