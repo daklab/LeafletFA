@@ -56,7 +56,7 @@ from pyro.infer.autoguide import AutoNormal, init_to_value
 from pyro.optim import ClippedAdam
 
 from .dirichlet_multinomial import (build_atse_index, dm_log_prob, segment_softmax,
-                                    _segment_sum)
+                                    _segment_sum, SparseObs, dm_log_prob_sparse)
 
 
 class LeafletFAMinibatch:
@@ -92,8 +92,31 @@ class LeafletFAMinibatch:
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
                  psi_parameterization="beta", psi_logit_prior_sd=1.0,
                  conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0, conc_min=1e-3,
-                 likelihood_weight=None):
+                 likelihood_weight=None, phi_dtype="float32", sparse=False):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        # PHI PRECISION. With pi * dir_conc < 1 for most programs (17 of 20 on the TMS70 K20 fit,
+        # as low as 0.06) the Dirichlet prior on phi is unbounded at the simplex edge, so q(phi)
+        # keeps moving its unconstrained location outward. In float32 the stick-breaking transform
+        # then underflows: each saturated stick leaves 1 - z = 1.2e-7, a handful of them multiply to
+        # exactly 0, log(0) enters both the Dirichlet log-density and the transform's Jacobian, and
+        # the ELBO is inf - inf = NaN. That is the "non-finite loss" behind the E-step restarts.
+        # In float64 the smallest stick is 2.2e-16 and even K - 1 = 19 saturated sticks (1e-297)
+        # stay above the float64 floor, so the site cannot produce log(0) for K <= 20. Only the
+        # (N, K) phi site and its guide parameters change precision; the likelihood stays float32.
+        assert phi_dtype in ("float32", "float64")
+        self.phi_dtype = torch.float64 if phi_dtype == "float64" else torch.float32
+        # SPARSE LIKELIHOOD. sparse=True keeps only the observed-event entries (SparseObs) and
+        # evaluates the same Dirichlet-multinomial there (dm_log_prob_sparse); the dense (N, J)
+        # matrices are never built. DM only. `junc` may then be a scipy.sparse matrix; `clus` is
+        # not needed (the DM derives each event total from the junction counts) and may be None.
+        self.sparse = bool(sparse)
+        if self.sparse:
+            import scipy.sparse as _sp
+            if likelihood != "dirichletmultinomial":
+                raise ValueError("sparse=True is implemented for the Dirichlet-multinomial only")
+            self._junc_sparse = _sp.csr_matrix(junc, dtype=np.float32)
+            junc = np.zeros((self._junc_sparse.shape[0], 0), np.float32)   # shape carrier only
+            clus = junc
         junc = np.asarray(junc); clus = np.asarray(clus)
         # MEMORY. Holding the full matrices dense on the GPU does not scale: the mouse atlas is
         # 92,894 x 79,768, i.e. 29.6 GB per matrix in float32 -- 59 GB for both, on a 44.5 GB card.
@@ -108,6 +131,9 @@ class LeafletFAMinibatch:
         self.clus = torch.as_tensor(clus, dtype=torch.float32, device=store)
         self.mask = self.clus > 0
         self.N, self.J = self.junc.shape
+        if self.sparse:
+            self.J = int(self._junc_sparse.shape[1])
+            self.junc = self.clus = self.mask = None
         if self.data_on_cpu:
             print(f"[minibatch] data kept on CPU ({2*nbytes/1e9:.1f} GB); "
                   f"moving only the minibatch to {self.device}", flush=True)
@@ -145,6 +171,7 @@ class LeafletFAMinibatch:
         self.likelihood_weight = likelihood_weight
         self.event_weight = None
         self.n_atse = None
+        self.sobs = None
         if event_id is not None:
             self.set_atse(event_id)
         elif likelihood == "dirichletmultinomial" or psi_parameterization == "simplex":
@@ -317,10 +344,16 @@ class LeafletFAMinibatch:
         # subsample indices once, shares them with the guide, and scales the LOCAL terms by N/B
         # while leaving the globals above at weight 1.
         with pyro.plate("cells", N, subsample_size=subsample_size) as idx:
-            phi = pyro.sample("phi", dist.Dirichlet(pi * dir_conc))          # batch [B], event [K]
+            phi = pyro.sample("phi", dist.Dirichlet((pi * dir_conc).to(self.phi_dtype)))  # [B], event [K]
+            phi = phi.to(torch.float32)
             if self.phi_floor > 0:
                 phi = phi.clamp_min(self.phi_floor)
                 phi = phi / phi.sum(-1, keepdim=True)                        # back onto the simplex
+            if self.sparse:
+                pyro.factor("obs", dm_log_prob_sparse(
+                    self.sobs.batch(idx, self.device), phi, psi, bb_conc, self.atse_idx,
+                    clip=self.clip, eps=self.dm_alpha_floor, event_weight=self.event_weight))
+                return
             mu = torch.clamp(phi @ psi, self.clip, 1 - self.clip)            # [B, J]
             # When the data lives on the host, index there and move ONLY this minibatch.
             i = idx.to(self.junc.device)
@@ -461,7 +494,8 @@ class LeafletFAMinibatch:
     def fit(self, num_steps=2000, subsample_size=1024, lr=0.05, gamma=0.5, clip_norm=10.0,
             num_particles=1, seed=0, log_every=100, verbose=True, checkpoint_every=None,
             early_stop=True, patience=8, min_delta_rel=1e-4, es_smooth=0.98,
-            max_nan_restarts=20, debug_nan=False, track_every=0, on_track=None):
+            max_nan_restarts=20, debug_nan=False, track_every=0, on_track=None,
+            resume_state=None):
         """One model, one guide, one optimiser, for the whole run -- nothing is ever rebuilt.
 
         Both SVI and AutoNormal use the SAME `self.model` object and read the batch size from
@@ -486,6 +520,12 @@ class LeafletFAMinibatch:
         if self.phi_init is not None:
             self.guide()                      # prototype trace, so the parameters exist
             self._apply_phi_init()
+        if resume_state is not None:
+            # Continue from a _param_snapshot() taken mid-run (e.g. by an on_track callback). The
+            # caller passes the REMAINING steps with lr and gamma rescaled so the decay picks up where
+            # it stopped; Adam's moments start fresh, exactly as after a non-finite restart.
+            self.guide()
+            self._restore_snapshot(resume_state)
         lrd = gamma ** (1.0 / max(num_steps, 1))
         svi = SVI(self.model, self.guide,
                   ClippedAdam({"lr": lr, "lrd": lrd, "clip_norm": clip_norm}),
@@ -615,7 +655,13 @@ class LeafletFAMinibatch:
             if verbose and (step % log_every == 0 or step == num_steps - 1):
                 with torch.no_grad():
                     psi = self.psi_mean()
-                print(f"  step {step:>5}  loss={loss:.4e}  psi_mean={psi.mean():.4f}", flush=True)
+                if self.psi_parameterization == "simplex":
+                    # psi.mean() is n_atse / J for every simplex psi (0.3068 on the atlas), so it
+                    # cannot show learning; the across-program spread can.
+                    print(f"  step {step:>5}  loss={loss:.4e}  psi_contrast={psi.std(0).mean():.5f}",
+                          flush=True)
+                else:
+                    print(f"  step {step:>5}  loss={loss:.4e}  psi_mean={psi.mean():.4f}", flush=True)
         return self.losses
 
     # ── transfer / E-step ────────────────────────────────────────────────────
@@ -650,6 +696,11 @@ class LeafletFAMinibatch:
         self.rep_idx = rep_idx.to(self.device)
         self.atse_sizes = sizes.to(self.device)
         self.n_atse = int(len(sizes))
+        if self.sparse:
+            self.sobs = SparseObs(self._junc_sparse, self.atse_idx, device=self.device)   # gathers run where the math does
+            print(f"[sparse] {self.sobs.n_entries:,} observed-event entries "
+                  f"({self.sobs.n_entries / (self.N * self.J):.2%} of dense), "
+                  f"{self.sobs.nbytes() / 1e9:.2f} GB", flush=True)
         if self.likelihood_weight in (None, "none"):
             self.event_weight = None
         elif self.likelihood_weight == "m_over_m_minus_1":
@@ -757,7 +808,7 @@ class LeafletFAMinibatch:
         """Posterior median of the per-cell loadings, renormalised to the simplex."""
         with torch.no_grad():
             phi = self._median()["phi"].detach()
-            return phi / phi.sum(-1, keepdim=True).clamp_min(1e-12)
+            return (phi / phi.sum(-1, keepdim=True).clamp_min(1e-12)).to(torch.float32)
 
 
     def phi_uncertainty(self, n_samples=64, seed=0):
@@ -799,7 +850,7 @@ class LeafletFAMinibatch:
             sd = D.std(0)
             top = to_simplex(loc).cpu().argmax(-1)
             agree = (D.argmax(-1) == top.unsqueeze(0)).float().mean(0)
-        return sd.numpy(), agree.numpy()
+        return sd.to(torch.float32).numpy(), agree.numpy()
 
     def globals_(self):
         with torch.no_grad():
@@ -900,5 +951,12 @@ class LeafletFAMinibatch:
 
     def observed_rate(self):
         """Read-weighted splicing rate the likelihood targets: sum(junc)/sum(clus)."""
+        if self.sparse:            # sum_j y over an event equals its total, so this is the rate
+            y = self.sobs.y.double()
+            seg_tot = torch.zeros(int(self.sobs.seg_ptr[-1]), dtype=torch.float64)
+            rows = torch.repeat_interleave(torch.arange(self.N), self.sobs.ent_ptr.diff())
+            seg = self.sobs.seg_ptr[rows] + self.sobs.seg_local.long()
+            seg_tot.index_add_(0, seg, y)
+            return float(y.sum() / seg_tot[seg].sum().clamp_min(1))
         with torch.no_grad():
             return float(self.junc.sum() / self.clus.sum().clamp_min(1))

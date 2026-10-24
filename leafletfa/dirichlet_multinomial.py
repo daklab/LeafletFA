@@ -60,7 +60,7 @@ models, so that comparison was never meaningful anyway.
 import numpy as np
 import torch
 
-__all__ = ["build_atse_index", "dm_log_prob", "check_A_e_is_conc",
+__all__ = ["build_atse_index", "dm_log_prob", "dm_log_prob_sparse", "SparseObs", "check_A_e_is_conc",
            "denominator_consistency", "segment_softmax"]
 
 
@@ -233,3 +233,183 @@ def segment_softmax(logit, atse_idx, n_atse, clip=1e-4):
     denom = torch.zeros(logit.shape[0], n_atse, dtype=logit.dtype, device=logit.device)
     denom = denom.index_add(1, atse_idx, e)
     return (e / denom.gather(1, idx).clamp_min(1e-30)).clamp(clip, 1 - clip)
+
+
+# ── sparse evaluation over observed events ─────────────────────────────────────────────────
+# The dense dm_log_prob above touches every (cell, junction) entry, but an ATSE with no reads in a
+# cell contributes exactly zero (every y_j = 0, and lgamma(A_e) - lgamma(0 + A_e) = 0). On TMS a
+# cell observes ~6.5% of entries, so ~94% of the dense work -- and of the 35 GB of dense matrices
+# held for a 55k-cell fit -- computes zeros. The functions below evaluate the SAME log-probability
+# on the observed events only: every junction of every event with at least one read in the cell.
+# Same terms, same eps floor, same event weights; only the summation order differs.
+
+class SparseObs:
+    """Per-cell observed-event entries of a junction count matrix, stored CSR-like on `device`.
+
+    For cell c the entries are all junctions of every event with sum_j y[c, j] > 0, so N_e > 0
+    for every segment and no event that the dense likelihood scores non-trivially is dropped.
+    Observedness is taken from y itself, consistent with dm_log_prob deriving N_e from y.
+
+    y        : scipy.sparse (N, J) junction counts (any non-negative values)
+    atse_idx : LongTensor [J] from build_atse_index
+    """
+
+    def __init__(self, y, atse_idx, device="cpu"):
+        import scipy.sparse as sp
+        y = sp.csr_matrix(y, dtype=np.float32)
+        y.eliminate_zeros()
+        y.sort_indices()
+        N, J = y.shape
+        ev = np.asarray(atse_idx.cpu().numpy() if torch.is_tensor(atse_idx) else atse_idx,
+                        dtype=np.int64)
+        n_atse = int(ev.max()) + 1
+        # junctions grouped by event
+        order = np.argsort(ev, kind="stable")
+        bounds = np.searchsorted(ev[order], np.arange(n_atse + 1))
+        size = np.diff(bounds)
+        S = sp.csr_matrix((np.ones(J, np.float32), (np.arange(J), ev)), shape=(J, n_atse))
+        # Built in blocks of cells so the int64 temporaries stay bounded (~0.7e9 entries on Allen
+        # would otherwise peak at ~50-60 GB); only the int32/float32 results are kept.
+        cols_l, vals_l, segl_l, ent_n, seg_ptr_l = [], [], [], [], [np.zeros(1, np.int64)]
+        step = max(1, int(2e7 // max(1, (y.nnz / max(N, 1)) * 3)))
+        for r0 in range(0, N, step):
+            yb = y[r0:r0 + step]
+            nb = yb.shape[0]
+            E = (yb @ S).tocsr()                                    # observed (cell, event) pairs
+            E.eliminate_zeros()
+            E.sort_indices()
+            seg_ev = E.indices.astype(np.int64)
+            seg_cell = np.repeat(np.arange(nb), np.diff(E.indptr))
+            seg_len = size[seg_ev]
+            n_b = int(seg_len.sum())
+            seg_of_ent = np.repeat(np.arange(len(seg_ev)), seg_len)
+            first = np.cumsum(seg_len) - seg_len
+            cols = order[bounds[seg_ev][seg_of_ent] + (np.arange(n_b) - first[seg_of_ent])]
+            rows = seg_cell[seg_of_ent]
+            # y at those entries: look up in the block's CSR by (row, col) key
+            key_y = np.repeat(np.arange(nb, dtype=np.int64), np.diff(yb.indptr)) * J + yb.indices
+            key_e = rows.astype(np.int64) * J + cols
+            pos = np.minimum(np.searchsorted(key_y, key_e), max(len(key_y) - 1, 0))
+            hit = (key_y[pos] == key_e) if len(key_y) else np.zeros(n_b, bool)
+            vals = np.where(hit, yb.data[pos] if len(key_y) else 0.0, 0.0).astype(np.float32)
+            del key_y, key_e, pos, hit
+            cols_l.append(cols.astype(np.int32)); vals_l.append(vals)
+            segl_l.append((seg_of_ent - E.indptr[rows]).astype(np.int32))
+            ent_n.append(np.bincount(rows, minlength=nb))
+            seg_ptr_l.append(E.indptr[1:].astype(np.int64) + seg_ptr_l[-1][-1])
+        cols, vals, seg_local = (np.concatenate(x) if x else np.zeros(0, dt) for x, dt in
+                                 ((cols_l, np.int32), (vals_l, np.float32), (segl_l, np.int32)))
+        n_ent = len(cols)
+        assert np.isclose(vals.sum(dtype=np.float64), y.data.sum(dtype=np.float64), rtol=1e-9), \
+            "observed entries lost reads"
+        ent_ptr = np.concatenate([[0], np.cumsum(np.concatenate(ent_n) if ent_n else [])]).astype(np.int64)
+        seg_ptr = np.concatenate(seg_ptr_l)
+
+        t = lambda a, dt: torch.as_tensor(np.ascontiguousarray(a), dtype=dt, device=device)
+        self.N, self.J, self.n_atse = N, J, n_atse
+        self.ent_ptr = t(ent_ptr, torch.long)
+        self.cols = t(cols, torch.int32)
+        self.y = t(vals, torch.float32)
+        self.seg_local = t(seg_local, torch.int32)
+        self.seg_ptr = t(seg_ptr, torch.long)
+        self.n_entries = n_ent
+
+    def nbytes(self):
+        return sum(int(x.numel() * x.element_size()) for x in
+                   (self.ent_ptr, self.cols, self.y, self.seg_local, self.seg_ptr))
+
+    def batch(self, idx, device=None):
+        """Gather the entries of cells `idx` (LongTensor [B]). Returns
+        (rows [nnz] local row 0..B-1, cols [nnz], y [nnz], seg [nnz], seg_row [n_seg], n_seg)."""
+        dev = device or self.y.device
+        idx = idx.to(self.ent_ptr.device)
+        B = idx.numel()
+        ar = torch.arange(B, device=idx.device)
+        s, e = self.ent_ptr[idx], self.ent_ptr[idx + 1]
+        L = e - s
+        rows = torch.repeat_interleave(ar, L)
+        excl = torch.cumsum(L, 0) - L
+        pos = torch.repeat_interleave(s - excl, L) + torch.arange(int(L.sum()), device=idx.device)
+        nseg = self.seg_ptr[idx + 1] - self.seg_ptr[idx]
+        seg_off = torch.cumsum(nseg, 0) - nseg
+        seg = seg_off[rows] + self.seg_local[pos].long()
+        seg_row = torch.repeat_interleave(ar, nseg)
+        out = (rows, self.cols[pos].long(), self.y[pos], seg, seg_row, int(nseg.sum()))
+        return tuple(x.to(dev, non_blocking=True) if torch.is_tensor(x) else x for x in out)
+
+
+class _SampledMatmul(torch.autograd.Function):
+    """out[n] = phi[rows[n]] . psiT[cols[n]]  -- (phi @ psi) evaluated only at the given entries.
+
+    The product itself is cheap on BLAS (K is small); what made the dense path slow was the
+    likelihood over every entry. So each block of rows is multiplied densely and only the observed
+    entries are gathered; the backward scatters the entry gradients into the same dense block and
+    goes back through two matmuls. `rows` must be sorted ascending (SparseObs.batch guarantees it).
+    Peak extra memory is one (ROWS x J) block."""
+    ROWS = 1024
+
+    @staticmethod
+    def _blocks(rows, B):
+        bounds = torch.searchsorted(rows, torch.arange(0, B + _SampledMatmul.ROWS, _SampledMatmul.ROWS,
+                                                       device=rows.device).clamp_max(B))
+        for i in range(len(bounds) - 1):
+            r0 = i * _SampledMatmul.ROWS
+            r1 = min(r0 + _SampledMatmul.ROWS, B)
+            if r0 >= B:
+                break
+            yield r0, r1, int(bounds[i]), int(bounds[i + 1])
+
+    @staticmethod
+    def forward(ctx, phi, psiT, rows, cols):
+        B, J = phi.shape[0], psiT.shape[0]
+        out = torch.empty(rows.numel(), dtype=phi.dtype, device=phi.device)
+        for r0, r1, a, b in _SampledMatmul._blocks(rows, B):
+            if b > a:
+                M = phi[r0:r1] @ psiT.t()                                   # [rb, J]
+                out[a:b] = M.reshape(-1).index_select(0, (rows[a:b] - r0) * J + cols[a:b])
+        ctx.save_for_backward(phi, psiT, rows, cols)
+        return out
+
+    @staticmethod
+    def backward(ctx, g):
+        phi, psiT, rows, cols = ctx.saved_tensors
+        B, J = phi.shape[0], psiT.shape[0]
+        gphi = torch.zeros_like(phi) if ctx.needs_input_grad[0] else None
+        gpsi = torch.zeros_like(psiT) if ctx.needs_input_grad[1] else None
+        for r0, r1, a, b in _SampledMatmul._blocks(rows, B):
+            if b <= a:
+                continue
+            G = torch.zeros((r1 - r0) * J, dtype=g.dtype, device=g.device)
+            G.index_add_(0, (rows[a:b] - r0) * J + cols[a:b], g[a:b])
+            G = G.view(r1 - r0, J)
+            if gphi is not None:
+                gphi[r0:r1] = G @ psiT
+            if gpsi is not None:
+                gpsi.addmm_(G.t(), phi[r0:r1])
+        return gphi, gpsi, None, None
+
+
+def dm_log_prob_sparse(batch, phi, psi, conc, atse_idx, clip=1e-4, eps=1e-2, event_weight=None):
+    """dm_log_prob on observed events only. Equal to
+    dm_log_prob(y_dense, (phi @ psi).clamp(clip, 1 - clip), conc, ...) up to summation order.
+
+    batch : output of SparseObs.batch(idx)
+    phi   : [B, K];  psi : [K, J];  conc : [J] per-junction concentration or a scalar
+    Returns [B] log-probability per cell.
+    """
+    rows, cols, y, seg, seg_row, n_seg = batch
+    B = phi.shape[0]
+    mu = _SampledMatmul.apply(phi, psi.t().contiguous(), rows, cols).clamp(clip, 1 - clip)
+    c = conc[cols] if (torch.is_tensor(conc) and conc.ndim == 1) else conc
+    a = (c * mu).clamp_min(eps)
+    j_term = torch.lgamma(y + a) - torch.lgamma(a)
+    A_e = torch.zeros(n_seg, dtype=a.dtype, device=a.device).index_add(0, seg, a)
+    N_e = torch.zeros(n_seg, dtype=a.dtype, device=a.device).index_add(0, seg, y)
+    e_term = torch.lgamma(A_e) - torch.lgamma(N_e + A_e)
+    if event_weight is not None:
+        w = event_weight[atse_idx[cols]]
+        j_term = j_term * w
+        w_seg = torch.zeros(n_seg, dtype=w.dtype, device=w.device).index_copy(0, seg, w)
+        e_term = e_term * w_seg
+    out = torch.zeros(B, dtype=a.dtype, device=a.device)
+    return out.index_add(0, rows, j_term).index_add(0, seg_row, e_term)
