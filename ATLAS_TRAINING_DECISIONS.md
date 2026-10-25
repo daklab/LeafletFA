@@ -1,3 +1,7 @@
+> **Not the current description.** The current model and recipe are described in [`METHODS_LEAFLETFA_CURRENT.md`](METHODS_LEAFLETFA_CURRENT.md) (2026-10-25); this file is kept as history.
+
+> §9 "The phi-corner mechanism is refuted": the ablation floored φ after sampling and so never touched the Dirichlet log-density or stick-breaking Jacobian where the NaN arises; the corner mechanism through float32 underflow is the cause and float64 φ removes it. See METHODS_LEAFLETFA_CURRENT.md §8.
+
 # Atlas training: what was decided, on what evidence
 
 Running record for the DM + simplex atlas fits. Every entry states the measurement behind the

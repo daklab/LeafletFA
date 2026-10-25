@@ -1,3 +1,5 @@
+> **Not the current description.** The current model and recipe are described in [`METHODS_LEAFLETFA_CURRENT.md`](METHODS_LEAFLETFA_CURRENT.md) (2026-10-25); this file is kept as history.
+
 # LeafletFA — Methods (working copy, reconciled against the source code)
 
 > **SUPERSEDED 2026-08-06 — differential splicing.** The DS rule described below
