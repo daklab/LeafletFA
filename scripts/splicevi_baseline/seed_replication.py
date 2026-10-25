@@ -39,6 +39,37 @@ def main():
     print(k.round(3).to_string(index=False)); print(summ.to_string())
 
     fits = {s: np.load(os.path.join(run(s), "fit", "fit.npz"), allow_pickle=True) for s in seeds}
+
+    # PRIMARY (prereg amendment 2, = Leaflet-analysis A70): psi centred by its pi-weighted mean
+    # composition, Hungarian on cosine; a seed-0 program replicates if live and >= 0.8 in BOTH others.
+    occ = lambda z: np.bincount(z["phi"].argmax(1), minlength=z["psi_mean"].shape[0]) / len(z["phi"])
+
+    def centred(z):
+        P = z["psi_mean"].astype(np.float64); pi = np.asarray(z["pi"], np.float64); pi = pi / pi.sum()
+        C = P - pi @ P
+        return C / np.linalg.norm(C, axis=1, keepdims=True).clip(1e-12)
+    ref = seeds[0]; Cr = centred(fits[ref]); live_r = occ(fits[ref]) >= a.live
+    best = {}
+    for s in seeds[1:]:
+        Cs = centred(fits[s]); R = Cr @ Cs.T
+        i, j = linear_sum_assignment(-R)
+        cos = np.full(Cr.shape[0], np.nan); cos[i] = R[i, j]
+        live_s = np.zeros(Cr.shape[0], bool); live_s[i] = occ(fits[s])[j] >= a.live
+        best[s] = (cos, live_s)
+    cen = pd.DataFrame({"program_seed%d" % ref: np.arange(Cr.shape[0]) + 1,
+                        "live_seed%d" % ref: live_r, "pi_seed%d" % ref: fits[ref]["pi"]})
+    for s, (cos, ls) in best.items():
+        cen[f"centred_cos_seed{s}"] = cos; cen[f"live_seed{s}"] = ls
+    cc = cen[[c for c in cen if c.startswith("centred_cos")]]
+    lv = cen[[c for c in cen if c.startswith("live_seed")]].all(1)
+    cen["min_centred_cos"] = cc.min(1); cen["replicates"] = lv & (cen["min_centred_cos"] >= 0.8)
+    cen.to_csv(os.path.join(a.root, "seed_replication_centred.tsv"), sep="\t", index=False)
+    print(f"centred rule: {int(cen['replicates'].sum())} programs replicate "
+          f"(live in all seeds: {int(lv.sum())}); median min centred cos over live: "
+          f"{cen.loc[lv, 'min_centred_cos'].median():.3f}")
+    print(cen.round(3).to_string(index=False))
+
+    # SECONDARY: raw-psi Pearson r per seed pair (inflated by shared usage; reported for comparison)
     rows = []
     for s1, s2 in itertools.combinations(seeds, 2):
         P1, P2 = fits[s1]["psi_mean"].astype(np.float64), fits[s2]["psi_mean"].astype(np.float64)
@@ -47,7 +78,6 @@ def main():
         R = Z1 @ Z2.T / P1.shape[1]
         i, j = linear_sum_assignment(-R)
         r = R[i, j]
-        occ = lambda z: np.bincount(z["phi"].argmax(1), minlength=P1.shape[0]) / len(z["phi"])
         live = (occ(fits[s1])[i] >= a.live) & (occ(fits[s2])[j] >= a.live)
         rows.append(dict(seed_a=s1, seed_b=s2, K=len(r), median_r_all=np.median(r), min_r_all=r.min(),
                          n_live_matched=int(live.sum()),
