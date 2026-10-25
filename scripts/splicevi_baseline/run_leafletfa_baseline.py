@@ -201,6 +201,11 @@ def main(argv=None):
     if len({n for n, _ in projects}) != len(projects):
         raise SystemExit("duplicate --project names")
 
+    done = (os.path.exists(os.path.join(a.out, "fit", "fit.npz")) or a.reference_fit) and all(
+        os.path.exists(os.path.join(a.out, f"factors_{n}.npz")) for n, _ in projects)
+    if done and os.path.exists(rec_path):
+        log(f"nothing to do: fit and all {len(projects)} projections exist in {a.out}")
+        return
     record = dict(argv=sys.argv, settings=vars(a), started=time.strftime("%Y-%m-%d %H:%M:%S"),
                   host=platform.node(), slurm_job=os.environ.get("SLURM_JOB_ID"),
                   versions=dict(python=platform.python_version(), torch=torch.__version__,
@@ -216,11 +221,18 @@ def main(argv=None):
 
     # checksums run beside the compute; joined before the record is final
     md5_threads = []
+    prev_md5 = record.get("previous_runs", [{}])[0].get("inputs_md5", {})
     if not a.no_md5:
         files = [("train", a.train)] + projects
         files += [(k, v) for k, v in (("npz_cells", a.npz_cells), ("npz_var", a.npz_var),
                                       ("reference_fit", a.reference_fit)) if v]
         for key, path in files:
+            p0 = prev_md5.get(key, {})
+            if (p0.get("path") == os.path.abspath(path) and p0.get("bytes") == os.path.getsize(path)
+                    and p0.get("mtime") == time.strftime("%Y-%m-%d %H:%M:%S",
+                                                         time.localtime(os.path.getmtime(path)))):
+                record["inputs_md5"][key] = p0                       # unchanged file: reuse
+                continue
             t = threading.Thread(target=md5, args=(path, record["inputs_md5"], key), daemon=True)
             t.start(); md5_threads.append(t)
 
