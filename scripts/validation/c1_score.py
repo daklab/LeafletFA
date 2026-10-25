@@ -29,6 +29,7 @@ def main():
     ap.add_argument("--ds", required=True, choices=("TMS", "Allen"))
     ap.add_argument("--run", required=True)
     ap.add_argument("--k1", default=None)
+    ap.add_argument("--fit", default=None, help="fit.npz (default <run>/fit/fit.npz; split runs reuse a reference fit)")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--n-boot", type=int, default=1000)
     a = ap.parse_args()
@@ -41,7 +42,7 @@ def main():
     Y = vlib.read_counts(P["test"])
     A = sp.load_npz(os.path.join(C1, "test_A.npz")).tocsr(); Bm = sp.load_npz(os.path.join(C1, "test_B.npz")).tocsr()
 
-    z = np.load(os.path.join(a.run, "fit", "fit.npz"), allow_pickle=True)
+    z = np.load(a.fit or os.path.join(a.run, "fit", "fit.npz"), allow_pickle=True)
     psi, conc = z["psi_mean"].astype(np.float64), z["bb_conc_vec"].astype(np.float64)
     phiA, rA = phi_of(a.run, "A", cells); phiB, rB = phi_of(a.run, "B", cells)
     per = {}
