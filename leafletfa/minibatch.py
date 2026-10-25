@@ -92,7 +92,7 @@ class LeafletFAMinibatch:
                  likelihood="betabinomial", fix_bb_conc=None, event_id=None,
                  psi_parameterization="beta", psi_logit_prior_sd=1.0,
                  conc_per_atse=False, dm_alpha_floor=1e-2, phi_floor=0.0, conc_min=1e-3,
-                 likelihood_weight=None, phi_dtype="float32", sparse=False):
+                 likelihood_weight=None, phi_dtype="float32", sparse=False, dir_alpha_min=None):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         # PHI PRECISION. With pi * dir_conc < 1 for most programs (17 of 20 on the TMS70 K20 fit,
         # as low as 0.06) the Dirichlet prior on phi is unbounded at the simplex edge, so q(phi)
@@ -103,6 +103,10 @@ class LeafletFAMinibatch:
         # In float64 the smallest stick is 2.2e-16 and even K - 1 = 19 saturated sticks (1e-297)
         # stay above the float64 floor, so the site cannot produce log(0) for K <= 20. Only the
         # (N, K) phi site and its guide parameters change precision; the likelihood stays float32.
+        # PRIOR FLOOR (validation option, default None = unchanged). Floors every Dirichlet parameter
+        # of the phi prior, alpha_k = max(dir_conc * pi_k, dir_alpha_min). At 1 the prior is no longer
+        # unbounded at the simplex edge, so it stops pushing cells into corners.
+        self.dir_alpha_min = None if dir_alpha_min is None else float(dir_alpha_min)
         assert phi_dtype in ("float32", "float64")
         self.phi_dtype = torch.float64 if phi_dtype == "float64" else torch.float32
         # SPARSE LIKELIHOOD. sparse=True keeps only the observed-event entries (SparseObs) and
@@ -344,7 +348,10 @@ class LeafletFAMinibatch:
         # subsample indices once, shares them with the guide, and scales the LOCAL terms by N/B
         # while leaving the globals above at weight 1.
         with pyro.plate("cells", N, subsample_size=subsample_size) as idx:
-            phi = pyro.sample("phi", dist.Dirichlet((pi * dir_conc).to(self.phi_dtype)))  # [B], event [K]
+            alpha = pi * dir_conc
+            if self.dir_alpha_min is not None:
+                alpha = alpha.clamp_min(self.dir_alpha_min)
+            phi = pyro.sample("phi", dist.Dirichlet(alpha.to(self.phi_dtype)))  # [B], event [K]
             phi = phi.to(torch.float32)
             if self.phi_floor > 0:
                 phi = phi.clamp_min(self.phi_floor)

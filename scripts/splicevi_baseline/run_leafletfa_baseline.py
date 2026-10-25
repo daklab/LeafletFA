@@ -175,6 +175,8 @@ def main(argv=None):
     ap.add_argument("--max-nan-restarts", type=int, default=40)
     ap.add_argument("--checkpoint-every", type=int, default=500, help="fit snapshot interval (steps)")
     ap.add_argument("--phi-dtype", default="float64", choices=("float32", "float64"))
+    ap.add_argument("--dir-alpha-min", type=float, default=None,
+                    help="floor on the phi prior's Dirichlet parameters (validation option; default off)")
     ap.add_argument("--dense", action="store_true", help="dense likelihood (the pre-2026-10 numerics)")
     ap.add_argument("--n-train", type=int, default=0, help="random subset of training cells (0 = all)")
     ap.add_argument("--n-project", type=int, default=0, help="random subset of projected cells, the "
@@ -250,7 +252,8 @@ def main(argv=None):
         pyro.clear_param_store()
         if sparse:
             return LeafletFAMinibatch.dm(Y, None, K=a.K, event_id=ev_id, conc_min=a.conc_min,
-                                        device=a.device, sparse=True, phi_dtype=a.phi_dtype)
+                                        device=a.device, sparse=True, phi_dtype=a.phi_dtype,
+                                        dir_alpha_min=a.dir_alpha_min)
         D = Y.toarray()
         _, inv = np.unique(ev_id, return_inverse=True)
         tot = sp.csr_matrix(Y) @ sp.csr_matrix((np.ones(J), (np.arange(J), inv)))
