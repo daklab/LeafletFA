@@ -210,3 +210,44 @@ def simulate(Y_template, inv, phi, psi, conc_e, thin=None, seed=0):
                         shape=Y.shape)
     out.eliminate_zeros()
     return out
+
+
+def simulate_fast(Y_template, inv, phi, psi, conc_e, thin=None, seed=0, chunk=4000):
+    """Vectorised simulate(): same model, drawn per block of cells.
+
+    Dirichlet via normalised Gamma draws; the multinomial via sequential conditional binomials over
+    each event's junctions (event sizes <= 43). Returns CSR float32 with the template's shape."""
+    from leafletfa.dirichlet_multinomial import SparseObs
+    rng = np.random.default_rng(seed)
+    Yt = sp.csr_matrix(Y_template, dtype=np.float32)
+    inv_t = torch.as_tensor(inv)
+    out = []
+    for a in range(0, Yt.shape[0], chunk):
+        b = min(a + chunk, Yt.shape[0])
+        so = SparseObs(Yt[a:b], inv_t)
+        rows, cols, y, seg, seg_row, n_seg = (x.numpy() if torch.is_tensor(x) else x for x in so.batch(torch.arange(b - a)))
+        N = np.bincount(seg, weights=y, minlength=n_seg).round().astype(np.int64)
+        if thin is not None:
+            N = rng.binomial(N, thin)
+        mu = np.einsum("nk,nk->n", phi[a:b][rows], psi.T[cols])
+        al = np.clip(conc_e[inv[cols]] * np.clip(mu, CLIP, 1 - CLIP), EPS, None)
+        g = rng.gamma(al)
+        gs = np.bincount(seg, weights=g, minlength=n_seg)
+        p = g / np.where(gs[seg] > 0, gs[seg], 1.0)
+        # position of each entry within its segment (entries of a segment are contiguous)
+        first = np.r_[0, np.flatnonzero(np.diff(seg)) + 1]
+        start = np.repeat(first, np.diff(np.r_[first, len(seg)]))
+        pos = np.arange(len(seg)) - start
+        size = np.bincount(seg, minlength=n_seg)
+        rem_n = N.copy(); rem_p = np.ones(n_seg)
+        x = np.zeros(len(seg), np.int64)
+        for k in range(int(size.max())):
+            e = np.flatnonzero(pos == k)
+            s_ = seg[e]
+            last = pos[e] == size[s_] - 1
+            q = np.where(last, 1.0, np.clip(p[e] / np.where(rem_p[s_] > 1e-12, rem_p[s_], 1.0), 0, 1))
+            draw = rng.binomial(rem_n[s_], q)
+            x[e] = draw; rem_n[s_] -= draw; rem_p[s_] -= p[e]
+        keep = x > 0
+        out.append(sp.csr_matrix((x[keep].astype(np.float32), (rows[keep], cols[keep])), shape=(b - a, Yt.shape[1])))
+    return sp.vstack(out).tocsr()

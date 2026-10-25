@@ -243,7 +243,9 @@ def main(argv=None):
             json.dump(record, fh, indent=2, default=str)
         os.replace(rec_path + ".tmp", rec_path)
 
-    junc_id, ev_id = read_var(a.train)
+    if a.train.endswith(".npz") and not a.npz_var:
+        raise SystemExit("an .npz --train needs --npz-var (and --npz-cells) for its junctions and cells")
+    junc_id, ev_id = read_var(a.npz_var if a.train.endswith(".npz") else a.train)
     J = len(junc_id)
     log(f"train var: {J:,} junctions, {len(np.unique(ev_id)):,} ATSEs")
     sparse = not a.dense
@@ -284,7 +286,7 @@ def main(argv=None):
         log(f"fit exists, reusing {fit_path} (not refitted)")
         record["stages"]["fit"] = dict(source="existing", path=fit_path)
     else:
-        cells_tr = read_cells(a.train)
+        cells_tr = read_cells(a.npz_cells if a.train.endswith(".npz") else a.train)
         rows = None
         if a.n_train and a.n_train < len(cells_tr):
             rows = np.sort(np.random.default_rng(a.subset_seed).choice(len(cells_tr), a.n_train, replace=False))
