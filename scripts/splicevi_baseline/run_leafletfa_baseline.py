@@ -328,10 +328,10 @@ def main(argv=None):
         m.n_nan_restarts += prev["n_nan_restarts"]
         m.stopped_step = s0 + m.stopped_step
         g = m.globals_()
-        G = dict(psi=m.psi_mean().numpy().astype(np.float32),
+        G = dict(psi=m.psi_mean().cpu().numpy().astype(np.float32),
                  pi=np.asarray(g["pi"], np.float32) / np.asarray(g["pi"]).sum(),
                  conc=m.concentration().astype(np.float32), dir_conc=float(a.K))
-        phi_tr = m.phi_mean().numpy()
+        phi_tr = m.phi_mean().cpu().numpy()
         ev_u, inv = np.unique(ev_id, return_inverse=True)
         np.savez_compressed(fit_path + ".tmp.npz", psi_mean=G["psi"], pi=G["pi"], bb_conc_vec=G["conc"],
                             dir_conc=G["dir_conc"], phi=phi_tr.astype(np.float32), cell_id=cells_tr,
