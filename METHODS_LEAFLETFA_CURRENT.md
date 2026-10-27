@@ -37,11 +37,16 @@ y_c^(e) | N_ce  ~ DirichletMultinomial(N_ce, gamma_e * rho_c^(e))
   parameters.
 - **m = 2.** At m = 2 this is the Beta-binomial; for larger m it is the exact multivariate
   generalisation, the same likelihood as LeafCutter's DM GLM.
-- **Concentration floor.** γ_e is the effective number of independent molecules per cell and event. It is
-  floored at 2, the measured 1.7–3.1 molecules behind a Smart-seq2 read pile (no UMIs; reads are PCR
-  copies).
-  - The floor binds for most events: 75 % of the 24,475 per-ATSE γ_e of the atlas K20 fit sit exactly
-    at 2. For those events the overdispersion is set by the floor, not estimated.
+- **Concentration floor.** γ_e is the effective number of independent molecules per cell and event. Reads
+  on a junction are largely PCR duplicates (no UMIs): even deeply covered events carry only a few
+  effective molecules (Leaflet-analysis `manuscript/NOTE_duplicate_reads.md`).
+  - **The floor.** γ_e is floored at 2, which matches the model-implied number of effective molecules per
+    event: 2.15 in TMS, 2.17 in Allen (SpliceVI2026, Supplementary Fig. S1).
+  - **The data-measured value is lower.** As the median over all observed events it is about 1.2 (1.19 in
+    TMS, 1.26 in Allen; same figure), so the floor permits less overdispersion than the data show.
+  - **The floor is a modeling choice, not a measurement.**
+  - **It binds for most events.** 75 % of the 24,475 per-ATSE γ_e of the atlas K20 fit sit exactly at 2;
+    for those events the overdispersion is set by the floor, not estimated.
 - **Pinned δ.** δ is pinned at K. Learned δ fell to δπ_k ≈ 0.19–0.37 and collapsed the loadings.
   - Even pinned, the fitted π leaves most δπ_k < 1: 17 of 20 on the TMS70 K20 fit, minimum 0.06.
   - That prior is unbounded at the simplex edge, so cells are pushed toward a few programs; see §6
