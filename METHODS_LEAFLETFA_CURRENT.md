@@ -143,10 +143,10 @@ options are equivalent, not bit-identical: float64 draws a different random stre
 ## 8. Known properties and limitations
 
 - **Program reproducibility.**
-  - **Rule.** Match programs across seeds by Hungarian assignment on the cosine of ψ centred by its
+  - **Rule.** Match programs across seeds by Hungarian assignment on the cosine of ψ centered by its
     π-weighted mean. A program is reproduced if it is used by a cell type and matches at ≥ 0.8 in both
     other seeds.
-    - Do not use uncentred ψ: it is ~0.98 similar for every program, so "r ≥ 0.9" passes nearly
+    - Do not use uncentered ψ: it is ~0.98 similar for every program, so "r ≥ 0.9" passes nearly
       all of them.
   - **Counts.**
     - Atlas K20: 4 programs are reproduced (excitatory and inhibitory neuron programs,
@@ -154,7 +154,28 @@ options are equivalent, not bit-identical: float64 draws a different random stre
     - TMS: 3. Mouse Allen: 1–2.
     - Lower or higher K does not increase the count.
   - **Consensus.** The consensus ψ of a reproduced program is its members' mean across seeds,
-    renormalised within each ATSE.
+    renormalized within each ATSE.
+  - **Usage reproduces, content mostly does not** (validation check 6, 2026-10-26; same wording as the
+    LeafletFA manuscript Methods).
+    - **Split/merge test.** Programs that fail the rule were tested for recovery at a different
+      resolution: non-negative least-squares regression of a program's centered composition on up to
+      three programs of another fit, R² ≥ 0.8.
+    - **Result.** This rescued no program in Tabula Muris Senis, and only Allen Brain neuron programs,
+      where one fit's mixed excitatory and inhibitory program was split into separate programs in the
+      others.
+    - **Usage vs content.** Programs that were not reproduced usually had a counterpart used by the same
+      cell types in each fit (median correlation of cell-type activity profiles 0.81–0.92). But that
+      counterpart had a different junction composition (median overlap of the top 50 junctions 2–19 %).
+    - **Conclusion.** Cell-type usage of programs is reproducible, while junction composition is
+      reproducible only for the programs that meet the rule above.
+    - **How to use it.** Make program-level statements only for reproduced programs; otherwise rely on the
+      per-cell representation and on ATSE-level tests.
+    - **Example** (atlas K20; Leaflet-analysis Supplementary Fig. SX). Seed-0 SP4 is used mainly by
+      endothelial and smooth-muscle cells.
+      - Seed 1: its counterpart is SP6, the closest both in composition and in cell usage (centered cosine
+        0.645).
+      - Seed 2, matched by cell usage: SP15 (centered cosine 0.537).
+      - Seed 2, closest by composition: SP8 (0.650), which is used by epithelial cells instead.
 - **Few programs are used.** 5–8 programs are used regardless of K, because most δπ_k < 1.
 - **The concentration floor dominates.** 75 % of γ_e sit at the floor of 2 (§2).
 - **Depth.** See §7: programs are not recoverable at EasySci-like depth.
