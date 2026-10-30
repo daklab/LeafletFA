@@ -1,0 +1,314 @@
+# LeafletFA validation — pre-registration
+
+Written 2026-10-24, before any validation check ran.
+- **Scope:** measurement and diagnosis only. No change to model defaults without Karin's approval.
+- **Code:** LeafletFA branch `leafletfa-validation` (from main 7446210 + 92e3834).
+- **Compute:** CPU first. GPU only within the remaining approved budget (~3 GPU-h after seeds 1–2), b6k allowed.
+
+Fits used unless stated: the new SpliceVI-baseline fits
+`LeafletFA_splicevi_baseline/{TMS,Allen}/full_K20_s{0,1,2}_f64/` (DM simplex, K 20, the shipped recipe,
+float64 φ, sparse DM). TRAIN/TEST = SpliceVI's 70/30 split (TMS 54,694 / 23,441; Allen 38,199 / 16,372).
+Cell-type label = tissue | broad cell type.
+
+## Check 0 — which model is the paper's model (read-only)
+Report the likelihood, ψ parameterisation, concentration, φ prior, K and recipe described by:
+- the manuscript text;
+- the fits behind each main figure (scripts, run records, commits);
+- current main.
+
+**Pass:** all three describe the same model, or every difference is listed with whether it can change a
+result. Any mismatch between the text and the figures' model is a required manuscript change, not a fail of
+the model.
+
+## Check 1 — held-out likelihood (the open problem)
+
+**1a.** Source of the −3.1e7 gain: script, data, null definition (done; status report §10). Pass =
+documented.
+
+**1b. Scoring protocol (fixed before running):**
+- **Score:** full DM log-pmf, including the multinomial coefficient, summed over observed (cell, event)
+  pairs. Reported as **log-likelihood per observed read** = total log-lik / total reads in the scored
+  entries.
+- **Fair φ — within-cell event split:** for each TEST cell, its observed ATSEs are split at random 50/50
+  (seed 20261025) into halves A and B.
+  - φ is inferred by the frozen-global E-step on A only, and B is scored; then the reverse.
+  - Score = sum of both halves. No read is ever scored by a φ that saw it.
+  - The naive same-reads score (φ inferred on all reads, all reads scored) is reported beside it,
+    labelled optimistic.
+- **Model:** frozen globals (ψ, π, δ = K, fitted per-ATSE concentration) of the K20 seed-0 fit.
+  E-step 3,000 steps, batch 8,192, lr 0.1, γ 0.1, float64 φ.
+- **Nulls, every parameter fitted on TRAIN only:**
+  - **(i)** one population ψ per junction: TRAIN read-weighted usage within each ATSE.
+  - **(ii)** one ψ per junction per cell type: TRAIN read-weighted usage per label. Labels with < 20 TRAIN
+    cells or no reads at an event fall back to (i).
+  - **(iii)** the same model with K = 1, fitted with the shipped recipe on TRAIN.
+  - **Concentration:** for (i) and (ii), each ATSE's concentration is fitted by maximum likelihood on TRAIN
+    given that null's ψ (1-D, log-grid over [0.1, 1e4] then refined). It is floored at 2 like the model's.
+    (iii) uses its own fitted concentration.
+- **Scoring verification before reading any comparison:**
+  - (a) Sparse scorer equals the dense `dm_log_prob` + multinomial coefficient on 500 cells (|Δ| < 1e-3 per
+    cell).
+  - (b) On data simulated from the fitted TMS model (check 4 simulator, TMS depth, 2,000 cells), the TRUE
+    parameters score above nulls (i) and (iii).
+  - (c) Swapping cells' labels at random makes null (ii) collapse toward (i).
+  - If (a), (b) or (c) fails, the scorer is fixed before any number is interpreted.
+- **Uncertainty:** 95 % CI of each gain (model − null, per read) by 1,000 bootstrap resamples over mice.
+
+**Pass (per dataset):**
+- **Primary:** model per-read log-lik above nulls (i) and (iii) on the event-split score, with the CI lower
+  bound > 0.
+- **Secondary:** model vs (ii). Reported as a gain or loss with CI. (ii) is a supervised reference that uses
+  the labels; being below it does not fail the model, but it is reported.
+- **STOP RULE (Karin):** if, after (a)–(c) pass, the model is below ANY null (i), (ii) or (iii) on the
+  event-split score (CI upper bound < 0), stop and report before checks 2–5.
+
+**1c.** If the model loses to a null, attribute the loss with these diagnostics:
+- **Overfitting:** TRAIN-vs-TEST per-read gap, with TRAIN scored the same way (event split, E-step).
+- **Corner prior:** the same score with the prior variant from check 2.
+- **E-step convergence:** loss change < 0.1 % over the last 10 % of steps; and 3,000 vs 6,000 steps.
+- **Scoring bug:** (a)–(c) above.
+
+## Check 2 — K and prior (TMS)
+Fits on TMS TRAIN, the shipped recipe, seed 0:
+- K = 5, 10, 30, plus K = 20 from the baseline;
+- K = 20 with the **prior floored at 1**: α_k = max(δ π_k, 1), an opt-in flag; defaults unchanged.
+
+Each is scored as in check 1 (event-split per-read log-lik vs null (i)), with kNN (as §170: k 15,
+mouse-grouped 4-fold) and live programs (argmax ≥ 1 % of cells).
+
+**Pass:** K = 20 within 1 % of the best per-read gain over null (i) among the K values, OR kNN within 0.02 of
+the best. Otherwise report which K is better. The prior variant is descriptive; adopting it needs Karin.
+
+## Check 3 — seed stability (seeds 0–2, TMS and Allen)
+- kNN real / content-only / exact average: mean and range.
+- Program replication: Hungarian matching of ψ rows by Pearson r for each seed pair. Report the median r of
+  matched live programs (live in both) and the number of live programs replicating at r > 0.8.
+
+**Pass:**
+- kNN real range ≤ 0.03;
+- median matched-live r ≥ 0.8 for every seed pair;
+- ≥ 4 programs replicate at r > 0.8 in all three pairs (TMS), ≥ 3 (Allen).
+
+## Check 4 — simulation recovery (TMS)
+**Simulator:**
+- Truth = the seed-0 TMS fit: ψ, per-ATSE concentration, and the TRAIN cells' φ.
+- Each TRAIN cell keeps its observed ATSE totals N_e. The counts per event are drawn
+  y ~ DirMult(N_e, conc_e · (φ_c ψ)_e).
+
+Two depths:
+- (A) TMS depth;
+- (B) EasySci-like: N_e' ~ Binomial(N_e, 0.011), events with N_e' = 0 dropped.
+
+Each is refitted with the shipped recipe, K 20, seed 0 (GPU).
+
+**Recovery measures:**
+- ψ: Hungarian-matched Pearson r of the ψ rows of truth-live programs.
+- φ: per-cell Pearson r between true and fitted φ after matching; plus kNN on fitted φ vs true φ.
+
+**Pass:**
+- (A) median matched ψ r ≥ 0.9 and median per-cell φ r ≥ 0.7.
+- (B) reported descriptively, with no pass threshold (expected degraded; this sets the EasySci expectation).
+
+## Check 5 — biological sanity (TMS) and figure reproducibility
+**5a.** For each program replicating across seeds (check 3), report:
+- the cell types using it (mean φ by label, top 5);
+- its top 20 ATSEs by contrast (max − min ψ across programs) and their genes.
+
+Pre-registered known events. A hit = the event is in the program's top 1 % by contrast, in a program whose
+top cell types match the expectation:
+- *Ptprc* (lymphoid);
+- *Fgfr2* IIIb/IIIc (epithelial vs mesenchymal);
+- a muscle exon in *Tpm1*, *Tpm2*, *Mef2c*, *Ldb3* or *Ttn* (muscle / cardiomyocyte);
+- a neuronal exon in *Clta*, *Nrxn1*, *Ptbp2* or *Kif1bp* (neurons; TMS brain cells where present).
+
+**Pass:** ≥ 2 of the 4 hit.
+
+**5b.** List the manuscript's key quantitative claims (figure, number, script). For each, record whether it
+reproduces from the current code and saved fits, with no retraining:
+- reproduced: same number within the stated precision;
+- not reproduced;
+- not checkable (output or input missing).
+
+Retraining for figures is out of scope. **Pass:** every main-figure claim is reproduced or the reason is
+explained.
+
+## Reporting
+- A TSV per check under `tsv/`; plots under `plots/`.
+- `VALIDATION_REPORT.md`: each check, pass or fail against this file, and the manuscript changes required.
+- Deviations from this pre-registration are listed as such, with the reason.
+
+## Amendment 1 (2026-10-24, before check 2 ran) — check 2b: is K = 20 a fair Figure 1 setting?
+
+**Question:** does raising K (e.g. to SpliceVI's latent size of 30) give LeafletFA more usable
+information, or only more unused programs? This supports the SpliceVI Methods sentence: "LeafletFA was run
+with its recommended K = 20. Results were similar at K = 10 and 30 (Supplementary Table SX)."
+
+**Fits:** the TMS fits of check 2 (K = 5, 10, 20 [baseline seed 0], 30; seed 0; shipped recipe).
+- K 30 uses lr 0.025, the shipped rate: TMS TRAIN has 54,694 cells, and the README's lr 0.015 note
+  applies only below ~60k cells. Deviation: we follow the TMS70 practice, which used 0.015 for K30. A K30
+  fit with any non-finite restart is rerun at 0.015 and both are reported.
+
+**Projections per K:** real, content-only and exact-average TEST inputs, with the same E-step as the
+baseline (frozen globals, 3,000 steps, float64 φ).
+
+**Readouts per K:**
+- kNN on centred log φ: real, content-only, exact average, and the content-only drop (real − content-only).
+  The §170 protocol: k 15, standardised, mouse-grouped 4-fold, label = tissue | broad type.
+- Live programs: argmax of ≥ 1 % of TEST cells.
+- Effective dimensionality of the embedding: participation ratio (Σλ)² / Σλ² of the covariance
+  eigenvalues of centred log φ, real TEST input.
+- Event-split held-out log-likelihood per read vs null (i), as in check 2.
+
+**Pre-registered rules:**
+- **"Results similar at K = 10 and 30" holds** iff, for both K = 10 and K = 30:
+  - |kNN_real(K) − kNN_real(20)| ≤ 0.03; and
+  - |drop(K) − drop(20)| ≤ 0.03.
+  If it does not hold, the Methods sentence is not used; the table is reported as it is.
+- **K = 30 replaces K = 20 in Figure 1** if kNN_real(30) − kNN_real(20) > max(0.03, the seed range of
+  kNN_real at K = 20 from check 3).
+  The baseline should be LeafletFA's strongest reasonable version; the switch needs Karin's sign-off.
+- **"Higher K adds unused programs, not information" is supported** at K = 30 iff all three hold:
+  - live programs rise by ≤ 3 over K = 20;
+  - the participation ratio rises by < 20 %;
+  - kNN_real is not better by > 0.03.
+
+**Scope:**
+- TMS only within the current GPU budget.
+- An Allen K 10 / 30 pair would cost ~2.5 GPU-h and needs Karin's approval. Allen's 4 live programs at K 20
+  make it the dataset where this matters most.
+- Planted-signal AUROC per K can be scored by the SpliceVI agent's §170 readout from the same exports, if
+  wanted.
+
+## Amendment 2 (2026-10-25, before check 3 ran) — replication on centred ψ
+
+**Reason:** the 27 Sept A70 analysis (Leaflet-analysis 7971974) showed raw ψ similarity is ~0.98 for
+every program, because programs share most of each junction's usage. Pearson r on raw ψ rows (as
+pre-registered in check 3) is therefore inflated and cannot separate reproducible from non-reproducible
+programs.
+
+**Change:**
+- **Primary metric** is the A70 metric. Each seed's ψ is centred by its π-weighted mean composition, and
+  programs are Hungarian-matched on cosine of the centred rows.
+- **A program replicates** if it is live (argmax ≥ 1 % of cells) and its matched centred cosine is
+  ≥ 0.8 in BOTH other seeds (seed 0 as reference, as in A70).
+- **Raw-ψ Pearson r** is still reported, as a secondary metric.
+
+**Pass criteria (replacing check 3's):**
+- kNN real range ≤ 0.03 (unchanged);
+- ≥ 4 programs replicating (TMS) and ≥ 3 (Allen) under the centred rule;
+- report the median centred cosine of matched live programs per seed pair.
+
+Check 5a's "replicating programs" use this definition.
+
+## Amendment 3 (2026-10-26, before any computation) — check 6: program stability up to resolution
+
+**Question:** are programs that fail the one-to-one rule recovered in other seeds as splits or merges of
+programs, or as programs with the same meaning?
+
+**Fits:** `LeafletFA_splicevi_baseline/{TMS,Allen}/full_K20_s{0,1,2}_f64` (K 20, seeds 0–2). Training
+cells only.
+- **Live program:** argmax of ≥ 1 % of the fit's cells (amendment 2).
+- **Centered ψ:** each fit's ψ minus its π-weighted mean composition (A70).
+- Every ordered seed pair (i → j) is analyzed: 6 per dataset.
+
+**1. Many-to-one (primary).** For each live program a of seed i, its centered ψ vector c_a (all junctions)
+is regressed on the centered ψ of the live programs of seed j by non-negative least squares, with no
+intercept.
+- R² = 1 − ‖c_a − Xw‖² / ‖c_a‖² (c_a is already a deviation vector, so zero is its reference).
+- "Programs needed" = the smallest s ∈ {1, 2, 3} for which the best subset of s seed-j programs
+  (exhaustive search) reaches R² ≥ 0.8. The R² with all live seed-j programs is also reported.
+- Note: for s = 1, R² ≥ 0.8 means centered cosine ≥ 0.894, stricter than the one-to-one rule (≥ 0.8).
+
+**Classification of each live seed-i program, per ordered pair (first match wins):**
+- **one-to-one:** its Hungarian-matched seed-j program (centered cosine) is live and the cosine is ≥ 0.8;
+- **reproduced up to splitting/merging:** otherwise, R² ≥ 0.8 with ≤ 3 seed-j programs. Labeled a *split*
+  (one seed-i program spread over 2–3 seed-j programs) when s ≥ 2; s = 1 cannot occur here, since that
+  implies cosine ≥ 0.894;
+- **not reproduced:** otherwise.
+- Merges are the same relation seen from the other side: a seed-j program needing 2–3 seed-i programs.
+  They are listed per pair with their top cell types.
+
+**2. Meaning-level match (supporting, descriptive).**
+- **(a)** Cell-type activity profile: mean φ per tissue–cell type (types with ≥ 20 training cells).
+  Pearson r of program a's profile with (i) the best single seed-j program (maximum r) and (ii) the
+  summed loadings of the many-to-one set (Σ_{b∈S} φ_b).
+- **(b)** Top-50 marker junctions, ranked by the departure of its ψ from the π-weighted mean of the other
+  programs of its fit.
+  - For a set S, the junctions are ranked by |Σ_b w_b c_b| from the NNLS fit.
+  - Report the Jaccard overlap with the best single program (highest centered cosine) and with the set.
+
+**3. Reporting.** Per dataset and ordered seed pair: counts of one-to-one, up to splitting, and not
+reproduced; the list of splits and merges with the top 3 cell types of each member.
+
+**Reading (Karin):**
+- **If at least half of the live programs are reproduced (one-to-one or up to splitting) in every ordered
+  seed pair, in both TMS and Allen,** the paper may say "programs are reproducible up to resolution".
+- **Otherwise the current wording stays:** program-level statements only for one-to-one reproduced
+  programs.
+- The meaning-level results (2) are descriptive and do not change the reading.
+
+## Amendment 4 (2026-10-30, before any fit or computation) — check 8: consensus programs (cNMF-style)
+
+**Question:** do programs averaged over many seeds (consensus programs, as in cNMF; Kotliar et al. 2019)
+recur reliably and keep a stable junction identity, where single-seed programs do not?
+
+**Fits.** TMS, K = 20, production recipe (`run_leafletfa_baseline.py` defaults: 16,200 steps, batch 8,192,
+lr 0.025 decaying to 0.1×, concentration floor 2, float64 φ, sparse likelihood), training cells only
+(54,694). 15 seeds in total:
+- seeds 0–2 reused from `LeafletFA_splicevi_baseline/TMS/full_K20_s{0,1,2}_f64`;
+- seeds 3–14 new, fit only (no projections), written to `c8_consensus/fits/full_K20_s{N}_f64`.
+- GPU (b6k allowed), about 0.25 GPU-h each; stop and ask before 6 GPU-h in total.
+- A fit that ends with non-finite φ is excluded. The recurrence denominator is the number of fits that
+  completed; if fewer than 12 complete, stop and report.
+
+**Pooling and clustering.**
+- **Live programs** per fit: argmax of ≥ 1 % of training cells (amendment 2).
+- **Centered ψ** per fit: ψ − π·ψ (π-weighted mean composition), all 79,768 junctions (A70).
+- Pool the centered ψ of all live programs of all fits. Agglomerative clustering, **average linkage,
+  cosine distance (1 − cosine)**, cut at **0.2**: members of a cluster have mean pairwise centered cosine
+  ≥ 0.8, the same threshold as the one-to-one rule.
+- **Seed recurrence** of a cluster = distinct fits contributing ≥ 1 member / number of fits.
+- **Keep clusters with recurrence ≥ 0.6** (≥ 9 of 15).
+- Sensitivity (descriptive; does not change the reading): cuts at 0.1 and 0.3; complete linkage at 0.2.
+
+**Consensus program.**
+- ψ = mean of the members' raw ψ (stays on each ATSE's simplex). A fit with > 1 member in the cluster is
+  averaged first, so each fit has equal weight.
+- π = for each fit, the summed π of its members (0 if absent), averaged over fits, renormalized over the
+  consensus programs.
+- Per-ATSE concentration = median over the fits' learned concentrations (all ≥ 2).
+
+**E-step.** Consensus ψ, π and concentration frozen; δ = number of consensus programs; production E-step
+(3,000 steps, batch 8,192, lr 0.1 decaying to 0.1×) on the 54,694 training cells (`--reference-fit`).
+
+**Report, per consensus program.**
+- seed recurrence, number of members, mean pairwise centered cosine;
+- cell-type usage profile: mean consensus φ per tissue–cell type (types with ≥ 20 cells), top 5 types;
+  fraction of cells whose argmax it is;
+- top 10 junctions, ranked by marker score (check 6 definition: departure of its ψ from the π-weighted
+  mean of the other consensus programs);
+- **within-cluster top-50 Jaccard**: mean pairwise Jaccard between the top-50 marker-junction sets of
+  members from different fits, each member's markers computed in its own fit (check 6 definition).
+
+**Reading (Karin).** "Consensus restores interpretable programs" if **at least 8 consensus programs**
+recur in ≥ 60 % of fits **and** have within-cluster top-50 Jaccard ≥ 0.5. Otherwise the current wording
+stays.
+
+**Pseudobulk check (descriptive; does not change the reading).**
+- **Strongest 3** consensus programs: among those with recurrence ≥ 0.6, highest within-cluster Jaccard
+  (ties: higher recurrence).
+- **Top ATSEs:** for each, rank ATSEs by total-variation distance of its composition from the
+  π-weighted mean of the other consensus programs, 0.5 Σ_j∈e |ψ_kj − ψ̄_j|; the top 10 ATSEs that are
+  testable (below) are tested. Tested junction = the one with the largest |ψ_kj − ψ̄_j| in the ATSE.
+- **Users / non-users:** tissue–cell types (≥ 20 training cells) with mean consensus φ_k ≥ 0.2 /
+  ≤ 0.02; if fewer than 3 users, the top 3 types by mean φ_k.
+- **Pseudobulk samples:** (tissue–cell type × mouse) groups, summed reads, kept at an ATSE if ≥ 20 reads
+  there. An ATSE is testable if ≥ 3 user and ≥ 3 non-user samples are kept.
+- **Test:** two-sided Mann–Whitney U on the tested junction's pseudobulk usage, users vs non-users;
+  Benjamini–Hochberg over all tested ATSEs of the 3 programs. **Concordant** = sign(median users −
+  median non-users) equals sign(ψ_kj − ψ̄_j). **Confirmed** = concordant and q < 0.05.
+- **Null:** 200 random testable ATSEs per program (seeded), a random junction in each, same test; report
+  the fraction with P < 0.05.
+- Caveat stated in advance: samples from the same mouse are not independent across cell types.
+
+Code: `scripts/validation/c8_consensus.py`. Results: `tsv/c8_*`, section "Check 8" in VALIDATION_REPORT.md.
