@@ -92,25 +92,43 @@ def onehot(g, G):
 
 
 class Groups:
-    """precomputed per-group blocks for fast repeated group sums over draws"""
+    """precomputed per-group blocks for fast repeated group sums over draws; mouse codes for the bootstrap (note 3)"""
     def __init__(self, D, rows, g, G):
         self.rows, self.g, self.G = rows, g, G
         self.n = np.bincount(g, minlength=G).astype(np.float64)
         O = onehot(g, G)
         self.O = O
-        self.Rs = np.asarray((O @ D.R[rows]).todense())                          # G x J, read term (draw-free)
+        self.R = D.R[rows].tocsr()
+        self.Rs = np.asarray((O @ self.R).todense())                             # G x J, read term (draw-free)
         Vr = D.V[rows]
         self.idx = [np.flatnonzero(g == k) for k in range(G)]
         self.VT = [Vr[i].T.tocsr() for i in self.idx]                          # ATSE x cells_k
+        mouse = D.mouse[rows]
+        self.mcode = []
+        for i in self.idx:
+            _, c = np.unique(mouse[i], return_inverse=True); self.mcode.append(c)
+        self.n_mice = np.array([c.max() + 1 if len(c) else 0 for c in self.mcode])
 
-    def sums(self, D, phi, psi):
-        """(G x J) sums of rho~ over each group's cells; phi [len(rows) x K], psi [K x J]"""
-        Phis = self.O @ phi
+    def boot_weights(self, rng):
+        """per-row weights: each group's mice resampled with replacement; a cell's weight = draws of its mouse"""
+        w = np.zeros(len(self.rows))
+        for i, c in zip(self.idx, self.mcode):
+            if len(c):
+                w[i] = np.bincount(rng.integers(0, c.max() + 1, c.max() + 1), minlength=c.max() + 1)[c]
+        return w
+
+    def sums(self, D, phi, psi, w=None):
+        """(G x J) (weighted) sums of rho~ over each group's cells, and the weighted cell counts (G,)"""
+        if w is None:
+            Phis = self.O @ phi; Rs = self.Rs; pw = phi; nw = self.n
+        else:
+            pw = phi * w[:, None]; Phis = self.O @ pw
+            Rs = np.asarray((self.O @ sp.diags(w) @ self.R).todense()); nw = self.O @ w
         out = np.empty((self.G, D.J), np.float32)
         for k in range(self.G):
-            A = Phis[k][None, :] - self.VT[k] @ phi[self.idx[k]]               # ATSE x K
-            out[k] = np.einsum("jk,kj->j", A[D.inv], psi) + self.Rs[k]
-        return out
+            A = Phis[k][None, :] - self.VT[k] @ pw[self.idx[k]]                # ATSE x K
+            out[k] = np.einsum("jk,kj->j", A[D.inv], psi) + Rs[k]
+        return out, nw
 
 
 def phi_draw(D, gen):
@@ -125,34 +143,43 @@ def psi_draw(D, gen):
 
 
 def estimates(D, Gr, draws=True, seed=0, delta=None, pairs=()):
-    """point means (G x J), leave-one-group-out means, 95 % intervals of both, and (amendment 6 note 2) the fraction of
-    draws with TV > delta between each group and the rest (P, G x ATSE) and between listed group pairs (dict)"""
+    """Point means (G x J) and leave-one-group-out means from the fit's phi and psi (all cells, unweighted).
+    With draws (amendment 6 notes 2-3): each of S_DRAWS draws is a joint q(phi), q(psi) draw combined with a mouse bootstrap
+    within each group. Returns intervals of the group and rest means and P(TV > delta) (group vs rest; listed pairs) from
+    these combined draws, plus parameter-only intervals (same q draws, no bootstrap) for the coverage comparison.
+    Returns point, rest, iv, ivr, P, Pp, iv_param."""
     n = Gr.n; tot_n = n.sum()
-    S = Gr.sums(D, D.post["phi"][Gr.rows], D.post["psi_mean"])
+    S, _ = Gr.sums(D, D.post["phi"][Gr.rows], D.post["psi_mean"])
     point = S / n[:, None]
     rest = (S.sum(0)[None, :] - S) / (tot_n - n)[:, None]
     if not draws:
-        return point, rest, None, None, None, None
-    gen = torch.Generator().manual_seed(seed)
-    Sd = np.empty((S_DRAWS, Gr.G, D.J), np.float32)
+        return point, rest, None, None, None, None, None
+    gen = torch.Generator().manual_seed(seed); rng = np.random.default_rng(seed + 7)
+    Sb = np.empty((S_DRAWS, Gr.G, D.J), np.float32); Sp = np.empty_like(Sb); Nb = np.empty((S_DRAWS, Gr.G))
     for s in range(S_DRAWS):
-        Sd[s] = Gr.sums(D, phi_draw(D, gen)[Gr.rows], psi_draw(D, gen))
+        ph, ps = phi_draw(D, gen)[Gr.rows], psi_draw(D, gen)
+        Sp[s], _ = Gr.sums(D, ph, ps)
+        Sb[s], Nb[s] = Gr.sums(D, ph, ps, Gr.boot_weights(rng))
         if s % 50 == 0:
             log(f"  draw {s}/{S_DRAWS}")
-    tot = Sd.sum(1)
+    tot_b, ntot_b = Sb.sum(1), Nb.sum(1)                                      # S x J, S
     lo = np.empty((Gr.G, D.J), np.float32); hi = np.empty_like(lo); lo_r = np.empty_like(lo); hi_r = np.empty_like(lo)
+    lo_p = np.empty_like(lo); hi_p = np.empty_like(lo)
     P = np.zeros((Gr.G, D.n_atse), np.float32)
     for k in range(Gr.G):
-        x = Sd[:, k, :] / n[k]; r = (tot - Sd[:, k, :]) / (tot_n - n[k])
+        nk = np.maximum(Nb[:, k], 1e-12)[:, None]
+        x = Sb[:, k, :] / nk; r = (tot_b - Sb[:, k, :]) / (ntot_b - Nb[:, k])[:, None]
         lo[k], hi[k] = np.quantile(x, [0.025, 0.975], axis=0)
         lo_r[k], hi_r[k] = np.quantile(r, [0.025, 0.975], axis=0)
+        lo_p[k], hi_p[k] = np.quantile(Sp[:, k, :] / n[k], [0.025, 0.975], axis=0)
         if delta is not None:
             P[k] = (tv(x, r, D.inv, D.n_atse) > delta).mean(0)
     Pp = {}
     for (i, j) in pairs:
-        Pp[(i, j)] = (tv(Sd[:, i, :] / n[i], Sd[:, j, :] / n[j], D.inv, D.n_atse) > delta).mean(0)
-    del Sd
-    return point, rest, (lo, hi), (lo_r, hi_r), P, Pp
+        Pp[(i, j)] = (tv(Sb[:, i, :] / np.maximum(Nb[:, i], 1e-12)[:, None], Sb[:, j, :] / np.maximum(Nb[:, j], 1e-12)[:, None],
+                         D.inv, D.n_atse) > delta).mean(0)
+    del Sb, Sp
+    return point, rest, (lo, hi), (lo_r, hi_r), P, Pp, (lo_p, hi_p)
 
 
 def tv(a, b, inv, n_atse):
@@ -226,7 +253,7 @@ def run_full(ds, seed):
     json.dump(dict(dataset=ds, delta=delta, q99=float(np.quantile(half_tv[ok], 0.99)), units=int(ok.sum())),
               open(os.path.join(T, f"c10_{tag}_delta.json"), "w"))
     log(f"delta = {delta}")
-    point, rest, iv, ivr, P, _ = estimates(D, Gr, draws=True, seed=seed, delta=delta)
+    point, rest, iv, ivr, P, _, ivp = estimates(D, Gr, draws=True, seed=seed, delta=delta)
     # raw TRAIN pseudobulk with population fallback
     yr, nr = raw_pb(D.Y, D.Ncell, D.inv, allrows, g, G)
     pop = yr.sum(0) / np.maximum(nr.sum(0), 1e-12)
@@ -276,19 +303,25 @@ def run_full(ds, seed):
     pass_101 = bool(a_all.err_leafletfa <= a_all.err_raw and better)
     log(A.round(4).to_string(index=False)); log(f"10.1 {'PASS' if pass_101 else 'FAIL'}")
     cal = []
-    inside = (np.nan_to_num(tpsi) >= iv[0]) & (np.nan_to_num(tpsi) <= iv[1])
+    tp0 = np.nan_to_num(tpsi)
+    inside = (tp0 >= iv[0]) & (tp0 <= iv[1])                                    # parameter + mouse bootstrap (note 3)
+    inside_p = (tp0 >= ivp[0]) & (tp0 <= ivp[1])                                # parameter-only (note 2)
     for k, t in enumerate(types):
         for lo_b, hi_b in ((100, 499), (500, np.inf)):
             u = np.flatnonzero((te_reads[k] >= lo_b) & (te_reads[k] <= hi_b) & (te_cov[k] >= 10))
             j = np.flatnonzero(np.isin(D.inv, u) & (nt[k] > 0))
             if len(j):
-                cal.append(dict(cell_type=t, test_read_bin=f"{lo_b}-{hi_b}", junctions=len(j), inside=int(inside[k, j].sum())))
-    Cl = pd.DataFrame(cal); Cs = Cl.groupby("test_read_bin")[["junctions", "inside"]].sum(); Cs["coverage"] = Cs.inside / Cs.junctions
+                cal.append(dict(cell_type=t, test_read_bin=f"{lo_b}-{hi_b}", junctions=len(j), one_mouse=bool(Gr.n_mice[k] < 2),
+                                inside_bootstrap=int(inside[k, j].sum()), inside_param_only=int(inside_p[k, j].sum())))
+    Cl = pd.DataFrame(cal); Cl.to_csv(os.path.join(OUT, f"{tag}_calibration_by_type.tsv"), sep="\t", index=False)
+    Cs = Cl.groupby("test_read_bin")[["junctions", "inside_bootstrap", "inside_param_only"]].sum()
+    Cs["coverage_bootstrap"] = Cs.inside_bootstrap / Cs.junctions; Cs["coverage_param_only"] = Cs.inside_param_only / Cs.junctions
     Cs.to_csv(os.path.join(T, f"c10_{tag}_calibration.tsv"), sep="\t"); log(Cs.to_string())
     spec, TVr = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta)
     np.savez_compressed(os.path.join(OUT, f"{tag}_estimates.npz"), types=np.array(types), point=point[:-1], rest=rest[:-1],
                         lo=iv[0][:-1], hi=iv[1][:-1], lo_rest=ivr[0][:-1], hi_rest=ivr[1][:-1], reads=reads[:-1], cov=cov[:-1],
-                        cells=Gr.n[:-1], specific=spec, tv=TVr, p_tv=P[:-1], delta=delta)
+                        cells=Gr.n[:-1], n_mice=Gr.n_mice[:-1], specific=spec, tv=TVr, p_tv=P[:-1], delta=delta,
+                        lo_param=ivp[0][:-1], hi_param=ivp[1][:-1])
     # ---- 10.2a/b mouse halves, 10.7 pairwise ----
     mice = np.unique(D.mouse); mA = set(np.random.default_rng(0).permutation(mice)[: len(mice) // 2])
     inA = np.array([m in mA for m in D.mouse])
@@ -297,7 +330,7 @@ def run_full(ds, seed):
 
     def half(mask, labels_g, s, pairs=()):
         rows_ = np.flatnonzero(mask); Gh = Groups(D, rows_, labels_g[rows_], G)
-        p, r, i1, i2, Ph, Pp = estimates(D, Gh, draws=True, seed=s, delta=delta, pairs=pairs)
+        p, r, i1, i2, Ph, Pp, _ = estimates(D, Gh, draws=True, seed=s, delta=delta, pairs=pairs)
         rd, cv = reads_cov(D, rows_, labels_g[rows_], G)
         y_, n_ = raw_pb(D.Y, D.Ncell, D.inv, rows_, labels_g[rows_], G)
         return dict(p=p[:-1], r=r[:-1], P=Ph[:-1], Pp=Pp, reads=rd[:-1], cov=cv[:-1], y=y_, n=n_)
@@ -423,7 +456,7 @@ def run_calls(ds, seed):
     D = Data(ds, seed); types, g = type_setup(D); G = len(types) + 1
     delta = json.load(open(os.path.join(T, f"c10_{ds}_s0_delta.json")))["delta"]
     Gr = Groups(D, np.arange(len(D.t)), g, G)
-    point, rest, iv, ivr, P, _ = estimates(D, Gr, draws=True, seed=seed, delta=delta)
+    point, rest, iv, ivr, P, _, ivp = estimates(D, Gr, draws=True, seed=seed, delta=delta)
     reads, cov = reads_cov(D, np.arange(len(D.t)), g, G)
     spec, _ = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta)
     np.savez_compressed(os.path.join(OUT, f"{ds}_s{seed}_calls.npz"), types=np.array(types), specific=spec)
