@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leafletfa"
-version = "0.1.0"
-description = "Bayesian Beta-Dirichlet Factor Analysis for Single-Cell Splicing"
+version = "0.2.0"   # keep equal to leafletfa.__version__
+description = "LeafletFA: a Dirichlet-multinomial factor model of single-cell splice-junction usage"
 authors = [{name = "Karin Isaev", email = "karin.isaev@gmail.com"}]
 license = {text = "MIT"}
 readme = "README.md"
@@ -19,7 +19,7 @@ dependencies = [
     "scipy>=1.10",
     "numpy>=1.24,<2.0",
     "pandas>=2.0",
-    # Waypoints (used for cell initialization — improves model quality)
+    # Waypoints and the legacy LeafletFA class (not part of the shipped model)
     "scanpy>=1.9",
     "umap-learn>=0.5",
     "scikit-learn>=1.2",
@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# GPU acceleration via Triton kernel (Linux only, requires CUDA)
+# Triton kernel for the legacy LeafletFA class only (Linux, CUDA); the shipped model needs only torch
 gpu = ["triton"]
 # Experiment tracking
 wandb = ["wandb"]
