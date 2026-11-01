@@ -541,3 +541,8 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   condition, mouse-half replication and its permuted null (whose draws also use the combined resampling, within the half).
 - A type observed in one mouse has no between-mouse variation in this bootstrap; such types are flagged in the output.
 - The smoke test (job 22597357, 4 draws) will be cancelled and rerun on this code; its earlier output is not read.
+- **Note 3 addendum (2026-11-01, before any check 10 output was read):** a cell type is **eligible for specificity calls**
+  (10.2 and 10.7, all stages: full data, mouse halves, null permutations, per-seed call sets) only if its TRAIN cells
+  come from **≥ 2 mice** and it has **≥ 1 mouse in each of the two mouse halves** (A and B) used for 10.2a. Ineligible
+  types still get ψ estimates and intervals in the catalog (flagged), but no calls; a pair in 10.7 needs both types
+  eligible. Reported: the number of ineligible types and their TRAIN cells, per dataset.
