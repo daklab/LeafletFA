@@ -1,6 +1,6 @@
 # LeafletFA: Bayesian Factor Analysis for Single-Cell Splicing
 
-LeafletFA is a scalable probabilistic factor model that decomposes sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). The shipped model is a **Dirichlet-multinomial over whole ATSEs** (Alternative Transcript Structure Events): each event's junction counts are modelled jointly against the event total, each program's junction composition lives on a within-ATSE simplex, and a per-ATSE concentration — floored at 2, the measured effective number of RNA molecules behind a Smart-seq2 read pile — carries the overdispersion. It discovers coordinated splicing modules reflecting biological states such as lineage or aging, without pre-defined cell type labels. (The earlier Beta-Dirichlet/BetaBinomial parameterisation remains available as an option.)
+LeafletFA is a scalable probabilistic factor model that decomposes sparse single-cell splicing variation into interpretable, continuous Splicing Programs (SPs). The shipped model is a **Dirichlet-multinomial over whole ATSEs** (Alternative Transcript Structure Events): each event's junction counts are modelled jointly against the event total, each program's junction composition lives on a within-ATSE simplex, and a per-ATSE concentration — floored at 2, a modeling choice that caps how much weight duplicated Smart-seq2 reads carry (the data-measured value is about 1.2 effective molecules per event) — carries the overdispersion. It learns a per-cell splicing representation without cell-type labels. Program-level claims should rest on consensus programs over several seeds plus a pseudobulk check (see `METHODS_LEAFLETFA_CURRENT.md`). (The earlier Beta-binomial parameterization remains available as an option; no reported result uses it.)
 
 **Documentation:** [daklab.github.io/LeafletFA](https://daklab.github.io/LeafletFA/)
 
@@ -25,28 +25,29 @@ Results
 ```python
 from leafletfa import LeafletFAMinibatch
 
-# junc, clus: (cells x junctions) counts; event_id: per-junction ATSE label
-model = LeafletFAMinibatch.dm(junc, clus, K=20, event_id=event_id)
+# junc: (cells x junctions) sparse counts; event_id: per-junction ATSE label (the ATSE totals are derived)
+model = LeafletFAMinibatch.dm(junc, None, K=20, event_id=event_id, conc_min=2.0,
+                              sparse=True, phi_dtype="float64")
+model.fixed_dir_conc = 20     # pin delta = K; a learned delta collapses the loadings
 model.fit(num_steps=16200, subsample_size=8192, lr=0.025, gamma=0.1, early_stop=False)
 psi = model.psi_mean()        # (K x junctions), sums to 1 within each ATSE
 phi = model.phi_mean()        # (cells x K) program activities
 
-# infer phi for NEW cells against a frozen fit (the E-step)
-from leafletfa.estep import infer_phi_minibatch
+# infer phi for NEW cells against a frozen fit (the E-step): build a model on the new cells with .dm(...),
+# then model.freeze_globals(psi=..., pi=..., dir_conc=K, bb_conc=...) and model.infer_phi(num_steps=3000, ...)
 ```
-Or from the command line on a model-ready h5ad:
+Or from the command line (the production driver; resumable, writes a run record):
 ```
-python -m leafletfa.train --h5 data.h5ad --K 20 --seed 0 --out runs/
+python scripts/splicevi_baseline/run_leafletfa_baseline.py --train data.h5mu --K 20 --seed 0 --device cuda --out runs/K20_s0
 ```
-Train every model at K in {10, 20, 30} x 3 seeds and check program replication across seeds
-(Hungarian matching on psi) before interpreting programs. For datasets under ~60k cells at K = 30,
-use `--lr 0.015`.
+Fit several seeds before interpreting programs, and match programs on **centered** ψ (cosine ≥ 0.8 in the other
+seeds); raw ψ is ~0.98 similar for every program. For datasets under ~60k cells at K = 30, use `--lr 0.015`.
 
 ### Key Features
 - **Scalable inference:** Powered by Pyro and Stochastic Variational Inference (SVI) for atlas-scale datasets (200,000+ cells)
 - **Sparsity robust:** Specifically designed to handle the high dropout and sparse coverage inherent in single-cell splicing data
 - **Biologically interpretable:** Learns a "splicing dictionary" where each factor represents a coordinated regulatory program
-- **GPU-accelerated:** Triton-accelerated mini-batch training; CPU mode also supported
+- **GPU-accelerated:** sparse mini-batch training on GPU (about 15 min for 55,000 cells); CPU mode also supported
 
 ### Compatibility
 LeafletFA is optimized for full-length transcript sequencing (e.g., Smart-Seq2) which provides the internal junction coverage necessary for alternative splicing analysis.
@@ -211,7 +212,7 @@ adata.layers["cell_by_cluster_matrix"] = sp.csr_matrix(cluster)
 ---
 
 ## Development roadmap
-- [x] Implement Beta-Dirichlet factor model (LeafletFA)
+- [x] Implement the factor model (first Beta-binomial, now the Dirichlet-multinomial LeafletFA)
 - [x] Support for cross-species transfer learning
 - [x] GPU-accelerated mini-batch training
 - [x] pip-installable package
