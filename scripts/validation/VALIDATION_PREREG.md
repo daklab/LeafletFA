@@ -361,3 +361,110 @@ to the supplement. Otherwise DS stays out of the main text.
 
 Code: `scripts/validation/c9_ds_seeds.py` (9a), `c9_ds_null.py` (9b). Results: `tsv/c9_*`, section "Check 9" in
 VALIDATION_REPORT.md.
+
+### Amendment 5a (2026-11-01, before computation) — deviation from amendment 5: 9a repeated on the GB Fig. 3c setting
+
+**Reason.** Amendment 5 chose its 5 contrasts by GB Fig. 3b **LRT** counts; four of them had 0 gated **posterior** calls in
+GB Fig. 3c, so 9a tested the posterior test where it was already known to be silent. It also ran the test with settings
+that differ from GB Fig. 3c: TMS-only fits instead of the pooled-atlas fits; q computed after the coverage gate (over the
+gated ATSEs only) instead of over all 24,475 ATSEs before gating.
+
+**Repeat (9a′).**
+- **Fits:** the pooled-atlas K20 fits the test was designed for (`ATLAS_DM/runs_final_deltaonly/dm_simplex_K20_seed{0,1,2}_b8192`),
+  the 3 seeds available.
+- **Test and settings exactly as GB Fig. 3c:** the existing per-seed A51 outputs (`LEAFCUTTER_CMP_DELTAONLY/a51_delta0.15`,
+  `a51_seed1_delta0.15`, `a51_seed2_delta0.15`; δ = 0.15, 200 draws, ≥ 50 cells per arm, Bayesian FDR over all ATSEs),
+  then the A67 gate (≥ 25 covered cells per arm, from `analysis_matched/posterior_consensus_gated.tsv.gz`). No re-run of
+  the test: these are the shipped call sets.
+- **Contrasts:** the 5 with the most gated consensus calls in GB Fig. 3c.
+- **Report:** per contrast, each seed's gated call set (q ≤ 0.05 and gate) and the pairwise Jaccard (3 pairs); the
+  fraction of seed-0 calls called in both other seeds; Pearson r of per-cell ρ = φ·ψ between seeds over all cells of the
+  two arms and the junctions of the called events (union over seeds).
+- **Pass:** median pairwise Jaccard ≥ 0.7 (as in amendment 5).
+- The amendment 5 result (9a on TMS-only fits) stands as recorded. If 9a′ passes, DS is reproducible on the atlas fits in
+  the GB setting, not on the TMS-only fits.
+
+Code: `scripts/validation/c9_ds_atlas.py`. Results: `tsv/c9a2_*`.
+
+## Amendment 6 (2026-11-01, before any computation) — check 10: the cell-type-resolved splicing catalog, and benchmarks
+
+**Question:** is LeafletFA's cell-type-resolved junction usage (ψ per ATSE × cell type, with an interval) more accurate
+than raw pseudobulk, calibrated, and are its cell-type-specific calls reproducible? This is the paper's resource
+(Karin, 2026-11-01). CPU only; existing K20 fits; TMS-only and Allen-only 70/30 splits.
+
+**Cell types.**
+- TMS: `tissue_cell_type` (144; types with ≥ 10 TRAIN cells are used).
+- Allen: **subclass** = `cell_ontology_class` with its numeric cluster prefix removed (`168_L2/3 IT CTX` → `L2/3 IT CTX`);
+  types with ≥ 10 TRAIN cells. (The model-ready files have no separate subclass column; this is the Allen cluster's
+  subclass name.)
+- Fits: TMS seeds 0–14 (check 8), Allen seeds 0–2. Primary estimates use seed 0; seeds are used only for 10.2c.
+
+**Estimator (LeafletFA cell-type ψ).** For cell type t and junction j: the mean over t's TRAIN cells of the per-cell
+posterior-mean usage ρ̃_cj = (γ_e ρ_cj + y_cj) / (γ_e + N_ce), with ρ = φψ (cells with no reads at e contribute their
+prior ρ_cj). **Interval:** 2.5–97.5 % over 200 joint draws from q(ψ) and q(φ) (read from the fit checkpoint), each draw
+giving the type mean of ρ̃; γ_e at its fitted value.
+**Comparator (raw pseudobulk).** Σ_c y_cj / Σ_c N_ce over t's TRAIN cells; where t has 0 TRAIN reads at e, the TRAIN
+population ψ (all cells).
+
+### 10.1 Estimation accuracy (against TEST pseudobulk)
+- **Units:** (ATSE e, type t) with ≥ 20 TEST reads at e and ≥ 3 TEST cells covering e, in types with ≥ 10 TRAIN and ≥ 5
+  TEST cells.
+- **Error:** total variation between the estimate and the TEST pseudobulk composition, ½ Σ_{j∈e} |ψ̂_tj − ψ^TEST_tj|.
+- **Bins:** type size by TRAIN cells (10–49, 50–199, 200–999, ≥ 1,000) and TRAIN reads at (e, t) (0, 1–19, 20–99,
+  ≥ 100). Report mean error per method per bin, and the paired difference (LeafletFA − raw) with a 95 % bootstrap CI
+  over cell types (1,000 resamples).
+- **Pass (Karin's rule):** overall mean error of LeafletFA ≤ raw pseudobulk, **and** LeafletFA better (CI of the paired
+  difference entirely below 0) in the smallest type-size bin **or** the lowest-read bin with ≥ 1 read (1–19). Separately
+  reported: the 0-read bin (raw falls back to the population ψ there).
+
+### 10.2 Cell-type-specific splicing calls
+- **Leave-one-type-out reference ψ_−t:** the same estimator over all TRAIN cells not in t (same draws).
+- **δ from the data:** split each type's TRAIN cells in half within each mouse (seed 0) and compute TV between the two
+  halves' LeafletFA estimates for every (e, t) unit of 10.1's coverage rule applied to TRAIN; **δ = the 99th percentile,
+  rounded up to the next 0.05** (one δ per dataset, reported).
+- **Call:** (e, t) is specific if the point TV between ψ_t and ψ_−t exceeds δ **and** for at least one junction j of e
+  the 95 % intervals of ψ_tj and ψ_−t,j do not overlap. Only units with ≥ 20 TRAIN reads and ≥ 3 covering TRAIN cells
+  in t are callable (no calls from the prior alone).
+- **10.2a Replication across mice:** mice split at random into halves A and B (seed 0; Allen donors likewise). Calls
+  made with half-A cells (same fit; estimator restricted to A's cells); confirmed in half B if (i) the same rule holds
+  on B's cells, and, model-free, (ii) B's raw pseudobulk TV between t and the rest exceeds δ/2 with the same sign at the
+  call's most different junction. Report the fraction confirmed under (i) and (ii).
+- **10.2b Null:** the same confirmation after permuting cell-type labels among B's cells within each mouse (20
+  permutations); report the null confirmation fraction. Pass: confirmed fraction (ii) ≥ 0.5 and ≥ 5× the null.
+- **10.2c Across seeds:** call sets per seed (all TRAIN cells), pairwise Jaccard (TMS 105 pairs, Allen 3). Reported;
+  pass: median Jaccard ≥ 0.7 (same bar as check 9).
+
+### 10.3 Interval calibration
+- Units of 10.1 with ≥ 100 TEST reads and ≥ 10 covering TEST cells: the fraction of junctions whose TEST pseudobulk ψ
+  falls inside the LeafletFA 95 % interval, by TEST-read bin (100–499, ≥ 500). TEST pseudobulk is itself noisy, so
+  coverage is reported, not thresholded; nominal 0.95.
+
+### 10.4 Known biology (each stated before looking)
+- ***Fgfr2* IIIb/IIIc (TMS):** every epithelial type (keyword list as in `build_fgfr2_example.py`) has a higher IIIb
+  usage estimate than every mesenchymal type; and the catalog flags IIIb as specific in ≥ 1 epithelial type.
+- ***Ptprc* (TMS):** at least one *Ptprc* ATSE is flagged specific in a lymphoid type (B or T cells), with the direction
+  confirmed in TEST pseudobulk.
+- ***Nrxn1–3* SS4 (Allen):** for each of *Nrxn1*, *Nrxn2*, *Nrxn3*, the ATSE containing the SS4 alternative exon
+  (identified by annotation before looking at usage); at least two neuronal subclasses differ by more than δ with
+  non-overlapping intervals. Reported per gene.
+
+### 10.5 Export
+- The catalog table: event id, gene, junctions (coordinates), annotation status; per (event, type): ψ per junction,
+  interval, TRAIN cells, TRAIN cells covering, TRAIN reads, specific flag, ψ_−t and TV. One table per dataset, in the
+  Zenodo export script; the portal is built from it.
+
+### 10.6 Benchmarks (descriptive; no claims beyond the measured numbers)
+- **Hardware:** recorded per run (CPU model and cores, GPU model).
+- **LeafletFA:** fit wall-clock and peak host/GPU memory at TMS size (from the production run records and logs) and at
+  atlas size (pooled 132,706 cells, one K20 fit, sparse float64, GPU, if Karin approves ~0.5 GPU-h; else the existing
+  dense atlas fit's log, labeled as such); E-step for new cells (TMS TEST, existing records).
+- **scQuint** on the same TMS TRAIN data (CPU or GPU as its defaults; settings from the SpliceVI §170 run).
+- **LeafletSC** (original Leaflet) on TMS TRAIN, if it still installs and runs; otherwise reported as not runnable.
+- **LeafCutter** producing the same cell type × event catalog: one-vs-rest pseudobulk run per cell type; total wall
+  clock and peak memory.
+
+**Reading.** If 10.1 and 10.2 (a/b) pass, the paper is an Original Paper with the catalog as its resource; otherwise
+an Application Note. 10.2c, 10.3, 10.4 and 10.6 are reported, not gating.
+
+Code: `scripts/validation/c10_catalog.py`, `c10_benchmark.py`. Results: `tsv/c10_*`, section "Check 10" in
+VALIDATION_REPORT.md.

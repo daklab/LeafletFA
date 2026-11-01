@@ -394,8 +394,18 @@ covered cells per arm), 5 GB Fig. 3b contrasts chosen by GB LRT call count (all 
 heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits each).
 - **LeafletFA: 0 calls in all 100 splits** (6,300–12,800 ATSEs tested per split; maximum P(TV > 0.15) = 0). False-call
   rate 0 in every type: **passes**, but only because the test calls almost nothing in any within-tissue contrast.
-- **LeafCutter** on the same splits (one pseudobulk per mouse and arm, 13–15 vs 13–15 samples): running (array
-  22596857); fraction of clusters with p < 0.05 and with BH q < 0.05 will be added here.
+- **LeafCutter** on the same splits (one pseudobulk per mouse and arm, 13–15 vs 13–15 samples, 100 runs, array
+  22596857): **12.0–14.3 % of tested clusters at p < 0.05** (nominal 5 %) and **1.0–1.7 % at BH q < 0.05**, i.e. about
+  100–140 false calls per split (6,400–11,100 clusters tested), in every one of the 5 types. Anti-conservative on this
+  null, where LeafletFA makes no calls.
+
+| Cell type | LeafletFA false-call rate | LeafCutter p < 0.05 | LeafCutter q < 0.05 |
+|---|---|---|---|
+| Microglia | 0 | 0.120 | 0.010 |
+| Heart cardiac muscle | 0 | 0.134 | 0.017 |
+| Heart fibroblast | 0 | 0.133 | 0.014 |
+| Skin basal | 0 | 0.142 | 0.013 |
+| Skin keratinocyte | 0 | 0.143 | 0.014 |
 
 **What this means for the paper**
 - The shipped posterior DS test at δ = 0.15 is calibrated but very conservative: it is silent on within-tissue
@@ -406,3 +416,25 @@ heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits
 - Not tested here: the LRT (group design), which is what produced GB Fig. 3b's counts. Making it a figure would need
   its own pre-registered seed and null check.
 - Code: `scripts/validation/c9_lib.py`, `c9_ds_seeds.py`, `c9_ds_null.py` (LeafletFA `leafletfa-validation`, a4e6c7f).
+
+### Check 9a′ (amendment 5a): the GB Fig. 3c setting
+
+- **Why:** amendment 5's contrasts were chosen by LRT counts, and four of them had 0 gated posterior calls in GB Fig. 3c.
+  Its settings also differed from GB's (TMS-only fits; q after the gate).
+- **Setting:** the shipped GB call sets (pooled-atlas K20 seeds 0–2, q over all ATSEs, then the ≥ 25-cell gate), on the
+  5 contrasts with the most gated consensus calls.
+
+| Contrast (GB gated consensus calls) | Calls per seed (0 / 1 / 2) | Pairwise Jaccard | Seed-0 calls in both other seeds | Per-cell ρ r |
+|---|---|---|---|---|
+| Brain endothelial vs oligodendrocyte (744) | 818 / 786 / 673 | 0.59–0.70 (median 0.63) | 0.63 | 0.95 |
+| Brain oligodendrocyte vs pericyte (410) | 419 / 423 / 372 | 0.63–0.82 (0.63) | 0.70 | 0.92 |
+| Heart cardiac muscle vs monocyte (369) | 345 / 451 / 292 | 0.28–0.55 (0.42) | 0.39 | 0.95 |
+| Heart endothelial vs fibroblast (345) | 413 / 377 / 329 | 0.41–0.53 (0.51) | 0.46 | 0.94 |
+| Heart fibroblast vs monocyte (330) | 321 / 349 / 228 | 0.30–0.58 (0.47) | 0.36 | 0.91 |
+
+- **Median pairwise Jaccard 0.548 over 15 pairs: FAIL** (pass needed ≥ 0.7).
+- Where the test calls hundreds of events, about half reproduce between two seeds: 36–70 % of seed-0 calls are called by
+  both other seeds.
+- Per-cell ρ over the called events' junctions correlates at 0.91–0.97 across seeds, lower than check 9a's 0.998 over
+  all tested junctions: called events are where the seeds differ most.
+- **Reading unchanged:** DS stays out of the paper. Code: `scripts/validation/c9_ds_atlas.py`; tables `tsv/c9a2_*`.
