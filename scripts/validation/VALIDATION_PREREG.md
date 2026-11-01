@@ -527,3 +527,17 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   permuted null is unchanged. In the null permutations the same rule is applied.
 - The smoke-test output (job 22597339, 4 draws) is not read before this note is committed; it is used only to check that
   the code runs.
+
+### Amendment 6, note 3 (2026-11-01, before any check 10 output was read, including the smoke test)
+- **Mouse bootstrap added to every draw (Karin).** In each of the 200 draws, together with the joint q(φ), q(ψ) draw, each
+  cell type's mice are resampled with replacement (within type; the "other cells" group likewise); the type's ψ is the
+  mean of ρ̃ over the cells of the resampled mice, each cell weighted by how often its mouse was drawn. The
+  leave-one-type-out reference uses the same draw's weights for all other cells.
+- **Applies to:** cell-type ψ intervals; P(TV > δ) in 10.2 and 10.7 (per-draw TV from these combined draws); 10.3
+  coverage. Point estimates are unchanged (fit's φ and ψ, all cells, no resampling).
+- **Coverage reported both ways:** parameter-only intervals (q(φ), q(ψ) draws, no bootstrap, as in note 2) and
+  parameter + mouse-bootstrap intervals, side by side, so the difference is visible.
+- **Unchanged:** δ (99th percentile of within-type split-half TV, point estimates, computed first), the read/cell
+  condition, mouse-half replication and its permuted null (whose draws also use the combined resampling, within the half).
+- A type observed in one mouse has no between-mouse variation in this bootstrap; such types are flagged in the output.
+- The smoke test (job 22597357, 4 draws) will be cancelled and rerun on this code; its earlier output is not read.
