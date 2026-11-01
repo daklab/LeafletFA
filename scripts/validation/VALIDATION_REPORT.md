@@ -439,3 +439,21 @@ heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits
 - Per-cell ρ over the called events' junctions correlates at 0.91–0.97 across seeds, lower than check 9a's 0.998 over
   all tested junctions: called events are where the seeds differ most.
 - **Reading unchanged:** DS stays out of the paper. Code: `scripts/validation/c9_ds_atlas.py`; tables `tsv/c9a2_*`.
+
+### Check 9a′ — POST HOC, descriptive (amendment 5b; the pre-registered result above stands)
+
+Same 5 contrasts, 3 atlas seeds, gated ATSEs (`tsv/c9a3_*`, `c9_ds_atlas_posthoc.py`).
+
+| Measure | Median | Range (pairs × contrasts) |
+|---|---|---|
+| Spearman of per-event effect (TV) between seeds, all gated ATSEs | 0.86 | 0.72–0.95 |
+| Spearman of posterior probability between seeds | 0.75 | 0.48–0.89 |
+| Relaxed replication: called in A → q < 0.2 and same sign in B | 0.75 | 0.37–0.94 |
+| Sign agreement at the lead junction, events called in both seeds | 0.99 | 0.90–1.00 |
+| Fraction of a seed's calls in the ≥ 2-of-3 consensus set | — | 0.70–0.94 |
+
+- The effect ranking agrees between seeds, and events called in two seeds agree in direction about 99 % of the time.
+- What does not reproduce is the threshold crossing: a quarter of calls (median) are not even at q < 0.2 in another seed.
+- Brain contrasts reproduce better than heart contrasts on every measure.
+- The August consensus rule (≥ 2 of 3) keeps 70–94 % of each seed's calls; its stability cannot be tested with 3 seeds.
+- Descriptive only: no claim is made from these numbers beyond what the pre-registered test showed.

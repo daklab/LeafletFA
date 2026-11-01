@@ -477,3 +477,32 @@ VALIDATION_REPORT.md.
   the two conflict, so **the Allen part of check 10 waits for Karin's confirmation**; TMS proceeds.
 - **Atlas-size LeafletFA benchmark fit approved** (Karin, 2026-11-01): ≤ 0.5 GPU-h, b6k, pooled 132,706 cells, K20,
   production recipe.
+- **Atlas benchmark scope (before submitting):** a full 16,200-step fit at 132,706 cells is estimated at ~1.1–1.3 GPU-h
+  (from 0.05 s/step TMS, 0.14 s/step Allen), above the 0.5 GPU-h approved. So the benchmark runs **2,000 steps** on a
+  b6k card (`--fit-steps 2000 --no-md5`, otherwise the production recipe), recording s/step and peak host/GPU memory;
+  the full-fit time is reported as s/step × 16,200, labeled as extrapolated. A full fit only with further approval.
+
+### Amendment 5b (2026-11-01, before computation) — check 9a′ post hoc, descriptive
+Labeled post hoc in the report; the pre-registered 9a′ Jaccard result (0.548, fail) stands. Same 5 contrasts and 3 atlas
+seeds, shipped A51 outputs, gated ATSEs (A67 gate):
+- Spearman correlation between seeds of per-event effect (A51 `tv`) and of posterior probability (`prob_de`), over all
+  gated ATSEs of each contrast (3 seed pairs × 5 contrasts).
+- Relaxed replication: of the events called in seed A (q ≤ 0.05), the fraction with q < 0.2 in seed B **and** the same
+  sign of Δψ at seed A's lead junction (largest |Δψ_j|, Δψ_j = (φ̄_1 − φ̄_2)·ψ_j from each seed's point estimates).
+- Sign agreement of Δψ at the lead junction for events called in both seeds of a pair.
+- The August consensus rule (called in ≥ 2 of 3 seeds): not re-testable for stability with only 3 seeds, so reported as
+  the fraction of each seed's calls that are in the consensus set, and the consensus set's size per contrast.
+Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
+
+### Amendment 6, extension 1 (2026-11-01, before any check 10 computation) — pairwise cell-type comparisons (10.7)
+- **Contrasts:** the 70 GB Fig. 3b/3c TMS tissue–cell-type pairs (`a50_contrast_comparison.tsv`) with both types having
+  ≥ 10 TRAIN cells in the TMS-only split.
+- **Rule (as 10.2):** an (event, pair) is called if the point TV between the two types' LeafletFA cell-type ψ exceeds
+  δ (10.2's data-derived δ) **and** at ≥ 1 junction the two 95 % intervals do not overlap; callable only with ≥ 20 TRAIN
+  reads and ≥ 3 covering cells in **each** type.
+- **Validation (as 10.2a/b):** calls on mouse half A; confirmed in half B (i) by the same rule on B's cells and,
+  model-free, (ii) by B's raw pseudobulk TV between the two types > δ/2 with the same sign at the lead junction; null: 20
+  within-mouse permutations of the two types' labels in B. **Pass:** confirmed fraction (ii) ≥ 0.5 and ≥ 5× the null,
+  pooled over the 70 pairs (per-pair values reported).
+- **If it passes,** the portal offers pairwise comparison computed client-side from the stored ψ and intervals with the
+  same rule; if not, the portal shows ψ and intervals side by side without a call.
