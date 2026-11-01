@@ -546,3 +546,6 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   come from **≥ 2 mice** and it has **≥ 1 mouse in each of the two mouse halves** (A and B) used for 10.2a. Ineligible
   types still get ψ estimates and intervals in the catalog (flagged), but no calls; a pair in 10.7 needs both types
   eligible. Reported: the number of ineligible types and their TRAIN cells, per dataset.
+- **Note 1 update, benchmark scope (Karin, 2026-11-01; check 10 rules unchanged):** 10.6 benchmarks LeafletFA against
+  **scQuint and the LeafCutter cell type × event catalog only**. LeafletSC (the original Leaflet) is dropped. LeafletFA
+  fit (TMS and atlas size) and E-step timings as before.
