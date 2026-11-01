@@ -312,3 +312,52 @@ stays.
 - Caveat stated in advance: samples from the same mouse are not independent across cell types.
 
 Code: `scripts/validation/c8_consensus.py`. Results: `tsv/c8_*`, section "Check 8" in VALIDATION_REPORT.md.
+
+## Amendment 5 (2026-11-01, before any computation) — check 9: is differential splicing reproducible and calibrated?
+
+**Question:** can LeafletFA's differential-splicing test be a main figure (Bioinformatics Fig. 3)? CPU only, no new
+training. Fits: the 15 TMS K20 fits of check 8 (seeds 0–2 from `LeafletFA_splicevi_baseline/TMS/`, seeds 3–14 from
+`c8_consensus/fits/`), training cells only (54,694). Posterior parameters (q(ψ) and q(φ) loc and scale) are read from each
+fit's `checkpoint.pt` (step 16,199, the final step), since `fit.npz` stores only point estimates.
+
+**The shipped test** (A51 as used for GB Fig. 3, `analysis_matched`):
+- Δ_j = Δφ̄ · ψ_:,j per posterior draw, 200 draws of ψ and of the group-mean φ difference;
+- TV = ½ Σ_{j∈e} |Δ_j| per draw; P(TV > δ) with **δ = 0.15**; Bayesian FDR (running mean of 1 − P); call at **q ≤ 0.05**;
+- coverage gate: an ATSE is tested only if **≥ 25 cells in each arm** have ≥ 1 read on it (A67).
+
+**9a. Reproducibility across seeds.**
+- **Contrasts:** from GB Fig. 3b's 70 TMS tissue–cell-type contrasts
+  (`LEAFCUTTER_CMP_DELTAONLY/analysis_group/a50_contrast_comparison.tsv`, column `lfa_cal` = calls at matched FDP), keep
+  those whose two arms each have ≥ 50 training cells in the TMS-only split; rank by `lfa_cal`; take the contrasts at the
+  minimum, 25th percentile, median, 75th percentile and maximum (nearest rank). 5 contrasts.
+- Run the shipped test with each of the 15 fits (same draws seed, 0).
+- **Report:**
+  - pairwise Jaccard of the gated call sets (105 fit pairs × 5 contrasts), median and range per contrast;
+  - the fraction of seed-0 calls called in ≥ 12 of 15 fits;
+  - for tested ATSEs, the cross-seed correlation of per-cell ψ (ρ_cj = φ_c · ψ_:,j) over the contrast's cells and the
+    tested ATSEs' junctions: Pearson r per fit pair, median.
+- **Pass:** median pairwise Jaccard (over all fit pairs and contrasts) **≥ 0.7**. The other two numbers are reported, not
+  thresholded.
+
+**9b. Calibration on a real-data null.**
+- **Cell types:** the 5 TMS tissue–cell types with the most mice having ≥ 10 training cells (ties: more cells); a type
+  needs ≥ 8 such mice. Only those mice's cells are used.
+- **Splits:** within each mouse, the type's cells are shuffled and split in half (odd cell to arm A), so both arms have
+  the same mice. 20 splits per type (seeds 0–19). Every call is false.
+- **LeafletFA:** the shipped test (seed-0 fit). Report per split: ATSEs tested (gate as above), calls; **false-call rate =
+  calls / tested**; per type: mean over splits and the fraction of splits with ≥ 1 call. The test is an FDR procedure, so
+  on an all-null set the target is no calls; nominal is 0.05.
+- **LeafCutter** on the same splits: pseudobulk = one sample per (mouse, arm), summed junction counts; `leafcutter-ds`
+  as in GB (`08_leafcutter_ds/05_permutation_null_leafcutter.py`: min 4 samples per group and per intron), no covariates
+  (both arms have the same mice). Report the fraction of tested clusters with p < 0.05 (nominal 0.05) and with BH
+  q < 0.05 (target 0).
+- **Pass (LeafletFA):** mean false-call rate **≤ 0.05 in each of the 5 types**. LeafCutter's numbers are reported, not
+  thresholded.
+
+**Reading (Karin's rule):** if 9a and 9b both pass, differential splicing may be main Fig. 3 and simulation recovery moves
+to the supplement. Otherwise DS stays out of the main text.
+
+**Not run:** the GB simulation vs NMF (dropped from the Bioinformatics paper; Karin, 2026-11-01).
+
+Code: `scripts/validation/c9_ds_seeds.py` (9a), `c9_ds_null.py` (9b). Results: `tsv/c9_*`, section "Check 9" in
+VALIDATION_REPORT.md.
