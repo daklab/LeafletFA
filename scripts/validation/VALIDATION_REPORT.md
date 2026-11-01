@@ -360,3 +360,49 @@ Pre-registered before any fit (VALIDATION_PREREG.md, amendment 4). 2026-10-30.
 - The brain and epithelial consensus programs (CP1, CP3) are the best-supported program-level examples:
   they recur in 15/15 and 11/15 fits and their top ATSEs are confirmed by pseudobulk tests.
 - Code: `scripts/validation/c8_consensus.py`, `c8_estep.sh` (LeafletFA `leafletfa-validation`, c1d24fd).
+
+## Check 9 — is differential splicing reproducible and calibrated? (amendment 5; `tsv/c9*`)
+
+Pre-registered before computation (VALIDATION_PREREG.md, amendment 5). 2026-11-01. CPU only, the 15 TMS K20 fits of
+check 8; q(ψ) and q(φ) read from each fit's checkpoint (verified: the checkpoint's ψ median equals the saved ψ).
+
+**Reading: 9a FAILS. Differential splicing cannot be main Fig. 3; simulation recovery stays.**
+
+**9a. Reproducibility across 15 seeds.** Shipped posterior test (δ = 0.15, 200 draws, Bayesian FDR q ≤ 0.05, ≥ 25
+covered cells per arm), 5 GB Fig. 3b contrasts chosen by GB LRT call count (all 70 contrasts were eligible).
+
+| Contrast (GB Fig. 3b LRT calls) | ATSEs tested | Calls, seed 0 | Calls across fits | Pairwise Jaccard | Per-cell ψ r across seeds |
+|---|---|---|---|---|---|
+| Marrow NK vs T (188) | 3,366 | 0 | 0 in all 15 | undefined (no calls) | 0.999 |
+| Skin basal vs epithelial (509) | 8,370 | 0 | 0 in all 15 | undefined | 0.999 |
+| Marrow granulocyte vs T (833) | 4,046 | 0 | 0–105 (calls in 5 of 15 fits) | median 0.0, max 0.6 | 0.998 |
+| Tongue basal vs keratinocyte (1,239) | 11,124 | 0 | 0 in all 15 | undefined | 0.998 |
+| Marrow B vs HSPC (2,954) | 11,628 | 1 | 0–150 (median 14) | median 0.0, max 0.6 | 0.998 |
+
+- **Median pairwise Jaccard over the fit pairs where any call exists: 0.0** (pass needed ≥ 0.7). Fraction of seed-0
+  calls found in ≥ 12 of 15 fits: 0 (one seed-0 call in total).
+- **The per-cell imputed values are reproducible; the calls are not.** ρ = φ·ψ correlates at r 0.996–0.9996 across all
+  105 fit pairs and 5 contrasts. The posterior TV of most ATSEs sits far below δ = 0.15 (median 0.001–0.012; 99th
+  percentile 0.01–0.10), so the few calls are events whose TV lands just above δ in one fit and just below in another.
+- **Not a reimplementation artifact.** The GB atlas run of the same test (`LEAFCUTTER_CMP_DELTAONLY/a51_delta0.15`)
+  also called 0 in three of these five contrasts (130 and 141, ungated, in the two marrow contrasts), with the same TV
+  distributions.
+- **What GB Fig. 3b counted was the LRT** (A49, group design), not the posterior test; the LRT was not part of this
+  pre-registration.
+
+**9b. Calibration on a real-data null** (5 cell types: heart cardiac muscle, microglia, skin keratinocyte, skin basal,
+heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits each).
+- **LeafletFA: 0 calls in all 100 splits** (6,300–12,800 ATSEs tested per split; maximum P(TV > 0.15) = 0). False-call
+  rate 0 in every type: **passes**, but only because the test calls almost nothing in any within-tissue contrast.
+- **LeafCutter** on the same splits (one pseudobulk per mouse and arm, 13–15 vs 13–15 samples): running (array
+  22596857); fraction of clusters with p < 0.05 and with BH q < 0.05 will be added here.
+
+**What this means for the paper**
+- The shipped posterior DS test at δ = 0.15 is calibrated but very conservative: it is silent on within-tissue
+  contrasts, and where it does call, the calls do not reproduce across seeds. Differential splicing stays out of the
+  main text.
+- The reproducible part is the per-cell imputed usage (r ≈ 0.998 across seeds), which is what the paper's per-cell
+  claims already rest on.
+- Not tested here: the LRT (group design), which is what produced GB Fig. 3b's counts. Making it a figure would need
+  its own pre-registered seed and null check.
+- Code: `scripts/validation/c9_lib.py`, `c9_ds_seeds.py`, `c9_ds_null.py` (LeafletFA `leafletfa-validation`, a4e6c7f).
