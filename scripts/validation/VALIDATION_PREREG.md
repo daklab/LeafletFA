@@ -506,3 +506,24 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   pooled over the 70 pairs (per-pair values reported).
 - **If it passes,** the portal offers pairwise comparison computed client-side from the stored ψ and intervals with the
   same rule; if not, the portal shows ψ and intervals side by side without a call.
+
+### Amendment 6, note 2 (2026-11-01, before any check 10 result was read, including the smoke test)
+- **Allen cell types (Karin):** option (a), the SpliceVI §111 subclass labels (cluster number removed; 70 subclasses,
+  68 with ≥ 10 TRAIN cells). The Allen part proceeds.
+- **Atlas benchmark (Karin):** the full 16,200-step atlas fit is approved (~1.3 GPU-h, b6k); the 2,000-step timing run is
+  kept as well.
+- **What the 200 draws sample (stated from `c10_catalog.py` as written, before results):** each draw is one joint draw
+  of φ for all TRAIN cells from q(φ) and of every program's ψ_k from q(ψ) (the fit's variational posterior); y, N and
+  γ_e are fixed. Given that draw, each cell's posterior-mean usage ρ̃_cj = (γ_e ρ_cj + y_cj)/(γ_e + N_ce) is computed
+  deterministically and averaged over the type's cells. There is no per-cell Dirichlet-multinomial sampling of the
+  cell's own composition and no bootstrap over cells. The cell-type interval is the 2.5–97.5 % quantile of that type
+  mean across the 200 draws; it reflects model-parameter uncertainty only, not cell sampling. The leave-one-type-out
+  reference is formed the same way from the same draws.
+- **10.2 and 10.7 rule amended (Karin):** "intervals do not overlap" is replaced by **P(TV > δ) ≥ 0.95**, where TV is
+  computed per draw between the cell type and the rest (10.2) or between the two types (10.7), from the same draws, and
+  P is the fraction of the 200 draws with TV > δ. The amended call is: point TV > δ **and** P(TV > δ) ≥ 0.95 **and** the
+  read/cell condition (unchanged). δ stays the 99th
+  percentile of within-type split-half TV (computed first, from point estimates), and mouse-half replication with the
+  permuted null is unchanged. In the null permutations the same rule is applied.
+- The smoke-test output (job 22597339, 4 draws) is not read before this note is committed; it is used only to check that
+  the code runs.
