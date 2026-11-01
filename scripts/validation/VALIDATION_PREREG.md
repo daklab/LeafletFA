@@ -468,3 +468,12 @@ an Application Note. 10.2c, 10.3, 10.4 and 10.6 are reported, not gating.
 
 Code: `scripts/validation/c10_catalog.py`, `c10_benchmark.py`. Results: `tsv/c10_*`, section "Check 10" in
 VALIDATION_REPORT.md.
+
+### Amendment 6, note 1 (2026-11-01, before any check 10 computation)
+- **Allen cell types (Karin: use the SpliceVI §111 subclass labels).** SpliceVI STAGE5 §111 (`audit_2026_09/stage5_s111_score.py`
+  line 21) defines subclass as `cell_ontology_class` with the leading cluster number removed (`168_L2/3 IT CTX` →
+  `L2/3 IT CTX`), read from the model-ready obs, not joined from separate Allen metadata. That is the definition above:
+  380 clusters → 70 subclasses, 68 with ≥ 10 TRAIN cells. Karin's instruction also said "do not strip cluster numbers";
+  the two conflict, so **the Allen part of check 10 waits for Karin's confirmation**; TMS proceeds.
+- **Atlas-size LeafletFA benchmark fit approved** (Karin, 2026-11-01): ≤ 0.5 GPU-h, b6k, pooled 132,706 cells, K20,
+  production recipe.

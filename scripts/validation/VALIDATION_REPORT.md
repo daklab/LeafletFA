@@ -393,7 +393,8 @@ covered cells per arm), 5 GB Fig. 3b contrasts chosen by GB LRT call count (all 
 **9b. Calibration on a real-data null** (5 cell types: heart cardiac muscle, microglia, skin keratinocyte, skin basal,
 heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits each).
 - **LeafletFA: 0 calls in all 100 splits** (6,300–12,800 ATSEs tested per split; maximum P(TV > 0.15) = 0). False-call
-  rate 0 in every type: **passes**, but only because the test calls almost nothing in any within-tissue contrast.
+  rate 0 in every type: passes the pre-registered rule. **Wording for the paper (Karin, 2026-11-01):** "LeafCutter is anti-conservative on mouse-split nulls; LeafletFA's posterior test made no calls, consistent with its conservative behavior". Not
+  to be described as LeafletFA being calibrated: the test calls almost nothing in any within-tissue contrast.
 - **LeafCutter** on the same splits (one pseudobulk per mouse and arm, 13–15 vs 13–15 samples, 100 runs, array
   22596857): **12.0–14.3 % of tested clusters at p < 0.05** (nominal 5 %) and **1.0–1.7 % at BH q < 0.05**, i.e. about
   100–140 false calls per split (6,400–11,100 clusters tested), in every one of the 5 types. Anti-conservative on this
@@ -408,7 +409,7 @@ heart fibroblast; 13–15 mice; cells split in half within each mouse; 20 splits
 | Skin keratinocyte | 0 | 0.143 | 0.014 |
 
 **What this means for the paper**
-- The shipped posterior DS test at δ = 0.15 is calibrated but very conservative: it is silent on within-tissue
+- The shipped posterior DS test at δ = 0.15 is very conservative (no calls on the null; not described as calibrated): it is silent on within-tissue
   contrasts, and where it does call, the calls do not reproduce across seeds. Differential splicing stays out of the
   main text.
 - The reproducible part is the per-cell imputed usage (r ≈ 0.998 across seeds), which is what the paper's per-cell
