@@ -196,10 +196,26 @@ def raw_pb(Y, N, inv, rows, g, G):
     return y, n
 
 
-def call(D, point, rest, P, reads, cov, delta):
-    """amendment 6 note 2: point TV > delta, P(TV > delta) >= 0.95 over the draws, and the read / cell condition"""
+def call(D, point, rest, P, reads, cov, delta, elig):
+    """amendment 6 note 2: point TV > delta, P(TV > delta) >= 0.95 over the draws, the read / cell condition, and
+    (note 3 addendum) the type eligible: >= 2 mice and >= 1 mouse in each mouse half"""
     T_ = tv(point, rest, D.inv, D.n_atse)
-    return (T_ > delta) & (P >= 0.95) & (reads >= CALL_READS) & (cov >= CALL_COV), T_
+    return (T_ > delta) & (P >= 0.95) & (reads >= CALL_READS) & (cov >= CALL_COV) & elig[:, None], T_
+
+
+def mouse_halves(D):
+    """the 10.2a mouse split (seed 0) and per-type eligibility for calls (note 3 addendum)"""
+    mice = np.unique(D.mouse); mA = set(np.random.default_rng(0).permutation(mice)[: len(mice) // 2])
+    return np.array([m in mA for m in D.mouse])
+
+
+def eligibility(D, g, n_types, inA):
+    elig = np.zeros(n_types, bool)
+    for k in range(n_types):
+        r = g == k
+        ms = np.unique(D.mouse[r])
+        elig[k] = len(ms) >= 2 and (inA & r).any() and ((~inA) & r).any()
+    return elig
 
 
 def within_mouse_halves(rows_by_type, mouse, seed):
@@ -243,6 +259,11 @@ def run_full(ds, seed):
     types, g = type_setup(D); G = len(types) + 1; allrows = np.arange(len(D.t))
     Gr = Groups(D, allrows, g, G)
     reads, cov = reads_cov(D, allrows, g, G)
+    inA = mouse_halves(D); elig = eligibility(D, g, G - 1, inA)
+    json.dump(dict(dataset=ds, types=len(types), ineligible_types=int((~elig).sum()),
+                   ineligible_cells=int(Gr.n[:-1][~elig].sum()), ineligible=[t for t, e in zip(types, elig) if not e]),
+              open(os.path.join(T, f"c10_{tag}_eligibility.json"), "w"), indent=1)
+    log(f"eligible for calls: {int(elig.sum())} of {len(types)} types ({int(Gr.n[:-1][~elig].sum())} cells in ineligible types)")
     # ---- 10.2 delta first (amendment 6 note 2): within-type split halves, point estimates ----
     a_rows, b_rows = within_mouse_halves([np.flatnonzero(g == k) for k in range(G - 1)], D.mouse, 0)
     hr = np.concatenate([a_rows, b_rows]); hg = np.concatenate([g[a_rows] * 2, g[b_rows] * 2 + 1])
@@ -317,14 +338,12 @@ def run_full(ds, seed):
     Cs = Cl.groupby("test_read_bin")[["junctions", "inside_bootstrap", "inside_param_only"]].sum()
     Cs["coverage_bootstrap"] = Cs.inside_bootstrap / Cs.junctions; Cs["coverage_param_only"] = Cs.inside_param_only / Cs.junctions
     Cs.to_csv(os.path.join(T, f"c10_{tag}_calibration.tsv"), sep="\t"); log(Cs.to_string())
-    spec, TVr = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta)
+    spec, TVr = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta, elig)
     np.savez_compressed(os.path.join(OUT, f"{tag}_estimates.npz"), types=np.array(types), point=point[:-1], rest=rest[:-1],
                         lo=iv[0][:-1], hi=iv[1][:-1], lo_rest=ivr[0][:-1], hi_rest=ivr[1][:-1], reads=reads[:-1], cov=cov[:-1],
-                        cells=Gr.n[:-1], n_mice=Gr.n_mice[:-1], specific=spec, tv=TVr, p_tv=P[:-1], delta=delta,
+                        cells=Gr.n[:-1], n_mice=Gr.n_mice[:-1], eligible=elig, specific=spec, tv=TVr, p_tv=P[:-1], delta=delta,
                         lo_param=ivp[0][:-1], hi_param=ivp[1][:-1])
     # ---- 10.2a/b mouse halves, 10.7 pairwise ----
-    mice = np.unique(D.mouse); mA = set(np.random.default_rng(0).permutation(mice)[: len(mice) // 2])
-    inA = np.array([m in mA for m in D.mouse])
 
     prs = gb_pairs(types) if ds == "TMS" else []
 
@@ -335,11 +354,11 @@ def run_full(ds, seed):
         y_, n_ = raw_pb(D.Y, D.Ncell, D.inv, rows_, labels_g[rows_], G)
         return dict(p=p[:-1], r=r[:-1], P=Ph[:-1], Pp=Pp, reads=rd[:-1], cov=cv[:-1], y=y_, n=n_)
     HA = half(inA, g, seed + 101, [ij for _, ij in prs]); HB = half(~inA, g, seed + 202, [ij for _, ij in prs])
-    cA, tvA = call(D, HA["p"], HA["r"], HA["P"], HA["reads"], HA["cov"], delta)
+    cA, tvA = call(D, HA["p"], HA["r"], HA["P"], HA["reads"], HA["cov"], delta, elig)
     lj, sgn = lead_sign(HA["p"], HA["r"], D.inv, D.n_atse)
 
     def confirm(H):
-        ci, _ = call(D, H["p"], H["r"], H["P"], H["reads"], H["cov"], delta)
+        ci, _ = call(D, H["p"], H["r"], H["P"], H["reads"], H["cov"], delta, elig)
         with np.errstate(invalid="ignore", divide="ignore"):
             rp = H["y"][:-1] / H["n"][:-1]; rr = (H["y"].sum(0) - H["y"][:-1]) / (H["n"].sum(0) - H["n"][:-1])
         tvB = tv(np.nan_to_num(rp), np.nan_to_num(rr), D.inv, D.n_atse)
@@ -360,9 +379,9 @@ def run_full(ds, seed):
     rep["pass_102"] = bool(conf_ii >= 0.5 and conf_ii >= 5 * rep["null_ii"])
     pd.DataFrame([rep]).to_csv(os.path.join(T, f"c10_{tag}_replication.tsv"), sep="\t", index=False); log(rep)
     if ds == "TMS":
-        pairwise(D, prs, HA, HB, delta, tag, g, ~inA)
+        pairwise(D, [(c, ij) for c, ij in prs if elig[ij[0]] and elig[ij[1]]], HA, HB, delta, tag, g, ~inA)
         known_biology(D, types, point, spec, te, tpsi, tag)
-    export(D, types, point, rest, iv, spec, TVr, reads, cov, Gr.n, tag)
+    export(D, types, point, rest, iv, spec, TVr, reads, cov, Gr.n, tag, elig)
 
 
 def gb_pairs(types):
@@ -431,7 +450,7 @@ def known_biology(D, types, point, spec, te, tpsi, tag):
     json.dump(res, open(os.path.join(T, f"c10_{tag}_known_biology.json"), "w"), indent=1); log(res)
 
 
-def export(D, types, point, rest, iv, spec, TVr, reads, cov, ncell, tag):
+def export(D, types, point, rest, iv, spec, TVr, reads, cov, ncell, tag, elig):
     P = vlib.paths("TMS" if tag.startswith("TMS") else "Allen")
     with h5py.File(P["train"], "r") as f:
         v = vlib._splicing_root(f)["var"]
@@ -445,6 +464,7 @@ def export(D, types, point, rest, iv, spec, TVr, reads, cov, ncell, tag):
                                         gene=gene[j], annotation_status=ann[j], cell_type=t, psi=point[k, j], psi_lo=iv[0][k, j],
                                         psi_hi=iv[1][k, j], psi_rest=rest[k, j], reads=reads[k, e].astype(int), cells=int(ncell[k]),
                                         cells_covering=cov[k, e].astype(int), tv=TVr[k, e], specific=spec[k, e],
+                                        call_eligible=bool(elig[k]),
                                         source="LeafletFA (check 10)")))
     X = pd.concat(chunks, ignore_index=True)
     os.makedirs(os.path.join(OUT, "export"), exist_ok=True)
@@ -458,7 +478,8 @@ def run_calls(ds, seed):
     Gr = Groups(D, np.arange(len(D.t)), g, G)
     point, rest, iv, ivr, P, _, ivp = estimates(D, Gr, draws=True, seed=seed, delta=delta)
     reads, cov = reads_cov(D, np.arange(len(D.t)), g, G)
-    spec, _ = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta)
+    elig = eligibility(D, g, G - 1, mouse_halves(D))
+    spec, _ = call(D, point[:-1], rest[:-1], P[:-1], reads[:-1], cov[:-1], delta, elig)
     np.savez_compressed(os.path.join(OUT, f"{ds}_s{seed}_calls.npz"), types=np.array(types), specific=spec)
     log(f"{ds} seed {seed}: {int(spec.sum())} calls")
 
