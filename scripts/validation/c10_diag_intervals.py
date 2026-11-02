@@ -64,7 +64,7 @@ def units(ds):
 
 
 def main():
-    cfg = style.load_config(); style.apply_style(cfg)
+    cfg = style.load_config(); style.apply_style(cfg); plt.rcParams["axes.unicode_minus"] = False
     c_l, c_t = style.color(cfg, "leafletfa"), style.color(cfg, "raw_reads")
     U = pd.concat([units(ds) for ds in ("TMS", "Allen")], ignore_index=True)
     os.makedirs(OUT, exist_ok=True)
@@ -86,7 +86,7 @@ def main():
     for r, ds in enumerate(("TMS", "Allen")):
         for c, (b, _, _) in enumerate(BINS):
             ax = axs[r, c]; X = U[(U.dataset == ds) & (U.read_bin == b)]
-            for v, col, lab in ((X.width, c_l, "LeafletFA 95 % interval width"), (X.abs_err, c_t, "|LeafletFA − TEST pseudobulk ψ|")):
+            for v, col, lab in ((X.width, c_l, "LeafletFA 95 % interval width"), (X.abs_err, c_t, "|LeafletFA - TEST pseudobulk ψ|")):
                 vv = np.clip(v.values, 1e-5, None); m, (q1, q3) = np.median(v), np.quantile(v, [0.25, 0.75])
                 ax.hist(vv, bins=edges, histtype="step", color=col, lw=1.0, label=f"{lab}: median {m:.3g} (IQR {q1:.3g}–{q3:.3g})")
                 ax.axvline(max(m, 1e-5), color=col, lw=0.6, ls=(0, (3, 2)))
@@ -108,8 +108,9 @@ def main():
             Z = X.merge(pick, on=["cell_type", "event_id"]).groupby(["cell_type", "event_id"], group_keys=False) \
                  .apply(lambda g: g.iloc[[rng.integers(len(g))]]).sort_values("psi").reset_index(drop=True)
             yy = np.arange(len(Z))
-            ax.errorbar(Z.psi, yy + 0.15, xerr=[Z.psi - Z.lo, Z.hi - Z.psi], fmt="^", color=c_l, ms=2.5, elinewidth=0.8, capsize=0,
-                        label="LeafletFA (95 % interval)")
+            # the point estimate (fit's phi, psi) can fall outside its draw interval, so draw segment + marker, not errorbar
+            ax.hlines(yy + 0.15, Z.lo, Z.hi, color=c_l, lw=0.8)
+            ax.plot(Z.psi, yy + 0.15, "^", color=c_l, ms=2.5, label="LeafletFA (95 % interval)")
             ax.errorbar(Z.psi_test, yy - 0.15, xerr=[Z.psi_test - Z.jeff_lo, Z.jeff_hi - Z.psi_test], fmt="o", color=c_t, ms=2.5,
                         elinewidth=0.8, capsize=0, mfc="white", label="TEST pseudobulk (Jeffreys 95 %)")
             ax.set_yticks(yy); ax.set_yticklabels([f"{t[:28]} · {e.split('_atse_')[-1]}" for t, e in zip(Z.cell_type, Z.event_id)],

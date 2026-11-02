@@ -39,8 +39,11 @@ def ptprc():
     _, tt, _ = labels("TMS", vlib.paths("TMS")["test"])
     Y = vlib.read_counts(vlib.paths("TMS")["test"]).tocsr()
     N = (Y @ sp.csr_matrix((np.ones(len(inv)), (np.arange(len(inv)), inv)), shape=(len(inv), n_atse))).tocsr()
-    lj, sg = lead_sign(E["point"], E["rest"], inv, n_atse)
-    pe = np.unique(inv[gene == "Ptprc"])
+    pe = np.unique(inv[gene == "Ptprc"]); pj = np.flatnonzero(np.isin(inv, pe))
+    lj, sg = lead_sign(E["point"][:, pj], E["rest"][:, pj], inv[pj], n_atse)   # only Ptprc junctions (same result, fast)
+    lj = np.where(lj >= 0, pj[np.maximum(lj, 0)], -1)
+    Yp, Np = Y[:, pj].toarray(), N[:, pe].toarray()                             # TEST cells x Ptprc junctions / ATSEs
+    ycol, ncol = {j: i for i, j in enumerate(pj)}, {e: i for i, e in enumerate(pe)}
     up = np.char.upper(types)
     rows = []
     for k in np.flatnonzero([any(x in u for x in LYMPH) for u in up]):
@@ -48,7 +51,7 @@ def ptprc():
             if not E["specific"][k, e]:
                 continue
             j = lj[k, e]; it = tt == types[k]
-            yt, nt = Y[it][:, j].sum(), N[it][:, e].sum(); yr, nr = Y[~it][:, j].sum(), N[~it][:, e].sum()
+            yt, nt = Yp[it, ycol[j]].sum(), Np[it, ncol[e]].sum(); yr, nr = Yp[~it, ycol[j]].sum(), Np[~it, ncol[e]].sum()
             d = (yt / nt - yr / nr) if nt > 0 and nr > 0 else np.nan
             rows.append(dict(cell_type=types[k], event_id=ev[e], lead_junction=jid[j], train_sign=int(sg[k, e]),
                              psi_t=float(E["point"][k, j]), psi_rest=float(E["rest"][k, j]), test_cells=int(it.sum()),
