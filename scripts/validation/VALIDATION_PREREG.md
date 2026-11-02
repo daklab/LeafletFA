@@ -553,3 +553,25 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   its number, 70 groups, as in SpliceVI §111) are called **"cell groups (cluster names)"** in all text, not subclasses.
   The official Allen `subclass_label` (42 subclasses; each cluster maps to one) is added as an extra column of the catalog
   export and the portal (`c10_allen_subclass.py`), after the run.
+
+### Amendment 6, note 4 (2026-11-02, bug fix; before any 10.4 Ptprc-direction or Nrxn result exists)
+- **Bug:** `c10_catalog.py known_biology()` did not implement two parts of 10.4 as stated: the *Ptprc* direction
+  confirmation in TEST pseudobulk, and the *Nrxn1–3* SS4 check (Allen) was never coded. Also, its lymphoid keyword list
+  included NK cells; the stated rule is "a lymphoid type (B or T cells)". Karin approved coding exactly the stated rules as
+  a documented bug fix (2026-11-02). No other rule changes. Script: `scripts/validation/c10_known_biology_fix.py`, which
+  reads the saved seed-0 check 10 outputs (`c10/<ds>_s0_estimates.npz`) and the TEST counts; no refit, no new draws.
+- ***Ptprc* (TMS), as stated:** a (lymphoid type, *Ptprc* ATSE) flagged specific, lymphoid = type name contains "B CELL"
+  or "T CELL" (NK excluded per the stated rule). Direction confirmed in TEST if, at the call's lead junction (largest
+  |ψ_t − ψ_−t| in the event, as in 10.2a), TEST pseudobulk ψ of the type minus TEST pseudobulk ψ of all other TEST cells
+  has the same sign. Pass: ≥ 1 flagged lymphoid (type, ATSE) confirmed. TEST reads at the event reported per call.
+- **SS4 exons, from annotation only (identified 2026-11-02 before any usage was read):** the single 30-nt exon of each
+  gene in GENCODE vM19 (`gencode.vM19/genes/genes.gtf`): *Nrxn1* chr17:90,992,115–90,992,144 (−), *Nrxn2*
+  chr19:6,448,255–6,448,284 (+), *Nrxn3* chr12:88,850,279–88,850,308 (+). The SS4 ATSE = the catalog ATSE containing a
+  junction that ends at the exon's start − 1 or starts at its end + 1 (an inclusion junction), or that spans the exon
+  (skipping junction). If none or more than one ATSE qualifies, reported as such.
+- ***Nrxn1–3* (Allen), as stated:** neuronal cell groups = groups whose TRAIN cells' clusters are majority
+  `class_label` Glutamatergic or GABAergic (Allen metadata); a pair of neuronal groups "differs" if the point TV between
+  their SS4-ATSE ψ exceeds δ (0.10) **and** at ≥ 1 junction their 95 % intervals (the check 10 primary intervals,
+  parameter + mouse bootstrap) do not overlap. Pass per gene: ≥ 1 such pair (i.e. at least two groups differ). Reported
+  per gene: number of qualifying pairs; also, descriptively, the count restricted to groups with ≥ 20 TRAIN reads and ≥ 3
+  covering cells at the ATSE (the read/cell condition of 10.2, not part of the 10.4 rule).
