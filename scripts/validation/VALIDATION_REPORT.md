@@ -457,3 +457,45 @@ Same 5 contrasts, 3 atlas seeds, gated ATSEs (`tsv/c9a3_*`, `c9_ds_atlas_posthoc
 - Brain contrasts reproduce better than heart contrasts on every measure.
 - The August consensus rule (≥ 2 of 3) keeps 70–94 % of each seed's calls; its stability cannot be tested with 3 seeds.
 - Descriptive only: no claim is made from these numbers beyond what the pre-registered test showed.
+
+## Check 10 — the cell-type-resolved catalog (amendment 6 with notes 1–4; `tsv/c10_*`, `c10/`)
+
+Seed-0 runs: TMS job 22597576, Allen 22597577; 10.2c call sets 22597578/79 and 22606140/41; 10.4 bug fix (note 4)
+22607878; diagnostics (read-only, exploratory) 22607879. **Pre-registered reading: 10.1 passes, 10.2 fails → Application
+Note** (accepted by Karin, 2026-11-02).
+
+**Split.** Per cell, 70/30, stratified by broad cell type × age, seed 42; not grouped by mouse. All 18 TMS mice have
+TRAIN and TEST cells; in Allen 482 of the 489 TEST donors also have TRAIN cells. TEST accuracy is accuracy on new cells
+of the same mice.
+
+| Subcheck | TMS | Allen | Rule | Result |
+|---|---|---|---|---|
+| 10.1 overall error LeafletFA vs raw (diff, 95 % CI) | 0.0940 vs 0.1012 (−0.0072; −0.0094, −0.0050) | 0.0625 vs 0.0647 (−0.0021; −0.0039, −0.0005) | ≤ raw, and CI < 0 in smallest size or 1–19-read bin | **PASS / PASS** |
+| 10.1 smallest types (10–49 TRAIN cells) | −0.0194 (−0.0242, −0.0153) | −0.0116 (−0.0143, −0.0090) | | |
+| 10.1 1–19 TRAIN reads | −0.0625 (−0.0681, −0.0571) | −0.0543 (−0.0599, −0.0482) | | |
+| δ (99th pct split-half TV) | 0.079 → 0.10 | 0.074 → 0.10 | | |
+| Ineligible types (cells) | 5 (1,312) | 1 (26) | | |
+| 10.2 calls (full / half A) | 46,262 / 30,496 | 34,190 / 29,487 | | |
+| 10.2a confirmed (i) / (ii) | 0.783 / 0.813 | 0.636 / 0.837 | (ii) ≥ 0.5 | |
+| 10.2b null (i) / (ii) | 0.003 / 0.422 | 0.351 / 0.771 | (ii) ≥ 5× null | **FAIL / FAIL** |
+| 10.7 pairwise, 69 contrasts (pooled) | confirmed 0.780, null 0.473 | — | same | **FAIL** |
+| 10.2c median Jaccard (pairs) | 0.637 (105; 0.515–0.761) | 0.770 (3) | ≥ 0.7, reported | fail / pass |
+| 10.3 coverage, combined (param-only), 100–499 / ≥ 500 | 0.136 (0.118) / 0.218 (0.145) | 0.256 (0.180) / 0.346 (0.232) | reported, nominal 0.95 | far below nominal |
+| 10.4 *Fgfr2* | epithelial min 0.704 > mesenchymal max 0.649; IIIb specific in 10 epithelial types | — | stated | **PASS** |
+| 10.4 *Ptprc* (note 4: B or T only, TEST direction) | 27 B/T calls (all atse_2), 25 confirmed in TEST | — | ≥ 1 confirmed | **PASS** |
+| 10.4 *Nrxn1* SS4 (note 4) | — | atse_2: 270 of 1,891 neuronal pairs differ (226 with the read/cell condition) | ≥ 1 pair | **PASS** |
+| 10.4 *Nrxn2* SS4 | — | atse_1: 872 of 1,891 (109 with the read/cell condition) | ≥ 1 pair | **PASS** |
+| 10.4 *Nrxn3* SS4 | — | no catalog junction at the annotated 30-nt exon | — | **not testable** |
+| 10.5 export | 6,478,290 rows | 4,420,578 rows | | done |
+
+- 10.4 *Ptprc*: B cells have lower usage of the lead junction than the rest in TEST (all B-cell calls), T cells mostly higher;
+  the two unconfirmed calls are Diaphragm T (898 TEST reads) and Marrow T.
+- 10.6 (atlas size, 132,706 cells, b6k RTX PRO 6000 Blackwell): full 16,200-step fit 119 min, 0.27 s/step, peak host RSS
+  40.7 GB (job 22597359). scQuint and the LeafCutter catalog: not run yet.
+- **10.3 diagnostics (exploratory, Karin 2026-11-02; `c10_diag/`).** Median interval width vs median |estimate − TEST|:
+  TMS 0.019 vs 0.017 (100–499), 0.015 vs 0.012 (≥ 500); Allen 0.020 vs 0.015, 0.011 vs 0.007. Coverage (a) as 10.3 /
+  (b) overlap with the Jeffreys pseudobulk interval / (c) binomial-widened predictive: TMS 0.136 / 0.654 / 0.570 and
+  0.218 / 0.461 / 0.375; Allen 0.256 / 0.844 / 0.759 and 0.346 / 0.753 / 0.635. Causes (read-only, `c10/c103_evidence_readonly.json`):
+  γ_e at the floor of 2 for 81 % (TMS) and 68 % (Allen) of ATSEs, with lower coverage there; parameter-only widths below the
+  median error; the mouse bootstrap adds little. Amendment 7 (draft, `AMENDMENT7_DRAFT.md`) tests predictive and
+  recalibrated intervals; not approved, not run.
