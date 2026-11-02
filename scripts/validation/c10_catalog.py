@@ -38,7 +38,7 @@ def labels(ds, path):
         o = f["obs"]
         if ds == "TMS":
             t = vlib._strings(o["tissue_cell_type"]).astype(str)
-        else:   # Allen subclass as in SpliceVI STAGE5 s111 (cluster number removed); pending Karin's confirmation
+        else:   # Allen "cell groups (cluster names)": cluster label without its number, as in SpliceVI STAGE5 s111 (not subclasses)
             c = vlib._strings(o["cell_ontology_class"]).astype(str)
             t = np.array([x.split("_", 1)[1] if "_" in x else x for x in c])
         mouse = vlib._strings(o["mouse.id"]).astype(str)

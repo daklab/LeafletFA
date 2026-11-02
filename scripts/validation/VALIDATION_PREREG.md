@@ -549,3 +549,7 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
 - **Note 1 update, benchmark scope (Karin, 2026-11-01; check 10 rules unchanged):** 10.6 benchmarks LeafletFA against
   **scQuint and the LeafCutter cell type × event catalog only**. LeafletSC (the original Leaflet) is dropped. LeafletFA
   fit (TMS and atlas size) and E-step timings as before.
+- **Note 1, naming (Karin, 2026-11-01; no change to any computation):** the Allen labels of check 10 (cluster label without
+  its number, 70 groups, as in SpliceVI §111) are called **"cell groups (cluster names)"** in all text, not subclasses.
+  The official Allen `subclass_label` (42 subclasses; each cluster maps to one) is added as an extra column of the catalog
+  export and the portal (`c10_allen_subclass.py`), after the run.
