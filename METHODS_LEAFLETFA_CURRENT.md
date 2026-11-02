@@ -17,6 +17,10 @@ TMS and Allen K20 seeds 0–2 (`LeafletFA_splicevi_baseline/{TMS,Allen}/full_K20
 - An ATSE with no reads in a cell contributes nothing to the likelihood.
 - AnnData / MuData layer `cell_by_junction_matrix` (cells × junctions); `var.event_id` gives each
   junction's ATSE.
+- **Training and test cells.** Each atlas is split 70/30 **per cell** (`sklearn.train_test_split`, seed 42), stratified
+  by broad cell type × age (`SpliceVI-utils/preprocess/core/createtesttrainmudata.py:444-476`), not grouped by mouse.
+  All **18 TMS mice are in both sets**; in Allen, 482 of the 489 TEST donors also have TRAIN cells (checked 2026-11-02
+  from the obs `mouse.id` of the split files). TEST accuracy is therefore measured on new cells of the same mice.
 
 ## 2. Generative model (the shipped "DM simplex" model)
 
