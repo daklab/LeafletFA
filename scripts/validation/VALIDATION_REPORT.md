@@ -485,11 +485,16 @@ of the same mice.
 | 10.4 *Ptprc* (note 4: B or T only, TEST direction) | 27 B/T calls (all atse_2), 25 confirmed in TEST | — | ≥ 1 confirmed | **PASS** |
 | 10.4 *Nrxn1* SS4 (note 4) | — | atse_2: 270 of 1,891 neuronal pairs differ (226 with the read/cell condition) | ≥ 1 pair | **PASS** |
 | 10.4 *Nrxn2* SS4 | — | atse_1: 872 of 1,891 (109 with the read/cell condition) | ≥ 1 pair | **PASS** |
-| 10.4 *Nrxn3* SS4 | — | no catalog junction at the annotated 30-nt exon | — | **not testable** |
+| 10.4 *Nrxn3* SS4 (note 5) | — | atse_2: 1,201 of 1,891 (696 with the read/cell condition) | ≥ 1 pair | **PASS**, limited (below) |
 | 10.5 export | 6,478,290 rows | 4,420,578 rows | | done |
 
 - 10.4 *Ptprc*: B cells have lower usage of the lead junction than the rest in TEST (all B-cell calls), T cells mostly higher;
   the two unconfirmed calls are Diaphragm T (898 TEST reads) and Marrow T.
+- 10.4 *Nrxn3* (note 5): the first report said "not testable" because of a bug in the SS4 rule, which looked for a junction starting
+  at the exon's end + 1, while catalog starts are the exon's last base. Corrected before any *Nrxn3* usage was read. Limit: the
+  catalog has no junction ending at the exon's start − 1 and none spanning it, so this ATSE compares the exon's downstream splice
+  choices, not inclusion against skipping. For all three genes the rule is ATSE-level (TV over the ATSE's junctions): a differing
+  pair shows that the ATSE holding SS4 differs, not that the SS4 junctions drive the difference.
 - 10.6 (atlas size, 132,706 cells, b6k RTX PRO 6000 Blackwell): full 16,200-step fit 119 min, 0.27 s/step, peak host RSS
   40.7 GB (job 22597359). scQuint and the LeafCutter catalog: not run yet.
 - **10.3 diagnostics (exploratory, Karin 2026-11-02; `c10_diag/`).** Median interval width vs median |estimate − TEST|:
