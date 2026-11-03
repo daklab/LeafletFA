@@ -1,6 +1,7 @@
 """Check 10.4 bug fix (amendment 6, note 4): the parts of 10.4 that c10_catalog.py did not implement.
 
     python c10_known_biology_fix.py          # writes tsv/c10_known_biology_fix.json and tsv/c10_Allen_s0_nrxn_pairs.tsv
+    python c10_known_biology_fix.py nrxn     # Nrxn part only, keeping the Ptprc result (note 5)
 
 Reads the saved seed-0 check 10 outputs (c10/<ds>_s0_estimates.npz), the fits' junction / event order (fit.npz) and the TEST
 counts; no refit, no new draws.
@@ -80,7 +81,7 @@ def nrxn():
     parts = np.array([j.rsplit("_", 3) for j in jid]); ch, s, e_ = parts[:, 0], parts[:, 1].astype(int), parts[:, 2].astype(int)
     res, pair_rows = dict(delta=delta, neuronal_groups=int(neu.sum()), groups=len(types)), []
     for g, (c, a, b) in SS4.items():
-        hit = (gene == g) & (ch == c) & ((e_ == a - 1) | (s == b + 1) | ((s < a) & (e_ > b)))
+        hit = (gene == g) & (ch == c) & ((e_ == a - 1) | (s == b) | ((s < a) & (e_ > b)))
         cand = np.unique(inv[hit])
         res[g] = dict(ss4_exon=f"{c}:{a}-{b}", candidate_atses=[ev[x] for x in cand])
         if len(cand) != 1:
@@ -101,6 +102,7 @@ def nrxn():
 
 
 if __name__ == "__main__":
-    out = dict(ptprc=ptprc(), nrxn=nrxn())
-    json.dump(out, open(os.path.join(T, "c10_known_biology_fix.json"), "w"), indent=1, default=str)
+    F = os.path.join(T, "c10_known_biology_fix.json")
+    out = dict(ptprc=json.load(open(F))["ptprc"], nrxn=nrxn()) if sys.argv[1:] == ["nrxn"] else dict(ptprc=ptprc(), nrxn=nrxn())
+    json.dump(out, open(F, "w"), indent=1, default=str)
     print(json.dumps(out, indent=1, default=str))

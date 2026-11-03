@@ -575,3 +575,13 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   parameter + mouse bootstrap) do not overlap. Pass per gene: ≥ 1 such pair (i.e. at least two groups differ). Reported
   per gene: number of qualifying pairs; also, descriptively, the count restricted to groups with ≥ 20 TRAIN reads and ≥ 3
   covering cells at the ATSE (the read/cell condition of 10.2, not part of the 10.4 rule).
+
+### Amendment 6, note 5 (2026-11-03, bug fix; before any Nrxn3 usage was read)
+- **Bug:** note 4's SS4 ATSE rule said a junction "starts at its end + 1". Catalog junction ids use start = the upstream exon's
+  last base and end = the downstream exon's first base − 1 (e.g. *Nrxn2* `chr19_6448284_6450527_+` for an exon ending at
+  6,448,284), so that clause could never match. *Nrxn1* and *Nrxn2* were still found through their other junctions; *Nrxn3* was
+  reported "0 ATSEs qualify; not testable", which was wrong: `chr12_88850308_88853100_+` and `chr12_88850308_89187021_+` start at
+  its SS4 exon. **Corrected rule:** a junction that ends at the exon's start − 1, or starts at the exon's end, or spans the exon.
+  Exons and all other parts of note 4 are unchanged. *Ptprc* is unaffected and is not rerun.
+- **Limit stated before the result:** the *Nrxn3* catalog has no junction ending at the exon's start − 1 and none spanning the exon, so
+  its ATSE (if one qualifies) compares the exon's downstream splice choices, not inclusion against skipping. Reported as such.

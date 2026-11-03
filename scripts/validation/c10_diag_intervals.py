@@ -90,11 +90,13 @@ def main():
                 vv = np.clip(v.values, 1e-5, None); m, (q1, q3) = np.median(v), np.quantile(v, [0.25, 0.75])
                 ax.hist(vv, bins=edges, histtype="step", color=col, lw=1.0, label=f"{lab}: median {m:.3g} (IQR {q1:.3g}–{q3:.3g})")
                 ax.axvline(max(m, 1e-5), color=col, lw=0.6, ls=(0, (3, 2)))
-            ax.set_xscale("log"); ax.set_ylabel("Junctions")
+            ax.set_xscale("log"); ax.set_ylabel("Junctions"); ax.set_ylim(0, ax.get_ylim()[1] * 1.3)    # headroom for the legend
+            ax.set_xticks([1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1]); ax.set_xticklabels(["0.00001", "0.0001", "0.001", "0.01", "0.1", "1"])
+            ax.minorticks_off()
             ax.set_title(f"{ds}, {b} TEST reads (n = {len(X):,})", fontsize=7)
             ax.legend(loc="upper left", fontsize=5.5)
             if r == 1:
-                ax.set_xlabel("Width or absolute difference (ψ units; values < 10⁻⁵ shown at 10⁻⁵)")
+                ax.set_xlabel("Width or absolute difference (ψ units; values < 0.00001 shown at 0.00001)")
     fig.tight_layout(); style.save(cfg, fig, os.path.join(OUT, "c10_diag_width_vs_error"), formats=("pdf", "png"))
 
     # 3: 30 random (type, event) pairs per read bin, one random junction each, sorted by estimate
@@ -131,7 +133,7 @@ def main():
     ax.axhline(0.95, color=style.color(cfg, "null_k1"), lw=0.6, ls=(0, (3, 2)))
     ax.set_xticks(x); ax.set_xticklabels([f"{d}\n{b} reads\n(n = {n:,})" for d, b, n in zip(S.dataset, S.read_bin, S.junctions)])
     ax.set_ylim(0, 1); ax.set_ylabel("Fraction of junctions covered")
-    ax.legend(loc="upper left", fontsize=5.5, ncol=1)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), fontsize=5.5, ncol=3)
     fig.tight_layout(); style.save(cfg, fig, os.path.join(OUT, "c10_diag_coverage"), formats=("pdf", "png"))
 
 
