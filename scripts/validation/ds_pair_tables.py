@@ -9,6 +9,8 @@ For each pair "A__vs__B" (group 1 = A, group 2 = B; cells grouped by obs `broad_
   junction_reads_group1/2, event_reads_group1/2, units_group1/2, units_with_event_reads_group1/2.
 Group psi = the check 10 estimator: mean over the group's units of rho~ = (g_e rho + y) / (g_e + N), rho = phi psi (point: the fit's
 phi and psi_mean; draws: c10_catalog.Groups.sums). Draw seed 0, as check 10's seed-0 run.
+--combined PATH also writes the single table of S189_LEAFLETFA_TABLE_SPEC.md (pair, junction_id, score, dpsi; every junction, no read
+filter; dpsi = group A - group B of A__vs__B); score = p_absdpsi_ge_0.1_mouseboot, the check 10 draw scheme (q(phi), q(psi) + mouse bootstrap).
 --easysci-broad recomputes broad_cell_type with Smriti's add_broad_cell_type_obs (as her celltype_dsde_splicevi.py does on load);
 the stored column and the recomputed one are compared and the agreement is logged.
 """
@@ -67,7 +69,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True); ap.add_argument("--fit-dir", required=True); ap.add_argument("--pairs", required=True)
     ap.add_argument("--out", required=True); ap.add_argument("--easysci-broad", action="store_true")
-    ap.add_argument("--delta", type=float, default=0.1)
+    ap.add_argument("--delta", type=float, default=0.1); ap.add_argument("--combined")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     pairs = [l.split("\t")[0].strip() for l in open(a.pairs) if "__vs__" in l]
@@ -83,6 +85,7 @@ def main():
         L.fit_dir = old
     cells = vlib.read_cells(a.data).astype(str)
     assert np.array_equal(post["cell_id"], cells), "fit cell order differs from the data file"
+    assert np.array_equal(post["junction_id"], vlib.read_var(a.data)[0].astype(str)), "fit junction order differs from the data file"
     obs = obs_frame(a.data)
     D = _t.SimpleNamespace(post=post, inv=post["inv"].numpy(), n_atse=post["n_atse"], mouse=obs["animal"].values.astype(str))
     D.J = len(D.inv)
@@ -110,7 +113,9 @@ def main():
             C.log(f"draw {s}/{C.S_DRAWS}")
     y_g, n_g = C.raw_pb(D.Y, D.Ncell, D.inv, np.arange(len(cells)), g, G)                # G x J (junction reads, event reads)
     cov = np.asarray((C.onehot(g, G) @ (D.Ncell > 0).astype(np.float64)).todense())[:, D.inv]
-    man = []
+    man = []; score_col = f"p_absdpsi_ge_{a.delta:g}_mouseboot"
+    if a.combined:
+        open(a.combined, "w").write("pair\tjunction_id\tscore\tdpsi\n")
     for p in pairs:
         A, B = (code[x] for x in p.split("__vs__"))
         xa, xb = Sp[:, A] / Gr.n[A], Sp[:, B] / Gr.n[B]
@@ -125,9 +130,16 @@ def main():
                               units_with_event_reads_group1=cov[A].astype(int), units_with_event_reads_group2=cov[B].astype(int)))
         f = os.path.join(a.out, f"{p}.tsv.gz")
         T.to_csv(f, sep="\t", index=False, float_format="%.6g")
+        if a.combined:
+            X = pd.DataFrame(dict(pair=p, junction_id=T.junction_id, score=T[score_col], dpsi=T.delta_psi))
+            assert X.notna().all().all() and X.score.between(0, 1).all(), f"{p}: table does not meet the spec"
+            X.to_csv(a.combined, sep="\t", index=False, header=False, mode="a", float_format="%.6g")
         man.append(dict(pair=p, file=os.path.basename(f), rows=len(T), units_group1=int(Gr.n[A]), units_group2=int(Gr.n[B]), md5=md5(f)))
     pd.DataFrame(man).to_csv(os.path.join(a.out, "MANIFEST.tsv"), sep="\t", index=False)
-    json.dump(dict(data=a.data, data_md5=md5(a.data), fit_dir=a.fit_dir, fit_md5=md5(os.path.join(a.fit_dir, "fit.npz")),
+    if a.combined:
+        C.log(f"combined table {a.combined}: {len(pairs) * D.J:,} rows, md5 {md5(a.combined)}")
+    json.dump(dict(data=a.data, data_md5=md5(a.data), combined=a.combined, score=score_col if a.combined else None,
+                   combined_md5=md5(a.combined) if a.combined else None, fit_dir=a.fit_dir, fit_md5=md5(os.path.join(a.fit_dir, "fit.npz")),
                    pairs_file=a.pairs, pairs=len(pairs), draws=C.S_DRAWS, draw_seed=0, delta=a.delta,
                    broad_cell_type_recomputed=broad_rec, columns=list(T.columns)),
               open(os.path.join(a.out, "export_record.json"), "w"), indent=1)
