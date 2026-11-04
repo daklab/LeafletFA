@@ -525,3 +525,34 @@ float64 φ, sparse; CPU, while the other LeafletFA paper fits ran on GPU). Colum
   parameter-only value differs: Test B, Oligodendrocytes vs Interbrain and midbrain neurons, `chr12_103104895_103108217_+`, 0.170 vs 0.165, one draw of 200.
   The re-export ran on a different node; a draw at the 0.1 threshold rounding differently there is the likely cause, not tested. Earlier tables are kept in `ds189/prior_score_only_2026-11-03/`.
 - **Test B data:** fit on in80 as Karin instructed, not `easysci_only.h5mu`; the held-out 20 % was not used. `broad_cell_type` recomputed with Smriti's function, 98.3 % agreement with the stored column.
+
+## Check 10.2 null diagnostics (read-only, exploratory; Karin 2026-11-04; `c10_null_diag/`)
+
+**The pre-registered verdict stands: 10.2 fails, Application Note.** Nothing here changes it and no amendment is proposed. Scripts:
+`c10_null_diag.py` (TMS job 22652424, Allen 22652425; reproduces the saved calls and null (ii)), `c10_null_diag_extra.py`. 10.7 was not decomposed.
+
+**Definitions (frozen text, 10.2a/b).** Calls are made with half-A cells. (i): the same call rule holds on half B's cells. (ii): B's raw
+pseudobulk TV between t and the rest exceeds δ/2 (0.05) with the same sign at the call's lead junction. Null: labels permuted among B's
+cells within each mouse (20 permutations), same A calls. The prereg's only stated reason for (ii) is "model-free"; no reason is recorded for the δ/2 bar.
+
+| | TMS | Allen |
+|---|---|---|
+| Calls in half A | 30,496 | 29,487 |
+| Real (i) (type bootstrap 95 %) | 0.783 (0.731–0.824) | 0.636 (0.536–0.719) |
+| Null (i) (range over 20 permutations) | 0.003 (0.002–0.003) | 0.351 (0.336–0.363) |
+| Real (ii) | 0.813 (0.791–0.832) | 0.837 (0.802–0.867) |
+| Null (ii) | 0.422 (0.409–0.435) | 0.771 (0.739–0.804) |
+| Real − null (ii), paired | 0.391 (0.361–0.416) | 0.065 (0.050–0.082) |
+| Null (ii) = P(TV > 0.05) × P(same sign given TV) | 0.836 × 0.505 | 0.921 × 0.837 |
+| Null (ii) by variance decile, lowest to highest | 0.330 to 0.473 | 0.721 to 0.784 (peak 0.807, decile 7) |
+| Share of null confirmations, top variance decile (10 % if uniform) | 11.2 % | 10.2 % |
+| Null (ii) by permuted-group read decile, lowest to highest | 0.435 to 0.244 (peak 0.469, decile 4) | 0.584 to 0.845 (peak 0.853, decile 9) |
+| Same sign given TV, read decile 1 to 10 | 0.444 to 0.561 | 0.597 to 0.986 |
+| Label retained by the within-mouse shuffle vs base rate (medians) | 0.020 vs 0.014 | 0.260 vs 0.006 |
+| Null (ii), shuffle ignoring mouse (5 permutations) | 0.390–0.401 | 0.300–0.319 |
+| Null (ii), B reads > 0 / ≥ 20 | 0.424 / 0.422 | 0.786 / 0.802 |
+
+- High-variance hypothesis: not supported as the main cause. Null confirmations are close to uniform across variance deciles in both atlases.
+- TMS: sign is a coin flip, so the null is noise clearing the 0.05 bar; it falls only in the deepest read deciles.
+- Allen: sign is retained and sharpens with depth, and the within-donor shuffle keeps about a quarter of the label. Ignoring donors lowers the null to about 0.31. This fits donor-class confounding; donor sampling itself was not examined.
+- Treating an unread group as ψ = 0 does not inflate null (ii): restricting to read groups leaves it unchanged or higher.
