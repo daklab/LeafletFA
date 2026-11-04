@@ -11,10 +11,12 @@ Group psi = the check 10 estimator: mean over the group's units of rho~ = (g_e r
 phi and psi_mean; draws: c10_catalog.Groups.sums). Draw seed 0, as check 10's seed-0 run.
 --combined PATH also writes the single table of S189_LEAFLETFA_TABLE_SPEC.md (pair, junction_id, score, dpsi; every junction, no read
 filter; dpsi = group A - group B of A__vs__B); score = p_absdpsi_ge_0.1_mouseboot, the check 10 draw scheme (q(phi), q(psi) + mouse bootstrap).
+One extra column beyond the spec (Karin 2026-11-04): p_absdpsi_ge_0.1, the parameter-only score. The bootstrap resamples labels in obs `animal`,
+not individual mice; in the thinned file one label can cover several mice (obs `n_mice`). export_record.json states this.
 --easysci-broad recomputes broad_cell_type with Smriti's add_broad_cell_type_obs (as her celltype_dsde_splicevi.py does on load);
 the stored column and the recomputed one are compared and the agreement is logged.
 """
-import argparse, hashlib, json, os, sys, types as _t
+import argparse, hashlib, json, os, subprocess, sys, types as _t
 import numpy as np, pandas as pd, scipy.sparse as sp, torch, h5py
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -113,9 +115,9 @@ def main():
             C.log(f"draw {s}/{C.S_DRAWS}")
     y_g, n_g = C.raw_pb(D.Y, D.Ncell, D.inv, np.arange(len(cells)), g, G)                # G x J (junction reads, event reads)
     cov = np.asarray((C.onehot(g, G) @ (D.Ncell > 0).astype(np.float64)).todense())[:, D.inv]
-    man = []; score_col = f"p_absdpsi_ge_{a.delta:g}_mouseboot"
+    man = []; score_col, param_col = f"p_absdpsi_ge_{a.delta:g}_mouseboot", f"p_absdpsi_ge_{a.delta:g}"
     if a.combined:
-        open(a.combined, "w").write("pair\tjunction_id\tscore\tdpsi\n")
+        open(a.combined, "w").write(f"pair\tjunction_id\tscore\tdpsi\t{param_col}\n")
     for p in pairs:
         A, B = (code[x] for x in p.split("__vs__"))
         xa, xb = Sp[:, A] / Gr.n[A], Sp[:, B] / Gr.n[B]
@@ -131,14 +133,18 @@ def main():
         f = os.path.join(a.out, f"{p}.tsv.gz")
         T.to_csv(f, sep="\t", index=False, float_format="%.6g")
         if a.combined:
-            X = pd.DataFrame(dict(pair=p, junction_id=T.junction_id, score=T[score_col], dpsi=T.delta_psi))
-            assert X.notna().all().all() and X.score.between(0, 1).all(), f"{p}: table does not meet the spec"
+            X = pd.DataFrame(dict(pair=p, junction_id=T.junction_id, score=T[score_col], dpsi=T.delta_psi, **{param_col: T[param_col]}))
+            assert X.notna().all().all() and X.score.between(0, 1).all() and X[param_col].between(0, 1).all(), f"{p}: table does not meet the spec"
             X.to_csv(a.combined, sep="\t", index=False, header=False, mode="a", float_format="%.6g")
         man.append(dict(pair=p, file=os.path.basename(f), rows=len(T), units_group1=int(Gr.n[A]), units_group2=int(Gr.n[B]), md5=md5(f)))
     pd.DataFrame(man).to_csv(os.path.join(a.out, "MANIFEST.tsv"), sep="\t", index=False)
     if a.combined:
         C.log(f"combined table {a.combined}: {len(pairs) * D.J:,} rows, md5 {md5(a.combined)}")
-    json.dump(dict(data=a.data, data_md5=md5(a.data), combined=a.combined, score=score_col if a.combined else None,
+    bootstrap = dict(unit="labels in obs animal", note="the bootstrap resamples animal labels, not individual mice", labels=int(obs["animal"].nunique()))
+    if "n_mice" in obs:
+        bootstrap["max_mice_per_unit"] = int(pd.to_numeric(obs["n_mice"]).max())
+    code_commit = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    json.dump(dict(data=a.data, data_md5=md5(a.data), combined=a.combined, score=score_col if a.combined else None, extra_column=param_col if a.combined else None, bootstrap=bootstrap, code_commit=code_commit,
                    combined_md5=md5(a.combined) if a.combined else None, fit_dir=a.fit_dir, fit_md5=md5(os.path.join(a.fit_dir, "fit.npz")),
                    pairs_file=a.pairs, pairs=len(pairs), draws=C.S_DRAWS, draw_seed=0, delta=a.delta,
                    broad_cell_type_recomputed=broad_rec, columns=list(T.columns)),
