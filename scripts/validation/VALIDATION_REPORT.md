@@ -504,3 +504,24 @@ of the same mice.
   γ_e at the floor of 2 for 81 % (TMS) and 68 % (Allen) of ATSEs, with lower coverage there; parameter-only widths below the
   median error; the mouse bootstrap adds little. Amendment 7 (draft, `AMENDMENT7_DRAFT.md`) tests predictive and
   recalibrated intervals; not approved, not run.
+
+## §189 DS tables for the SpliceVI comparison (exports only, not scored)
+
+Written by `ds_pair_tables.py` at 9d03fe4 from fits at bea2b12 (K 20, seed 0, 16,200 steps, minibatch 8,192, lr 0.025, gamma 0.1, conc_min 2,
+float64 φ, sparse; CPU, while the other LeafletFA paper fits ran on GPU). Columns `pair, junction_id, score, score_param, dpsi`, every junction, no read filter.
+`score` = `p_absdpsi_ge_0.1_mouseboot` (primary, §189 amendment 3); `score_param` = `p_absdpsi_ge_0.1`, parameter draws only. 200 draws, draw seed 0.
+
+| | Test A | Test B |
+|---|---|---|
+| Input | `allen_thinning/seed0/mdata/thinned.h5mu`, md5 e55915c234285dcdfa9755ea7466add2 | `easysci_v2_mdata_in80_1000_2026-10-24.h5mu`, md5 db2d3ca88643f8cfd14a523f78a057b6 |
+| Table | `ds189/LFA_TEST_A.tsv`, md5 c3f4f657fc698f365962499eb86d7e4d | `ds189/LFA_TEST_B.tsv`, md5 5f407f40f84ba7ad5b3554ebe2c9e553 |
+| Size | 45 pairs, 3,589,560 rows | 55 pairs, 4,387,240 rows |
+| Fit / export job | 22620585 / 22644185 | 22620587 / 22644186 |
+| Fit md5 | ed89eea358dca7329be78e1558d397ef | 4f159dea2f2e3e648fd3e0130977655c |
+
+- **Bootstrap unit:** the bootstrap resamples animal labels (`obs.animal`, 20 labels in each file), not individual mice. In the thinned file one unit can
+  cover up to 8 mice (`obs.n_mice`).
+- **Reproducibility:** `score` and `dpsi` are identical to the first export (22620633, 22620634) in every row of both tests. In the per-pair tables, one
+  parameter-only value differs: Test B, Oligodendrocytes vs Interbrain and midbrain neurons, `chr12_103104895_103108217_+`, 0.170 vs 0.165, one draw of 200.
+  The re-export ran on a different node; a draw at the 0.1 threshold rounding differently there is the likely cause, not tested. Earlier tables are kept in `ds189/prior_score_only_2026-11-03/`.
+- **Test B data:** fit on in80 as Karin instructed, not `easysci_only.h5mu`; the held-out 20 % was not used. `broad_cell_type` recomputed with Smriti's function, 98.3 % agreement with the stored column.
