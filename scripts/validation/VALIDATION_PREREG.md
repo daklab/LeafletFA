@@ -585,3 +585,14 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
   Exons and all other parts of note 4 are unchanged. *Ptprc* is unaffected and is not rerun.
 - **Limit stated before the result:** the *Nrxn3* catalog has no junction ending at the exon's start − 1 and none spanning the exon, so
   its ATSE (if one qualifies) compares the exon's downstream splice choices, not inclusion against skipping. Reported as such.
+
+### Record, LeafCutter descriptive control for 10.2 (Karin 2026-11-05; written before any LeafCutter run of this control)
+Descriptive. The pre-registered verdict (10.2 fails, Application Note) stands and this cannot change it. (ii) only; (i) is not run.
+- **Types:** those eligible in check 10 with ≥ 4 mice in half A and ≥ 4 in half B (TMS 100, Allen 41; 141). The mouse column is `mouse.id` (Allen: `external_donor_name_label`). Halves: `mouse_halves` (10.2a, seed 0).
+- **Run:** per type, half-A TRAIN cells. One pseudobulk sample per mouse for the type (≥ 1 cell) and one per mouse for all other cells, summed junction counts; ATSEs as clusters, so events match LeafletFA's. `leafcutter-ds`, baseline = rest, `--min_samples_per_intron 4 --min_samples_per_group 4 --num_threads 4`, other settings default, as in check 9b.
+- **Call rule (fixed here):** status Success and `p.adjust` < 0.05 and ½ Σ |deltapsi| over the ATSE's tested introns > δ (0.10, as 10.2), and ≥ 20 half-A reads and ≥ 3 half-A cells of the type at the ATSE (as 10.2). Lead junction: the largest |deltapsi|; sign from it.
+- **Confirmation (ii):** half B raw pseudobulk TV between the type and the rest > δ/2 with the same sign at the lead junction, same function as 10.2.
+- **Nulls:** the same calls, labels permuted among half B's cells (a) within each mouse, seeds 1000 to 1019, as 10.2b, and (b) ignoring mouse, seeds 2000 to 2004, as `c10_null_diag.py`.
+- **Report:** per atlas, LeafCutter calls, real, null (a), null (b), real minus null (a), with type-bootstrap intervals (2,000), beside LeafletFA restricted to the same types, including LeafletFA's null (b) on those types.
+- **Cost:** ceiling 200 CPU-h. A watcher cancels the array at the ceiling and the partial state is reported. One smoke task per atlas first, to set memory (peak + 30 %) and check that outputs parse; only status and cost are read from it.
+- **Fixed and not tuned after seeing results:** call rule, mouse minimum, δ.

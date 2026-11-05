@@ -554,5 +554,40 @@ cells within each mouse (20 permutations), same A calls. The prereg's only state
 
 - High-variance hypothesis: not supported as the main cause. Null confirmations are close to uniform across variance deciles in both atlases.
 - TMS: sign is a coin flip, so the null is noise clearing the 0.05 bar; it falls only in the deepest read deciles.
-- Allen: sign is retained and sharpens with depth, and the within-donor shuffle keeps about a quarter of the label. Ignoring donors lowers the null to about 0.31. This fits donor-class confounding; donor sampling itself was not examined.
+- Allen: the null is inflated. Sign is retained and sharpens with depth, the within-donor shuffle keeps about a quarter of the label, and ignoring donors lowers the null to about 0.31. See the donor check below for what the metadata shows; a cause of the inflation has not been tested.
+
+### Allen donor check (read-only, Karin 2026-11-05; `c10_allen_donor_check.py`, `c10_null_diag/allen_donor/`)
+
+**Column.** Check 10 and §176 use obs `mouse.id`, set from the Allen metadata field `external_donor_name_label` (`metadata_prep.py:106`); all 54,571 cells match exactly after joining `meta_sample_name` to `sample_name`. Donors: 519 overall, 512 with TRAIN cells, 489 with TEST cells.
+
+| Is it one animal? (519 donors) | Value |
+|---|---|
+| Donors with one genotype / one sex | 100 % / 100 % |
+| Donors with one FACS plan / one region | 99.2 % (max 2) / about 93 % (max 2) |
+| Library plates per donor, median (max) | 3 (18) |
+| Plates spanning more than one donor | 86.5 % of 617 |
+
+This rules out a batch, plate, sort or dissection: plates span donors and donors span plates. The metadata has no animal-level identifier other than this field, so "one animal" is supported, not proven.
+
+| Per donor, all cells | Donors ≥ 1 cell (519) | ≥ 10 cells (420) | ≥ 50 cells (248) | ≥ 100 cells (163) |
+|---|---|---|---|---|
+| One class only | 64.2 % | 58.8 % | 50.4 % | 48.5 % |
+| Top class ≥ 90 % of cells | 81.1 % | 79.8 % | 75.8 % | 76.1 % |
+| Median top-class share | 1.000 | 1.000 | 1.000 | 0.998 |
+| Median cell groups | 4 | 6 | 9 | 11 |
+| Median top-group share | 0.575 | 0.495 | 0.347 | 0.311 |
+
+Cells per donor: median 46 (10th to 90th percentile 4 to 342). Cell-weighted top-class share 0.94, top-subclass share 0.47. Classes: glutamatergic, GABAergic, non-neuronal.
+
+| Genotype (all cells; 81 values with missing, 79.8 % of donors carry a Cre allele) | Cells | Donors | GABAergic | Glutamatergic | Non-neuronal |
+|---|---|---|---|---|---|
+| Slc17a7-IRES2-Cre;Ai14 | 19,277 | 59 | 0.000 | 1.000 | 0.000 |
+| Gad2-IRES-Cre;Ai14 | 7,520 | 30 | 0.916 | 0.021 | 0.064 |
+| Snap25-IRES2-Cre;Ai14 | 7,331 | 33 | 0.242 | 0.715 | 0.043 |
+| Slc32a1-IRES-Cre;Ai14 | 4,240 | 28 | 0.994 | 0.000 | 0.005 |
+| Slc17a6-IRES-Cre;Ai14 | 2,944 | 11 | 0.000 | 0.999 | 0.001 |
+| Rbp4-Cre_KL100;Ai14 | 2,355 | 28 | 0.032 | 0.968 | 0.000 |
+| Pvalb-IRES-Cre;Ai14 | 867 | 29 | 0.999 | 0.000 | 0.001 |
+
+Sorting: `facs_population_plan_label` has 6 values; RFP-positive is 52,415 of 54,571 cells (482 donors), RFP-negative 385 cells of which 0.966 non-neuronal. Cramér's V with class: donor 0.81, genotype 0.71, FACS plan 0.36, region 0.24. Other fields present: `injection_*`, `cortical_layer_label`. Consequence for any mouse-level design: most donors contain one class, so class contrasts are largely between donors and hence between genotypes. Not done: the source paper's methods were not read, and class composition was not separated from genotype as a cause of the null.
 - Treating an unread group as ψ = 0 does not inflate null (ii): restricting to read groups leaves it unchanged or higher.
