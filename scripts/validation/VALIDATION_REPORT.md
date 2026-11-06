@@ -614,3 +614,22 @@ measured time, so optimizing the code cannot bring it under 30 CPU-h. Per the ca
 2. A fixed random 25 % of (type, ATSE) units: about 21 CPU-h; coverage then rests on about 110,000 (TMS) and 87,000 (Allen) units.
 3. Raise the cap to about 80 CPU-h, as written; about 39 h wall in parallel, which meets Tue 10 Nov only if the jobs start by Sun 8 Nov.
 
+
+## Browser ranking vs raw Δψ: diagnosis (read-only, Karin 2026-11-06; `c10_browser_gap.py`, `c10_browser_gap_rank.py`, `c10_browser_gap/`)
+Jobs 22780597, 22780642 (decomposition), 22782041, 22782042 (rank depth, TRAIN and held-out TEST). Reading rule written in the script before results.
+
+**(a) Same table, no bug.** The browser and 10.1 read the same `point` array; recomputed from the fit it matches the saved file exactly (max difference 0), the per-cell rebuild reproduces it, and the browser's junction reads equal the counts.
+
+| Median over rows, ranked by LeafletFA |Δψ| | TMS example (neuron vs astrocyte) | TMS, 20 random pairs | Allen example (L2/3 IT CTX vs Pvalb) | Allen, 20 random pairs |
+|---|---|---|---|---|
+| Top 100: gap LeafletFA vs TRAIN raw | 0.392 | 0.260 | 0.175 | 0.126 |
+| Top 100: error vs TEST, LeafletFA / TRAIN raw | **0.387 / 0.067** | **0.224 / 0.151** | **0.166 / 0.026** | **0.123 / 0.060** |
+| Top 100: \|Δψ_L\| − \|Δψ_TEST\| | −0.387 | −0.121 | −0.166 | −0.081 |
+| Top 100: same sign as TEST, LeafletFA / raw | 1.000 / 1.000 | 0.854 / 0.848 | 1.000 / 1.000 | 0.975 / 0.971 |
+| 101–1,000: error vs TEST, LeafletFA / raw | 0.251 / 0.151 | 0.123 / 0.147 | 0.073 / 0.048 | 0.077 / 0.077 |
+| All: error vs TEST, LeafletFA / raw | 0.048 / 0.064 | 0.040 / 0.052 | 0.019 / 0.019 | 0.033 / 0.038 |
+| Raw's own top 100: \|Δψ_raw\| − \|Δψ_TEST\| | — | +0.226 | — | +0.056 |
+
+Decomposition of the top-100 gap (example pairs): cells with no reads at the ATSE, which enter the type mean at their program prior φ_c ψ, dominate: TMS 87 of 100 rows (61 of the 62 with gap > 0.3), median 0.288, with 23 % and 7 % of the two types' cells covered; Allen 46 of 100 (16 of 19), with covered-cell shrinkage second (39 of 100).
+
+**(c) Cause: model smoothing**, by the pre-stated rule (LeafletFA's error vs TEST at the top exceeds raw's on the same rows), in both atlases, stronger in TMS. Not selection: LeafletFA's top-ranked differences are smaller than TEST's, not larger (raw's own ranking does show selection, +0.226 TMS). Not raw noise: on these rows raw TRAIN agrees with TEST closely. The ranking finds real differences (sign agrees with TEST as often as raw's), but LeafletFA compresses their size, mainly through uncovered cells; the same mechanism as the *Fgfr2* uncovered values and the 10.3 undercoverage. Across all events LeafletFA stays closer to TEST than raw, consistent with 10.1, which stands. TEST cells are new cells of the same mice.
