@@ -593,3 +593,24 @@ Cells per donor: median 46 (10th to 90th percentile 4 to 342). Cell-weighted top
 
 Sorting: `facs_population_plan_label` has 6 values; RFP-positive is 52,415 of 54,571 cells (482 donors), RFP-negative 385 cells of which 0.966 non-neuronal. Cramér's V with class: donor 0.81, genotype 0.71, FACS plan 0.36, region 0.24. Other fields present: `injection_*`, `cortical_layer_label`. Consequence for any mouse-level design: most donors contain one class, so class contrasts are largely between donors and hence between genotypes. Not done: the source paper's methods were not read, and class composition was not separated from genotype as a cause of the null.
 - Treating an unread group as ψ = 0 does not inflate null (ii): restricting to read groups leaves it unchanged or higher.
+
+## Check 12 — amendment 7 intervals: NOT RUN, projected cost above the 30 CPU-h cap (2026-11-06)
+
+Amendment 7 appended unchanged to the prereg (a080dcc) before any code ran. Code: `c12_intervals.py` (literal reading; notes in its docstring).
+Smoke (10 of 200 draws, 3 types per dataset; jobs 22780809, 22780810; 4 CPUs): TMS 13 min, peak 9.6 GB; Allen 24 min, peak 22.2 GB;
+together **2.5 CPU-h** charged. No coverage result was computed or read.
+
+| | TMS | Allen |
+|---|---|---|
+| Units (type, ATSE) / unit junctions | 548,745 / 1,829,935 | 434,294 / 1,530,439 |
+| Load + 200 draws (projected) | 0.2 h + 0.6 h | 0.4 h + 0.4 h |
+| (a) simulations, 1,000 per unit, both draw sets (projected) | 36.1 h | 38.0 h |
+| Total wall, single-threaded | about 37 h | about 39 h |
+
+Projection: **about 76 CPU-h at 1 CPU per job** (about 300 CPU-h at the 4 CPUs of the smoke), linear in simulation work
+(cell-ATSE pairs x junctions: TMS 112.2 M, Allen 291.9 M). A micro-benchmark puts the random-number floor at about 45 % of the
+measured time, so optimizing the code cannot bring it under 30 CPU-h. Per the cap, nothing was submitted. Options (each needs Karin):
+1. One replicate per draw (200 simulated values, not 1,000): about 17 CPU-h; changes "r in 1..5" in the amendment.
+2. A fixed random 25 % of (type, ATSE) units: about 21 CPU-h; coverage then rests on about 110,000 (TMS) and 87,000 (Allen) units.
+3. Raise the cap to about 80 CPU-h, as written; about 39 h wall in parallel, which meets Tue 10 Nov only if the jobs start by Sun 8 Nov.
+
