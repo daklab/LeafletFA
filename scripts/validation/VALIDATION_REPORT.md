@@ -558,6 +558,8 @@ cells within each mouse (20 permutations), same A calls. The prereg's only state
 
 ### Allen donor check (read-only, Karin 2026-11-05; `c10_allen_donor_check.py`, `c10_null_diag/allen_donor/`)
 
+**Summary (Karin, 2026-11-06):** Allen donors were sampled by Cre line, so cell classes are confounded with donor; this inflates the within-donor null. (The first two clauses are measured below; the effect on the null is inferred from the retained-label fraction, not tested separately.)
+
 **Column.** Check 10 and §176 use obs `mouse.id`, set from the Allen metadata field `external_donor_name_label` (`metadata_prep.py:106`); all 54,571 cells match exactly after joining `meta_sample_name` to `sample_name`. Donors: 519 overall, 512 with TRAIN cells, 489 with TEST cells.
 
 | Is it one animal? (519 donors) | Value |
