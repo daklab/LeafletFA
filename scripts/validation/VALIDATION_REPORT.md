@@ -633,3 +633,19 @@ Jobs 22780597, 22780642 (decomposition), 22782041, 22782042 (rank depth, TRAIN a
 Decomposition of the top-100 gap (example pairs): cells with no reads at the ATSE, which enter the type mean at their program prior φ_c ψ, dominate: TMS 87 of 100 rows (61 of the 62 with gap > 0.3), median 0.288, with 23 % and 7 % of the two types' cells covered; Allen 46 of 100 (16 of 19), with covered-cell shrinkage second (39 of 100).
 
 **(c) Cause: model smoothing**, by the pre-stated rule (LeafletFA's error vs TEST at the top exceeds raw's on the same rows), in both atlases, stronger in TMS. Not selection: LeafletFA's top-ranked differences are smaller than TEST's, not larger (raw's own ranking does show selection, +0.226 TMS). Not raw noise: on these rows raw TRAIN agrees with TEST closely. The ranking finds real differences (sign agrees with TEST as often as raw's), but LeafletFA compresses their size, mainly through uncovered cells; the same mechanism as the *Fgfr2* uncovered values and the 10.3 undercoverage. Across all events LeafletFA stays closer to TEST than raw, consistent with 10.1, which stands. TEST cells are new cells of the same mice.
+
+## LeafCutter descriptive control for 10.2 (record in VALIDATION_PREREG.md, written before any run; `c10_leafcutter.py`, `c10_lc/`)
+Descriptive; the pre-registered verdict (10.2 fails) stands. (ii) only; 141 types with ≥ 4 mice in each half (TMS 100, Allen 41); arrays 22780121, 22780122, smoke 22725798, 22725799; **72.7 CPU-h** (ceiling 200), peak 1.1 GB per task; scoring jobs 22783265, 22783266. Each method is scored on its own calls. Intervals: type bootstrap (2,000).
+
+| | TMS LeafCutter | TMS LeafletFA (same 100 types) | Allen LeafCutter | Allen LeafletFA (same 41 types) |
+|---|---|---|---|---|
+| Calls in half A (types with calls) | 120,472 (99) | 27,762 (100) | 31,301 (41) | 25,428 (41) |
+| Real, confirmed (ii) | 0.521 (0.505–0.538) | 0.819 (0.797–0.839) | 0.740 (0.705–0.776) | 0.858 (0.823–0.893) |
+| Null, within mouse | 0.348 (0.336–0.361) | 0.422 (0.407–0.436) | 0.604 (0.565–0.646) | 0.795 (0.763–0.831) |
+| Null, ignoring mouse | 0.337 (0.326–0.348) | 0.394 (0.384–0.405) | 0.229 (0.210–0.251) | 0.296 (0.275–0.319) |
+| Real − null within mouse | 0.173 (0.152–0.196) | 0.397 (0.367–0.423) | 0.136 (0.112–0.161) | 0.063 (0.044–0.080) |
+
+- Neither method reaches the pre-registered rule (≥ 0.5 and ≥ 5× the within-mouse null) in either atlas: real / null is TMS 1.5 (LeafCutter) and 1.9 (LeafletFA), Allen 1.2 and 1.08.
+- Allen: both methods' within-donor nulls are inflated and fall to 0.23–0.30 when donors are ignored, so the inflation is a property of the Allen design (donors sampled by Cre line), not of LeafletFA.
+- TMS: LeafCutter makes 4.3× more calls on the same types, and fewer of them confirm.
+- Not comparable event for event: the call sets differ. LeafCutter's δ is applied to its own deltapsi over tested introns.
