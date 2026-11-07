@@ -674,3 +674,5 @@ Jobs 22814975 (TMS, 6 min), 22814976 (Allen, 34 min, peak 20 GB). Asserts passed
     (|Δψ| above TEST's, +0.25 in TMS) instead of LeafletFA's shrinkage (−0.12).
   - Each estimate's top 100 is a different set of rows, with different TEST-evaluable counts (row above).
   - Covered-only has the lowest TMS top-100 error and is close to current overall (no pass rule for it).
+- **Decision (Karin 2026-11-07):** reading accepted; the current estimate stays in the catalog and the browser.
+  Covered-only is recorded as descriptive only, with no switch and no new rule.
