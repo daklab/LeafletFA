@@ -675,3 +675,64 @@ at a given read depth. They are not intervals for the true cell-type ψ. The pap
   without the null permutations).
 - Code: `scripts/validation/c12_intervals.py` (to be written after approval). Results: `tsv/c12_*` and section
   "Check 12" in VALIDATION_REPORT.md.
+
+### Amendment 7, note 1 (Karin 2026-11-06; written before any check 12 coverage was read)
+- **Option 1 adopted:** one replicate per draw (R = 1) for both the DM and the binomial version of (a). Each unit's (a)
+  predictive distribution has 200 simulated values (one per draw) instead of 1,000; interval (a) is their 2.5–97.5 %.
+- Everything else in amendment 7 is unchanged: units, mouse halves, τ² grid, both directions, pass rule, readings.
+- Projected cost about 17 CPU-h (under the 30 CPU-h cap). Results by Tue 10 Nov 2026 or check 12 stays out.
+- **Order (Karin):** check 13 (below) runs first. If check 13's pooled interval comes within 0.05 of nominal at ≥ 100
+  TEST reads, Karin is told before check 12 is started.
+- The smoke runs (jobs 22780809, 22780810) only timed the code; no coverage from them was read.
+
+## Amendment 8 (Karin 2026-11-06; written before any computation) — check 13: a group-pooled cell-type estimate
+
+**Question:** does pooling a cell type's reads behind one program prior remove the shrinkage of large between-type
+differences found in the browser-gap diagnosis, without losing check 10.1's accuracy, and does its Beta interval cover
+held-out data? Read-only: saved seed-0 fits, TMS and Allen; no refit; CPU only.
+
+**Three estimates of ψ_tj** (type t, junction j in ATSE e), all from TRAIN cells of t:
+- **current:** the check 10 point estimate, mean over t's cells of ρ̃_cj = (γ_e ρ_cj + y_cj) / (γ_e + N_ce), ρ = φψ.
+- **covered-cells-only:** the same mean over only t's cells with N_ce > 0. If t has no covered TRAIN cell at e, the
+  program prior ρ̄_tj (below) is used, which equals current there.
+- **group-pooled:** ψ_tj = (γ_e ρ̄_tj + Σ y_cj) / (γ_e + Σ N_ce), with ρ̄_tj = mean over t's TRAIN cells of (φ_c ψ)_j,
+  Σ over t's TRAIN cells, γ_e the fitted concentration (`bb_conc_vec`). **Interval:** 2.5–97.5 % of
+  Beta(γ_e ρ̄_tj + Σ y_cj, γ_e (1 − ρ̄_tj) + Σ N_ce − Σ y_cj).
+
+**Readouts.**
+1. **Browser-gap table** (same code path, pairs and filters as `c10_browser_gap_rank.py`: the browser example pair plus
+   20 random eligible pairs, seed 7; ATSEs with ≥ 20 TRAIN reads and ≥ 3 covering TRAIN cells in both types; lead
+   junction = argmax |Δψ| of the estimate being ranked). Each estimate ranks its own list. Bins: top 100, 101–1,000, all.
+   Per bin, on rows with ≥ 20 TEST reads and ≥ 3 covering TEST cells in both types: median |Δψ − Δψ_TEST|, median
+   |Δψ| − |Δψ_TEST|, sign agreement with TEST; also median |Δψ − Δψ_TRAIN raw| on all rows. Raw TRAIN ranked by itself
+   is reported beside them.
+2. **10.1-style accuracy:** the 10.1 units and error (TV vs TEST pseudobulk) and bins (type size; TRAIN reads 0, 1–19,
+   20–99, ≥ 100). Mean error per estimate and raw; paired differences (estimate − raw) and (pooled − current) with
+   95 % bootstrap CIs over cell types (1,000 resamples, seed 0, as in 10.1).
+3. **Interval coverage of the pooled Beta interval:** the 10.3 units (≥ 100 TEST reads, ≥ 10 covering TEST cells),
+   per junction, fraction of TEST pseudobulk ψ inside the interval, by TEST read bin (100–499, ≥ 500); also by TRAIN read
+   bin (descriptive). Median interval width. Nominal 0.95. The check 10 coverage (10.3) is quoted beside it.
+
+**Reading (fixed now, Karin).**
+- **Pooled improves on current** if both hold:
+  (a) its top-100 error vs TEST (median over the 20 random pairs of the per-pair median |Δψ − Δψ_TEST|, each estimate
+  ranked by itself) is lower than current's **in both atlases**; and
+  (b) its overall 10.1 accuracy is no worse than current's: the 95 % CI of the overall paired difference
+  (pooled − current) is not entirely above 0, in both atlases. *(This is my reading of "no worse than current, within
+  the 10.1 interval"; stated here before any result.)*
+- The example pair is reported but is not part of the reading (it was chosen, the 20 are random).
+- Covered-cells-only is reported on the same readouts; no pass rule (it is the browser alternative Karin asked to test).
+- **Coverage is descriptive.** If the pooled interval is within 0.05 of nominal ([0.90, 1.00]) in both TEST read bins
+  ≥ 100 in both atlases, Karin is told before check 12 starts.
+- If pooled improves on current, the browser and the LeafletFA atlas switch to the pooled estimate only after Karin
+  confirms; nothing is switched by this check.
+
+**Limits stated in advance.**
+- γ_e was fitted as per-cell overdispersion; here it is reused as the weight of the type's prior. That is a modeling
+  choice, not a fitted pooling weight.
+- The Beta interval treats a type's reads as draws from one composition. It ignores variation between cells and mice, so
+  it can be narrow at high depth.
+- TEST and TRAIN share mice (per-cell split), as in check 10.
+
+**Cost and code.** About 10–25 min per atlas on 2 CPUs (the browser-gap jobs took 10 and 22 min, peak 8 and 20 GB).
+Code: `scripts/validation/c13_pooled.py`. Results: `$V/c13_pooled/`, section "Check 13" in VALIDATION_REPORT.md.
