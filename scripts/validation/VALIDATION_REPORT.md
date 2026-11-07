@@ -594,7 +594,7 @@ Cells per donor: median 46 (10th to 90th percentile 4 to 342). Cell-weighted top
 Sorting: `facs_population_plan_label` has 6 values; RFP-positive is 52,415 of 54,571 cells (482 donors), RFP-negative 385 cells of which 0.966 non-neuronal. Cramér's V with class: donor 0.81, genotype 0.71, FACS plan 0.36, region 0.24. Other fields present: `injection_*`, `cortical_layer_label`. Consequence for any mouse-level design: most donors contain one class, so class contrasts are largely between donors and hence between genotypes. Not done: the source paper's methods were not read, and class composition was not separated from genotype as a cause of the null.
 - Treating an unread group as ψ = 0 does not inflate null (ii): restricting to read groups leaves it unchanged or higher.
 
-## Check 12 — amendment 7 intervals: NOT RUN, projected cost above the 30 CPU-h cap (2026-11-06)
+## Check 12 — amendment 7 intervals: projected cost above the 30 CPU-h cap (2026-11-06; superseded by the run below)
 
 Amendment 7 appended unchanged to the prereg (a080dcc) before any code ran. Code: `c12_intervals.py` (literal reading; notes in its docstring).
 Smoke (10 of 200 draws, 3 types per dataset; jobs 22780809, 22780810; 4 CPUs): TMS 13 min, peak 9.6 GB; Allen 24 min, peak 22.2 GB;
@@ -676,3 +676,31 @@ Jobs 22814975 (TMS, 6 min), 22814976 (Allen, 34 min, peak 20 GB). Asserts passed
   - Covered-only has the lowest TMS top-100 error and is close to current overall (no pass rule for it).
 - **Decision (Karin 2026-11-07):** reading accepted; the current estimate stays in the catalog and the browser.
   Covered-only is recorded as descriptive only, with no switch and no new rule.
+
+## Check 12 — result (amendment 7 with note 1, R = 1; `c12_intervals.py`, `tsv/c12_*`, `c12/`)
+Jobs 22816659 (TMS, 40 GB requested, peak 13.9 GB, 1.9 h) and 22815095 (Allen, 28 GB, peak 24.4 GB, 5.3 h); 1 CPU each,
+**7.2 CPU-h** in total (under the 30 CPU-h cap). The first TMS job (22815094, 12 GB) ran out of memory and produced no output.
+200 draws per dataset, no Dirichlet underflow. Coverage at ≥ 100 TEST reads, combined draws, DM (a):
+
+| | TMS 100–499 | TMS ≥ 500 | Allen 100–499 | Allen ≥ 500 |
+|---|---|---|---|---|
+| Junctions (all units) | 563,548 | 1,266,387 | 783,901 | 746,538 |
+| Check 10 interval | 0.136 | 0.218 | 0.256 | 0.346 |
+| (a) binomial | 0.586 | 0.373 | 0.766 | 0.635 |
+| **(a) DM**, all | 0.863 | 0.838 | 0.891 | 0.823 |
+| (a) DM, half A / half B | 0.867 / 0.868 | 0.856 / 0.860 | 0.891 / 0.898 | 0.855 / 0.867 |
+| **(a)+(b), τ² from A, read on B** | **0.963** | **0.956** | **0.963** | **0.961** |
+| **(a)+(b), τ² from B, read on A** | **0.958** | **0.950** | **0.960** | **0.958** |
+| τ² chosen (A; B) | 0.01024; 0.01024 | 0.00256; 0.00256 | 0.00128; 0.00128 | 0.00032; 0.00032 |
+| Median width, (a) DM / (a)+(b) | 0.104 / 0.225 | 0.069 / 0.131 | 0.087 / 0.121 | 0.034 / 0.074 |
+
+**Pass rule** ((a)+(b) coverage in [0.90, 1.00] in both read bins, both datasets, both directions): **passes**
+(all eight cells 0.950–0.963).
+- (a) alone does not pass: 0.82–0.90 (Allen 100–499 is 0.891).
+- **Pre-registered reading: "(a)+(b) passes, (a) fails → ship (a)+(b), with τ² reported."**
+- Descriptive, outside the rule:
+  - The parameter-only draws give the same picture ((a)+(b) 0.950–0.972).
+  - The (a)+(b) subsets by mice per type and by TRAIN reads all stay within 0.91–0.99. The lowest is TRAIN reads
+    < 1,000 at ≥ 500 TEST reads (0.911–0.948, 384–8,592 junctions).
+  - τ² is the same in both directions in every bin. τ (SD on the ψ scale) is 0.10 / 0.05 for TMS and 0.036 / 0.018
+    for Allen. The calibrated intervals are about 2× as wide as (a) DM in TMS and 1.4–2.2× in Allen.

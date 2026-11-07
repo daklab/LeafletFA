@@ -47,7 +47,7 @@ Notes on the fits:
 **Model inputs** (`D/`, built 2026-06-17):
 - File names are `{train_70_30,test_30_70}_{TMS,AB}_ONLY_model_ready_combined_ge_splicing_aligned_filtered_minCells75_minJuncs500_2026-06-17.h5mu`.
 - The md5 values below are from the fits' `run_record.json`.
-- A re-hash job (22817442, sbatch) writes `V/release/datasets.md5` to confirm the files are unchanged. Its result is pending.
+- Re-hashed 2026-11-07 (job 22817442, `V/release/datasets.md5`): all four md5 values match the run records, so the inputs are unchanged since the fits.
 
 | File | Size (bytes) | mtime | md5 | Cells |
 |---|---|---|---|---|
@@ -93,7 +93,9 @@ Notes on the fits:
 
 Gaps before deposit (no new analyses were run):
 - **No raw ψ column in the catalog TSVs.** They carry reads and cells but not raw TRAIN ψ. Raw ψ exists only in the browser's `train_tables.npz` and in its per-event downloads. Adding `raw_psi` needs an export step. Karin to approve.
-- **Intervals:** the TSV interval columns must carry the "not calibrated" label (coverage 0.14–0.35, check 10.3). Check 12 is still running.
+- **Intervals:** the current TSV interval columns are the check 10 intervals (coverage 0.14–0.35, check 10.3). They must carry the "not calibrated" label, or be replaced.
+  - Check 12 passed with (a)+(b): coverage 0.950–0.963 with τ² from the other mouse half.
+  - Shipping (a)+(b) in the TSVs and the browser needs an export step plus Karin's sign-off; nothing has been exported yet.
 - **Size:** the deposit without the h5mu inputs is about 1.3 GB.
 
 ## 4. Open gaps in the manuscript
@@ -112,4 +114,4 @@ From `LeafletFA_overleaf/main.tex`, pulled 2026-11-07:
   - The `--preset paper` entry point (line 180).
 - **Stale and should be updated:**
   - Line 281 says the scQuint and LeafCutter catalog benchmarks are "not run yet". Both have now run (scQuint job 22725257; LeafCutter TMS_full array 22780123).
-  - Line 193 says amendment 7 is a "draft, not approved". It was approved and is running as check 12.
+  - Line 193 says amendment 7 is a "draft, not approved". It was approved and has run as check 12: (a)+(b) passes, (a) alone fails.
