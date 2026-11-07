@@ -736,3 +736,11 @@ held-out data? Read-only: saved seed-0 fits, TMS and Allen; no refit; CPU only.
 
 **Cost and code.** About 10–25 min per atlas on 2 CPUs (the browser-gap jobs took 10 and 22 min, peak 8 and 20 GB).
 Code: `scripts/validation/c13_pooled.py`. Results: `$V/c13_pooled/`, section "Check 13" in VALIDATION_REPORT.md.
+
+### Amendment 7, note 2 and amendment 8, note 1 (Karin 2026-11-06; before any check 12 or check 13 output was read)
+- **Check 12 no longer waits for check 13 (Karin).** Reason: the same pooling idea failed in SpliceVI (§196), because summing
+  reads across cells ignores between-cell variation and makes the group posterior too narrow. Check 12 (option 1) is
+  started now, independently of check 13; note 1's "check 13 first, tell Karin before check 12" is withdrawn.
+- **Check 13 coverage is descriptive only** and has no consequence for check 12 or for any interval shipped. The
+  point-estimate comparison and its reading are unchanged.
+- Check 13 jobs (22814975, 22814976) were already running when this was written; none of their output had been read.

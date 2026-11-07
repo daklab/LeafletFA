@@ -12,11 +12,11 @@ Implementation (literal reading of the amendment; notes are repeated in the repo
   rule on that half's TEST cells, with the read bin from that half's reads.
 - Halves: the 10.2a mouse split (mouse_halves: seed 0 over TRAIN mice). TEST cells take the half of their mouse.id; TEST
   mice with no TRAIN cells are in neither half and are used only in the all-TEST evaluation.
-- (a) DM: per draw s and replicate r (1,000 values), every TEST cell of the type with N_ce > 0 gets counts at the ATSE from
+- (a) DM: per draw s, one replicate (amendment 7 note 1; 200 values), every TEST cell of the type with N_ce > 0 gets counts at the ATSE from
   DM(N_ce, gamma_e * psi_t^(s)) (Dirichlet via normalized gammas, then multinomial); counts are summed over the comparison
   set's cells (all TEST, half A, half B) and divided by the summed N. If all gammas of a cell underflow to 0, the cell's
   Dirichlet draw is set to psi_t^(s) itself (counted and reported).
-- (a) binomial: Bin(sum of N_ce, psi_tj^(s)) / sum of N_ce per junction, 5 replicates per draw.
+- (a) binomial: Bin(sum of N_ce, psi_tj^(s)) / sum of N_ce per junction, 1 replicate per draw.
 - (b): tau^2 per dataset x read bin, smallest on the grid {0, 1e-5 * 2^i, i = 0..20} giving >= 95 % coverage of the
   calibration half's units with m +/- 1.96 sqrt(v + tau^2), m and v the mean and variance of that half's (a) DM values;
   if none reaches 95 %, the largest grid value (reported). Applied, clipped to [0, 1], to the other half's units.
@@ -28,7 +28,7 @@ import vlib  # noqa: E402
 import c10_catalog as C  # noqa: E402
 from c10_catalog import Data, Groups, type_setup, mouse_halves, reads_cov, raw_pb, onehot, phi_draw, psi_draw, log  # noqa: E402
 
-S_DRAWS = C.S_DRAWS; R_REP = 5
+S_DRAWS = C.S_DRAWS; R_REP = 1   # amendment 7 note 1 (Karin 2026-11-06): one replicate per draw
 SMOKE = int(os.environ.get("C12_SMOKE_TYPES", 0))
 OUT = os.path.join(vlib.V, "c12"); T = os.path.join(vlib.V, "tsv")
 BINS = ((100, 499, "100-499"), (500, np.inf, "500-inf"))
