@@ -59,7 +59,7 @@ The audit was static only: imports, names and keyword arguments resolved against
 **Goal:** reproduce one browser event page in a notebook. Inputs:
 - a gene name;
 - the ATSEs of that gene;
-- per cell type, the LeafletFA ψ with its interval (labeled "not calibrated");
+- per cell type, the LeafletFA ψ with its check 12 interval (95 % predictive for held-out cells at their read depth; NA where held-out data are too thin);
 - raw TRAIN pseudobulk ψ, reads and cells with reads beside it;
 - a plot with the same encoding as the browser.
 
@@ -78,7 +78,7 @@ The audit was static only: imports, names and keyword arguments resolved against
   5. A short "how to read it" cell:
      - Use the raw ring and the read count to judge large differences.
      - Estimates for cells without reads come from the shared programs (the smoothing diagnosed on 2026-11-06).
-     - Intervals are not calibrated.
+     - The interval predicts the pseudobulk ψ of held-out cells of the type; it is not an interval for the true cell-type ψ, and it is missing where held-out cells have < 100 reads or < 10 cells with reads.
 - **B. From a fit (for a user's own data).** Steps:
   1. Fit with the production driver.
   2. Call `celltype_psi(model, adata, groupby="cell_type")`, which computes the same estimator from the fit.
@@ -90,7 +90,9 @@ The audit was static only: imports, names and keyword arguments resolved against
   - `celltype_psi`: the estimator from `c10_catalog.py` without hard-coded paths. Point estimate first; intervals as an option.
 - `leafletfa/plotting.py`: `plot_event`, matching the browser's encoding and `FIGURE_THEME.md`.
 - **Test:** `celltype_psi` on the TMS seed-0 fit reproduces `c10/TMS_s0_estimates.npz` `point` (max difference < 1e-4), and `celltype_table` matches the browser's per-event TSV download for one ATSE.
-- **Blocker for entry point A:** the catalog TSVs lack raw ψ (see `RELEASE_MANIFEST.md` §3). The export must add `raw_psi`, `junction_reads` and `mice` columns, or the tutorial must read `train_tables.npz`. Adding the columns to the TSV is simpler for users.
+- **Entry point A blocker resolved (2026-11-07):** the catalog TSVs now carry `raw_psi`, `junction_reads`, `mice`, the check 12 interval, `interval_status`, `test_reads` and `test_cells`.
+- **Done (2026-11-07):** `leafletfa/catalog.py` with `load_fit` and `celltype_psi` (point estimate, raw ψ, reads, cells, mice; no interval, since the check 12 interval needs held-out cells). Tests: `tests/test_catalog.py` (per-cell definition, toy data) and `scripts/validation/catalog_port_check.py` (saved check 10 point, both atlases).
+- Not yet written: `load_catalog`, `gene_events`, `celltype_table`, `plot_event`. The interval labels in the tutorial must follow the check 12 wording.
 
 **Worked examples:**
 - *Fgfr2* IIIb/IIIc (TMS, epithelial vs mesenchymal, covered vs uncovered cells).
@@ -121,6 +123,5 @@ The audit was static only: imports, names and keyword arguments resolved against
    - Keep a short DM fit on the 1,000-cell file, without junction subsetting that splits ATSEs, as entry point B.
 
 Decisions for Karin:
-- Approve adding `raw_psi`, `junction_reads` and `mice` to the catalog export, so the tutorial and Zenodo carry raw values.
-- Approve porting the estimator into the package (`leafletfa/catalog.py`).
+- ~~Raw columns in the export; port of the estimator~~: approved and done 2026-11-07.
 - Choose whether the legacy Beta-binomial class stays in the package or only in docs history.

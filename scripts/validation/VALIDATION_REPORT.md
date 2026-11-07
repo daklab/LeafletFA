@@ -704,3 +704,14 @@ Jobs 22816659 (TMS, 40 GB requested, peak 13.9 GB, 1.9 h) and 22815095 (Allen, 2
     < 1,000 at ≥ 500 TEST reads (0.911–0.948, 384–8,592 junctions).
   - τ² is the same in both directions in every bin. τ (SD on the ψ scale) is 0.10 / 0.05 for TMS and 0.036 / 0.018
     for Allen. The calibrated intervals are about 2× as wide as (a) DM in TMS and 1.4–2.2× in Allen.
+
+### Check 12 export and estimator port (Karin 2026-11-07; `c12_export.py`, `catalog_port_check.py`, `c12/export/`)
+- **Export** (jobs 22869947, 22869948). The catalog TSVs now carry the (a)+(b) interval for the check 12 units only: TMS 1,829,935 of 6,478,290 rows, Allen 1,530,439 of 4,420,578. Other rows get NA plus `interval_status`. New columns: `test_reads`, `test_cells`, `raw_psi`, `junction_reads`, `mice`; `reads` is renamed `atse_reads`.
+  - Asserts passed:
+    - the check 12 cross-half coverage is reproduced exactly from the saved arrays;
+    - τ² is the same in both directions;
+    - TEST reads match check 12;
+    - the units are exactly the ≥ 100 reads, ≥ 10 cells set;
+    - the old columns are unchanged.
+  - Descriptive, not out-of-sample (τ² was set on halves of the same TEST cells). The shipped interval covers all-TEST pseudobulk at TMS 0.958 / 0.949 and Allen 0.959 / 0.949 (100–499 / ≥ 500 reads).
+- **Port** (jobs 22870583, 22870584). `leafletfa.catalog.celltype_psi` reproduces the saved check 10 point estimates: max |diff| is 5.9e-8 in both atlases. ATSE reads, junction reads, cells with reads, mice, cells and raw ψ all equal the browser's TRAIN tables exactly. **Pass.**

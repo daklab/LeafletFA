@@ -82,21 +82,22 @@ Notes on the fits:
 
 | Item | Source | Size | Contents | Status |
 |---|---|---|---|---|
-| Cell-type ψ catalog, TMS | `V/c10/export/catalog_TMS_s0.tsv.gz` | 166 MB | per junction × cell type: ψ, interval, ψ_rest, reads, cells, cells covering, TV, specific, call_eligible | exists |
-| Cell-type ψ catalog, Allen | `V/c10/export/catalog_Allen_s0.tsv.gz` | 112 MB | same | exists |
-| Raw TRAIN ψ, reads, cells | `V/portal_browser/precomputed/{TMS,Allen}_train_tables.npz` | 17 MB + 11 MB | junction reads, ATSE reads, covered cells, mice per type | exists as npz only |
-| Estimate arrays | `V/c10/{TMS,Allen}_s0_estimates.npz` | 387 MB + 199 MB | point, intervals (bootstrap and parameter-only), rest, reads, cov, eligibility | exists |
+| Cell-type ψ catalog, TMS | `V/c12/export/catalog_TMS_s0.tsv.gz` (md5 fcf049cd51e7d9f87a96fe486ee732da) | 175 MB | per junction × cell type: ψ; check 12 (a)+(b) interval with `interval_status`; TEST reads and cells; raw TRAIN ψ, junction reads, ATSE reads, cells, cells covering, mice; ψ_rest; TV, specific, call_eligible | exists (2026-11-07, `c12_export.py`) |
+| Cell-type ψ catalog, Allen | `V/c12/export/catalog_Allen_s0.tsv.gz` (md5 54f5477589290c4cba6a10616033e6f8) | 124 MB | same | exists (2026-11-07) |
+| Raw TRAIN ψ, reads, cells | in the catalog TSVs above; also `V/portal_browser/precomputed/{TMS,Allen}_train_tables.npz` | 17 MB + 11 MB | junction reads, ATSE reads, covered cells, mice per type | exists |
+| Estimate arrays | `V/c10/{TMS,Allen}_s0_estimates.npz` | 387 MB + 199 MB | point, check 10 intervals (superseded), rest, reads, cov, eligibility | exists |
+| Interval arrays | `V/c12/export/{TMS,Allen}_intervals.npz` | 16 MB + 13 MB | check 12 (a)+(b) lo/hi (types × junctions, NaN outside the units), TEST reads and cells, τ² | exists |
 | Event catalog | `V/portal_browser/precomputed/catalog_events.json`, `catalog_junctions.parquet` | 4.8 MB + 2.8 MB | ATSE → junctions, class, gene, coordinates | exists |
-| Browser site (static) | `V/portal_browser/site/` | 541 MB | built 2026-11-07, version preview-2026-11-06, all headless checks pass | exists |
+| Browser site (static) | `V/portal_browser/site/` | 597 MB | built 2026-11-07, version preview-2026-11-07, check 12 intervals | exists |
 | Model checkpoints, seed 0 | `B/{TMS,Allen}/full_K20_s0_f64/fit/` | 76 MB total | `fit.npz` and `checkpoint.pt` | exists |
 | Model inputs (h5mu) | `D/` | 138 GB | train and test for both atlases | **decision needed:** deposit, or point to the source atlases plus code |
 
 Gaps before deposit (no new analyses were run):
-- **No raw ψ column in the catalog TSVs.** They carry reads and cells but not raw TRAIN ψ. Raw ψ exists only in the browser's `train_tables.npz` and in its per-event downloads. Adding `raw_psi` needs an export step. Karin to approve.
-- **Intervals:** the current TSV interval columns are the check 10 intervals (coverage 0.14–0.35, check 10.3). They must carry the "not calibrated" label, or be replaced.
-  - Check 12 passed with (a)+(b): coverage 0.950–0.963 with τ² from the other mouse half.
-  - Shipping (a)+(b) in the TSVs and the browser needs an export step plus Karin's sign-off; nothing has been exported yet.
-- **Size:** the deposit without the h5mu inputs is about 1.3 GB.
+- **Done 2026-11-07 (Karin approved):** the catalog TSVs now carry `raw_psi`, `junction_reads` and `mice`, and the check 12 (a)+(b) interval replaces the check 10 interval (`scripts/validation/c12_export.py`). The old check 10 export stays at `V/c10/export/` and is not for deposit.
+  - Interval on 28 % (TMS) and 35 % (Allen) of rows: TEST ≥ 100 reads and ≥ 10 cells with reads at the ATSE. NA elsewhere, with `interval_status` giving the reason.
+  - Column `reads` is renamed `atse_reads`.
+- **Still in the TSVs:** `tv`, `specific`, `call_eligible` (check 10.2 calls, which failed). The browser never shows them. Keep, drop, or label for Zenodo: Karin to decide.
+- **Size:** the deposit without the h5mu inputs is about 1.4 GB.
 
 ## 4. Open gaps in the manuscript
 
@@ -115,3 +116,4 @@ From `LeafletFA_overleaf/main.tex`, pulled 2026-11-07:
 - **Stale and should be updated:**
   - Line 281 says the scQuint and LeafCutter catalog benchmarks are "not run yet". Both have now run (scQuint job 22725257; LeafCutter TMS_full array 22780123).
   - Line 193 says amendment 7 is a "draft, not approved". It was approved and has run as check 12: (a)+(b) passes, (a) alone fails.
+  - Lines 191-192 describe the check 10 interval, which is no longer shipped (check 12 facts added as comments; prose not changed).
