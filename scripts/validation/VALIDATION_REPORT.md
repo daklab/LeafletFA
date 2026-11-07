@@ -649,3 +649,28 @@ Descriptive; the pre-registered verdict (10.2 fails) stands. (ii) only; 141 type
 - Allen: both methods' within-donor nulls are inflated and fall to 0.23–0.30 when donors are ignored, so the inflation is a property of the Allen design (donors sampled by Cre line), not of LeafletFA.
 - TMS: LeafCutter makes 4.3× more calls on the same types, and fewer of them confirm.
 - Not comparable event for event: the call sets differ. LeafCutter's δ is applied to its own deltapsi over tested introns.
+
+## Check 13 — group-pooled cell-type estimate (amendment 8 and its note 1; `c13_pooled.py`, `c13_pooled/`)
+Jobs 22814975 (TMS, 6 min), 22814976 (Allen, 34 min, peak 20 GB). Asserts passed: current = saved check 10 point; covered-only and
+ρ̄ match a per-cell rebuild; the 10.1 units and the 10.3 junction counts are reproduced exactly.
+
+| Readout | TMS | Allen |
+|---|---|---|
+| Top-100 error vs TEST, median of 20 random pairs: current / covered-only / pooled / raw TRAIN | 0.224 / 0.178 / **0.253** / 0.237 | 0.123 / 0.127 / **0.100** / 0.101 |
+| Top-100 \|Δψ\| − \|Δψ_TEST\|: current / covered-only / pooled / raw | −0.121 / −0.017 / +0.253 / +0.226 | −0.081 / −0.077 / +0.048 / +0.056 |
+| Top-100 TEST-evaluable rows per pair (median): current / covered-only / pooled / raw | 51 / 25 / 23 / 22 | 75 / 46.5 / 39.5 / 35.5 |
+| Overall 10.1 error: current / covered-only / pooled / raw | 0.0940 / 0.0955 / 0.1004 / 0.1012 | 0.0625 / 0.0610 / 0.0640 / 0.0647 |
+| Pooled − current, overall (95 % CI over types) | +0.0064 (+0.0042, +0.0084) | +0.0014 (−0.0001, +0.0031) |
+| Pooled Beta coverage, 100–499 / ≥ 500 TEST reads (check 10 interval) | 0.178 / 0.164 (0.136 / 0.218) | 0.393 / 0.418 (0.256 / 0.346) |
+| Pooled median interval width, 100–499 / ≥ 500 | 0.023 / 0.010 | 0.038 / 0.012 |
+
+**Pre-registered reading: pooled does not improve on current.**
+- (a) Top-100 error lower in both atlases: **fails** (TMS higher, 0.253 vs 0.224; Allen lower, 0.100 vs 0.123).
+- (b) Overall no worse (CI of pooled − current not entirely above 0): TMS **fails** (CI entirely above 0); Allen holds.
+- Coverage, descriptive (amendment 8 note 1): 0.16–0.42, not within 0.05 of nominal in any bin. It has no consequence
+  for check 12.
+- Descriptive, outside the reading:
+  - The pooled estimate sits within about 0.01 of raw TRAIN at the top of its own ranking. It inherits raw's selection
+    (|Δψ| above TEST's, +0.25 in TMS) instead of LeafletFA's shrinkage (−0.12).
+  - Each estimate's top 100 is a different set of rows, with different TEST-evaluable counts (row above).
+  - Covered-only has the lowest TMS top-100 error and is close to current overall (no pass rule for it).
