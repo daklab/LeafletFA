@@ -11,8 +11,9 @@ with y_cj the cell's junction reads, N_ce its reads at the ATSE and gamma_e the 
 A cell without reads at e contributes its program prior rho_cj. The cell-type psi is the mean of rho~ over the type's
 cells. Raw pseudobulk psi (sum y / sum N), reads, cells with reads and mice are returned beside it.
 
-Intervals are not computed here. The catalog interval is the check 12 (a)+(b) predictive interval for held-out cells
-(``scripts/validation/c12_intervals.py``, ``c12_export.py``); it needs held-out cells and is not a property of the fit alone.
+Intervals are not computed here, and a user's own fit has none. The atlas catalog's interval is the check 12 (a)+(b) 95 %
+predictive interval for a cell type's held-out pseudobulk psi at its read depth (``scripts/validation/c12_intervals.py``,
+``c12_export.py``). Its model-error term is calibrated on held-out cells of those atlases, so it is not a property of the fit.
 
 Example::
 

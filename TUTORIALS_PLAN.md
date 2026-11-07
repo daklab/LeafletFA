@@ -79,7 +79,7 @@ The audit was static only: imports, names and keyword arguments resolved against
      - Use the raw ring and the read count to judge large differences.
      - Estimates for cells without reads come from the shared programs (the smoothing diagnosed on 2026-11-06).
      - The interval predicts the pseudobulk ψ of held-out cells of the type; it is not an interval for the true cell-type ψ, and it is missing where held-out cells have < 100 reads or < 10 cells with reads.
-- **B. From a fit (for a user's own data).** Steps:
+- **B. From a fit (for a user's own data).** The tutorial must say: a user's own fit gives ψ, raw ψ, reads, cells and mice, but **no interval**. The interval is calibrated on held-out cells of the atlases (check 12) and does not exist for a new fit. Steps:
   1. Fit with the production driver.
   2. Call `celltype_psi(model, adata, groupby="cell_type")`, which computes the same estimator from the fit.
   3. Run the same `celltype_table` and `plot_event` as in A.
@@ -90,7 +90,7 @@ The audit was static only: imports, names and keyword arguments resolved against
   - `celltype_psi`: the estimator from `c10_catalog.py` without hard-coded paths. Point estimate first; intervals as an option.
 - `leafletfa/plotting.py`: `plot_event`, matching the browser's encoding and `FIGURE_THEME.md`.
 - **Test:** `celltype_psi` on the TMS seed-0 fit reproduces `c10/TMS_s0_estimates.npz` `point` (max difference < 1e-4), and `celltype_table` matches the browser's per-event TSV download for one ATSE.
-- **Entry point A blocker resolved (2026-11-07):** the catalog TSVs now carry `raw_psi`, `junction_reads`, `mice`, the check 12 interval, `interval_status`, `test_reads` and `test_cells`.
+- **Entry point A blocker resolved (2026-11-07):** the catalog TSVs now carry `raw_psi`, `junction_reads`, `mice`, the check 12 interval, `interval_status`, `test_reads` and `test_cells`. The failed 10.2 call columns (`tv`, `specific`, `call_eligible`) are dropped (Karin 2026-11-07).
 - **Done (2026-11-07):** `leafletfa/catalog.py` with `load_fit` and `celltype_psi` (point estimate, raw ψ, reads, cells, mice; no interval, since the check 12 interval needs held-out cells). Tests: `tests/test_catalog.py` (per-cell definition, toy data) and `scripts/validation/catalog_port_check.py` (saved check 10 point, both atlases).
 - Not yet written: `load_catalog`, `gene_events`, `celltype_table`, `plot_event`. The interval labels in the tutorial must follow the check 12 wording.
 

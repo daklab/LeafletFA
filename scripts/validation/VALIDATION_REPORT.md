@@ -714,4 +714,7 @@ Jobs 22816659 (TMS, 40 GB requested, peak 13.9 GB, 1.9 h) and 22815095 (Allen, 2
     - the units are exactly the ≥ 100 reads, ≥ 10 cells set;
     - the old columns are unchanged.
   - Descriptive, not out-of-sample (τ² was set on halves of the same TEST cells). The shipped interval covers all-TEST pseudobulk at TMS 0.958 / 0.949 and Allen 0.959 / 0.949 (100–499 / ≥ 500 reads).
+- **Re-export without the call columns** (Karin 2026-11-07; jobs 22879099, 22879100). The Zenodo TSVs drop `tv`, `specific` and `call_eligible`, which stay only in the internal check 10 export.
+  - Row counts, interval rows and asserts are unchanged; the interval arrays are byte-identical.
+  - New md5: TMS d5ad92c81dec67ada5c942b09a1eb45d (167 MB), Allen 1969a84f2efd275dbc28372c34663b98 (117 MB).
 - **Port** (jobs 22870583, 22870584). `leafletfa.catalog.celltype_psi` reproduces the saved check 10 point estimates: max |diff| is 5.9e-8 in both atlases. ATSE reads, junction reads, cells with reads, mice, cells and raw ψ all equal the browser's TRAIN tables exactly. **Pass.**

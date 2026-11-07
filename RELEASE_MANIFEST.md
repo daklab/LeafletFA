@@ -82,8 +82,8 @@ Notes on the fits:
 
 | Item | Source | Size | Contents | Status |
 |---|---|---|---|---|
-| Cell-type ψ catalog, TMS | `V/c12/export/catalog_TMS_s0.tsv.gz` (md5 fcf049cd51e7d9f87a96fe486ee732da) | 175 MB | per junction × cell type: ψ; check 12 (a)+(b) interval with `interval_status`; TEST reads and cells; raw TRAIN ψ, junction reads, ATSE reads, cells, cells covering, mice; ψ_rest; TV, specific, call_eligible | exists (2026-11-07, `c12_export.py`) |
-| Cell-type ψ catalog, Allen | `V/c12/export/catalog_Allen_s0.tsv.gz` (md5 54f5477589290c4cba6a10616033e6f8) | 124 MB | same | exists (2026-11-07) |
+| Cell-type ψ catalog, TMS | `V/c12/export/catalog_TMS_s0.tsv.gz` (md5 d5ad92c81dec67ada5c942b09a1eb45d) | 167 MB | per junction × cell type: ψ; check 12 (a)+(b) interval with `interval_status`; TEST reads and cells; raw TRAIN ψ, junction reads, ATSE reads, cells, cells covering, mice; ψ_rest | exists (2026-11-07, `c12_export.py`) |
+| Cell-type ψ catalog, Allen | `V/c12/export/catalog_Allen_s0.tsv.gz` (md5 1969a84f2efd275dbc28372c34663b98) | 117 MB | same | exists (2026-11-07) |
 | Raw TRAIN ψ, reads, cells | in the catalog TSVs above; also `V/portal_browser/precomputed/{TMS,Allen}_train_tables.npz` | 17 MB + 11 MB | junction reads, ATSE reads, covered cells, mice per type | exists |
 | Estimate arrays | `V/c10/{TMS,Allen}_s0_estimates.npz` | 387 MB + 199 MB | point, check 10 intervals (superseded), rest, reads, cov, eligibility | exists |
 | Interval arrays | `V/c12/export/{TMS,Allen}_intervals.npz` | 16 MB + 13 MB | check 12 (a)+(b) lo/hi (types × junctions, NaN outside the units), TEST reads and cells, τ² | exists |
@@ -96,7 +96,7 @@ Gaps before deposit (no new analyses were run):
 - **Done 2026-11-07 (Karin approved):** the catalog TSVs now carry `raw_psi`, `junction_reads` and `mice`, and the check 12 (a)+(b) interval replaces the check 10 interval (`scripts/validation/c12_export.py`). The old check 10 export stays at `V/c10/export/` and is not for deposit.
   - Interval on 28 % (TMS) and 35 % (Allen) of rows: TEST ≥ 100 reads and ≥ 10 cells with reads at the ATSE. NA elsewhere, with `interval_status` giving the reason.
   - Column `reads` is renamed `atse_reads`.
-- **Still in the TSVs:** `tv`, `specific`, `call_eligible` (check 10.2 calls, which failed). The browser never shows them. Keep, drop, or label for Zenodo: Karin to decide.
+- **Dropped (Karin 2026-11-07):** `tv`, `specific`, `call_eligible` (check 10.2 calls, which failed) are not in the Zenodo TSVs; they stay only in the internal check 10 export.
 - **Size:** the deposit without the h5mu inputs is about 1.4 GB.
 
 ## 4. Open gaps in the manuscript

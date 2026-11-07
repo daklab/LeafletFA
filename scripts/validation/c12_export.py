@@ -120,6 +120,8 @@ def main(ds):
     X["source"] = "LeafletFA point (check 10); interval check 12 (a)+(b), predictive for held-out TEST cells"
     order = cols[:cols.index("psi_hi") + 1] + ["interval_status", "test_reads", "test_cells", "raw_psi", "junction_reads"] + \
         [c for c in cols[cols.index("psi_hi") + 1:] if c != "source"] + ["mice", "source"]
+    # Karin 2026-11-07: the check 10.2 call columns (failed check) are not shipped; they stay in the internal check 10 export.
+    order = [c for c in order if c not in ("tv", "specific", "call_eligible")]
     X = X[order].rename(columns={"reads": "atse_reads"})
     path = os.path.join(OUT, f"catalog_{ds}_s0.tsv.gz")
     X.to_csv(path, sep="\t", index=False, float_format="%.4g")
