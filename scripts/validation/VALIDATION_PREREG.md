@@ -586,6 +586,38 @@ Code: `scripts/validation/c9_ds_atlas_posthoc.py`; `tsv/c9a3_*`.
 - **Limit stated before the result:** the *Nrxn3* catalog has no junction ending at the exon's start − 1 and none spanning the exon, so
   its ATSE (if one qualifies) compares the exon's downstream splice choices, not inclusion against skipping. Reported as such.
 
+### Amendment 6, note 6 (2026-11-11, recorded correction of an annotation error; written before any SS4 row below was computed)
+- **Error:** note 4 identified "the SS4 alternative exon" as "the single 30-nt exon of each gene in GENCODE vM19". SS4 is a
+  90-nt exon (30 residues) in the sixth LNS domain. The 30-nt exons of note 4 are other sites:
+  - *Nrxn1* chr17:90,992,115–90,992,144 (`atse_2`) is one of three small early exons of Nrxn1α (18 / 30 / 12 nt, exons 2–4 of the
+    α transcripts; residues ~259–274 of UniProt Q9CS84, after EGF-like 1). Consistent with SS#1 (Treutlein et al. 2014:
+    "Nrxn1α exons 3a and 4 (SS#1)"); the SS number is not verified.
+  - *Nrxn2* chr19:6,448,255–284 and *Nrxn3* chr12:88,850,279–308: the 30-nt exons chosen by the same rule. Not SS4 (SS4 exons
+    below); their site is not identified here.
+  - Found 2026-11-11 while drawing the Application Note figure: the SpliceVI Fig 2 SS4 exon (below) translates to residues
+    1248–1277 of Q9CS84, inside the 30-residue variable segment 1247–1276 in Laminin G-like 6; the note 4 exon does not.
+- **Treatment (Karin 2026-11-11):** this is a fix of the exon annotation, not a change of rule after results.
+  - The note 4 / note 5 rows stay in the report with their verdicts unchanged, relabeled as "early Nrxn site (note 4 30-nt
+    exon; not SS4)".
+  - New 10.4 rows are added for the true SS4, by the same 10.4 rule (neuronal groups; a pair differs if point TV between their
+    ψ at the ATSE > δ = 0.10 **and** their check 10 primary 95 % intervals do not overlap at ≥ 1 junction; pass per gene:
+    ≥ 1 such pair; the read/cell-restricted count reported descriptively).
+- **SS4 exons and ATSEs (SpliceVI STAGE5 §111 event list, fixed 2026-10-06, before any LeafletFA value of these events was
+  read; GENCODE vM19):**
+  - *Nrxn1*: chr17:90,163,792–90,163,881 (90 nt), `ENSMUSG00000024109.18_atse_7`; inclusion `chr17_90162433_90163791_-`,
+    skipping `chr17_90162433_90208322_-`.
+  - *Nrxn2*: chr19:6,513,716–6,513,805 (90 nt), `ENSMUSG00000033768.16_atse_6`; inclusion `chr19_6509949_6513715_+`,
+    skipping `chr19_6509949_6516922_+`.
+  - *Nrxn3*: chr12:90,199,147–90,199,236 (90 nt), `ENSMUSG00000066392.11_atse_7`; inclusion `chr12_90169091_90199146_+`,
+    skipping `chr12_90169091_90204510_+`.
+  - The SS4 ATSE is the §111 ATSE (it holds both junctions). Cross-check: the note 5 junction rule (ends at the exon's
+    start − 1, starts at its end, or spans it) is also run and any additional ATSE it finds is reported, not scored.
+- **Code:** `c10_known_biology_fix.py nrxn_ss4` (sbatch), reading the saved seed-0 check 10 outputs; no refit, no new draws.
+  Output `tsv/c10_Allen_s0_nrxn_pairs_ss4.tsv`, key `nrxn_ss4` in `tsv/c10_known_biology_fix.json` (the note 4 / note 5
+  `nrxn` key is kept unchanged).
+- Direction (descriptive, not part of the rule): Nguyen et al. 2016 (mouse) — SS4 skipped in excitatory pyramidal neurons,
+  included in PV and SST interneurons.
+
 ### Record, LeafCutter descriptive control for 10.2 (Karin 2026-11-05; written before any LeafCutter run of this control)
 Descriptive. The pre-registered verdict (10.2 fails, Application Note) stands and this cannot change it. (ii) only; (i) is not run.
 - **Types:** those eligible in check 10 with ≥ 4 mice in half A and ≥ 4 in half B (TMS 100, Allen 41; 141). The mouse column is `mouse.id` (Allen: `external_donor_name_label`). Halves: `mouse_halves` (10.2a, seed 0).
