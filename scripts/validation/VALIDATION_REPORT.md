@@ -483,9 +483,12 @@ of the same mice.
 | 10.3 coverage, combined (param-only), 100–499 / ≥ 500 | 0.136 (0.118) / 0.218 (0.145) | 0.256 (0.180) / 0.346 (0.232) | reported, nominal 0.95 | far below nominal |
 | 10.4 *Fgfr2* | epithelial min 0.704 > mesenchymal max 0.649; IIIb specific in 10 epithelial types | — | stated | **PASS** |
 | 10.4 *Ptprc* (note 4: B or T only, TEST direction) | 27 B/T calls (all atse_2), 25 confirmed in TEST | — | ≥ 1 confirmed | **PASS** |
-| 10.4 *Nrxn1* SS4 (note 4) | — | atse_2: 270 of 1,891 neuronal pairs differ (226 with the read/cell condition) | ≥ 1 pair | **PASS** |
-| 10.4 *Nrxn2* SS4 | — | atse_1: 872 of 1,891 (109 with the read/cell condition) | ≥ 1 pair | **PASS** |
-| 10.4 *Nrxn3* SS4 (note 5) | — | atse_2: 1,201 of 1,891 (696 with the read/cell condition) | ≥ 1 pair | **PASS**, limited (below) |
+| 10.4 *Nrxn1* early Nrxn site (note 4 30-nt exon; **not SS4**, note 6) | — | atse_2: 270 of 1,891 neuronal pairs differ (226 with the read/cell condition) | ≥ 1 pair | **PASS** (verdict unchanged) |
+| 10.4 *Nrxn2* early Nrxn site (note 4 30-nt exon; **not SS4**, note 6) | — | atse_1: 872 of 1,891 (109 with the read/cell condition) | ≥ 1 pair | **PASS** (verdict unchanged) |
+| 10.4 *Nrxn3* early Nrxn site (note 4/5 30-nt exon; **not SS4**, note 6) | — | atse_2: 1,201 of 1,891 (696 with the read/cell condition) | ≥ 1 pair | **PASS**, limited (below; verdict unchanged) |
+| 10.4 *Nrxn1* SS4 (note 6, SpliceVI §111) | — | atse_7: **1,256 of 1,891** neuronal pairs differ (1,256 with the read/cell condition) | ≥ 1 pair | **PASS** |
+| 10.4 *Nrxn2* SS4 (note 6) | — | atse_6: **946 of 1,891** (581 with the read/cell condition) | ≥ 1 pair | **PASS** |
+| 10.4 *Nrxn3* SS4 (note 6) | — | atse_7: **1,129 of 1,891** (812 with the read/cell condition) | ≥ 1 pair | **PASS** |
 | 10.5 export | 6,478,290 rows | 4,420,578 rows | | done |
 
 - 10.4 *Ptprc*: B cells have lower usage of the lead junction than the rest in TEST (all B-cell calls), T cells mostly higher;
@@ -495,6 +498,24 @@ of the same mice.
   catalog has no junction ending at the exon's start − 1 and none spanning it, so this ATSE compares the exon's downstream splice
   choices, not inclusion against skipping. For all three genes the rule is ATSE-level (TV over the ATSE's junctions): a differing
   pair shows that the ATSE holding SS4 differs, not that the SS4 junctions drive the difference.
+- **10.4 correction (amendment 6 note 6, recorded 2026-11-11 before the SS4 rows were computed).** The note 4 "SS4" exon (the
+  gene's single annotated 30-nt exon) is not SS4. In *Nrxn1* it is one of three small early exons of Nrxn1α (18 / 30 / 12 nt,
+  `atse_2`; residues ~259–274 of UniProt Q9CS84, after EGF-like 1), consistent with SS#1 (SS number not verified); the *Nrxn2*
+  and *Nrxn3* 30-nt exons are likewise not SS4. Those three rows stay, relabeled "early Nrxn site", with their verdicts unchanged;
+  the *Nrxn3* limit above applies to them, not to SS4.
+- **10.4 SS4 rows (note 6; job 23230218, 4.0 h, peak 0.6 GB; `c10_known_biology_fix.py nrxn_ss4`).** SS4 = the 90-nt exons and
+  ATSEs of the SpliceVI STAGE5 §111 event list (fixed 2026-10-06): *Nrxn1* chr17:90,163,792–881 (`atse_7`), *Nrxn2*
+  chr19:6,513,716–805 (`atse_6`), *Nrxn3* chr12:90,199,147–236 (`atse_7`). Same 10.4 rule: 62 neuronal groups (Allen class
+  Glutamatergic or GABAergic), 1,891 pairs; a pair differs if point TV at the ATSE > δ = 0.10 and the check 10 primary intervals
+  do not overlap at ≥ 1 junction. Outputs `tsv/c10_Allen_s0_nrxn_pairs_ss4.tsv` (3,331 pairs; md5 4da03153225bb80462cf15ab7551a527),
+  key `nrxn_ss4` in `tsv/c10_known_biology_fix.json` (the `nrxn` key is byte-for-byte unchanged).
+  - The note 5 junction rule, run as a cross-check, finds exactly the §111 ATSE for each gene (no other ATSE).
+  - All three genes **pass** (≥ 1 differing pair). Each SS4 ATSE holds both the inclusion and the skipping junction, so these
+    rows compare inclusion against skipping (unlike the *Nrxn3* early-site row).
+  - Descriptive, not part of the rule: median LeafletFA ψ of the SS4 inclusion junction over groups with ≥ 20 TRAIN reads and
+    ≥ 3 covering cells, excitatory vs inhibitory: *Nrxn1* 0.153 vs 0.396; *Nrxn2* 0.185 vs 0.334; *Nrxn3* 0.361 vs 0.525.
+    Lower in excitatory groups in all three genes, the direction of Nguyen et al. 2016 (SS4 skipped in pyramidal neurons,
+    included in PV and SST interneurons). The figure (panel e, `atse_7`) shows the *Nrxn1* split by PV / SST / VIP / Lamp5.
 - 10.6 (atlas size, 132,706 cells, b6k RTX PRO 6000 Blackwell): full 16,200-step fit 119 min, 0.27 s/step, peak host RSS
   40.7 GB (job 22597359). scQuint and the LeafCutter catalog: not run yet.
 - **10.3 diagnostics (exploratory, Karin 2026-11-02; `c10_diag/`).** Median interval width vs median |estimate − TEST|:

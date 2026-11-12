@@ -2,6 +2,7 @@
 
     python c10_known_biology_fix.py          # writes tsv/c10_known_biology_fix.json and tsv/c10_Allen_s0_nrxn_pairs.tsv
     python c10_known_biology_fix.py nrxn     # Nrxn part only, keeping the Ptprc result (note 5)
+    python c10_known_biology_fix.py nrxn_ss4 # note 6: true SS4 (SpliceVI §111 exons / ATSEs), adds key nrxn_ss4; other keys kept
 
 Reads the saved seed-0 check 10 outputs (c10/<ds>_s0_estimates.npz), the fits' junction / event order (fit.npz) and the TEST
 counts; no refit, no new draws.
@@ -20,6 +21,11 @@ from c10_catalog import labels, fit_dir, lead_sign, CALL_READS, CALL_COV  # noqa
 T = os.path.join(vlib.V, "tsv")
 META = "/gpfs/commons/projects/knowles_singlecell_splicing/allen-brain/mouse_isocortex_hippocampal_2021/METADATA/metadata.csv"
 SS4 = {"Nrxn1": ("chr17", 90992115, 90992144), "Nrxn2": ("chr19", 6448255, 6448284), "Nrxn3": ("chr12", 88850279, 88850308)}
+# note 6 (2026-11-11): the SS4 dict above holds the note 4 30-nt exons, which are NOT SS4 (early Nrxn-alpha site; kept for the
+# record). True SS4 = SpliceVI STAGE5 §111 (fixed 2026-10-06): exon, ATSE, inclusion and skipping junction.
+SS4_TRUE = {"Nrxn1": ("chr17", 90163792, 90163881, "ENSMUSG00000024109.18_atse_7", "chr17_90162433_90163791_-", "chr17_90162433_90208322_-"),
+            "Nrxn2": ("chr19", 6513716, 6513805, "ENSMUSG00000033768.16_atse_6", "chr19_6509949_6513715_+", "chr19_6509949_6516922_+"),
+            "Nrxn3": ("chr12", 90199147, 90199236, "ENSMUSG00000066392.11_atse_7", "chr12_90169091_90199146_+", "chr12_90169091_90204510_+")}
 LYMPH = ("B CELL", "T CELL")                                                     # stated rule: B or T cells (note 4)
 
 
@@ -101,8 +107,61 @@ def nrxn():
     return res
 
 
+def nrxn_ss4():
+    """note 6: the 10.4 Nrxn rule on the true SS4 ATSEs (SpliceVI §111); same pair rule and outputs as nrxn()."""
+    E, jid, ev, inv, gene = load("Allen")
+    types = E["types"].astype(str); delta = float(E["delta"])
+    cls = _classes(types); neu = np.isin(cls, ["Glutamatergic", "GABAergic"])   # = neuronal_groups(types), one read of the file
+    parts = np.array([j.rsplit("_", 3) for j in jid]); ch, s, e_ = parts[:, 0], parts[:, 1].astype(int), parts[:, 2].astype(int)
+    jx = {x: i for i, x in enumerate(jid)}; ex = {x: i for i, x in enumerate(ev)}
+    res, pair_rows = dict(delta=delta, neuronal_groups=int(neu.sum()), groups=len(types), definition="SpliceVI STAGE5 §111 (fixed 2026-10-06)"), []
+    for g, (c, a, b, atse, inc, skp) in SS4_TRUE.items():
+        hit = (gene == g) & (ch == c) & ((e_ == a - 1) | (s == b) | ((s < a) & (e_ > b)))    # note 5 rule, cross-check only
+        cand = [ev[x] for x in np.unique(inv[hit])]
+        e = ex[atse]
+        assert inv[jx[inc]] == e and inv[jx[skp]] == e, (g, atse)
+        J = np.flatnonzero(inv == e); idx = np.flatnonzero(neu)
+        ok = (E["reads"][:, e] >= CALL_READS) & (E["cov"][:, e] >= CALL_COV)
+        n, n_rc = 0, 0
+        for x, y in itertools.combinations(idx, 2):
+            tvp = 0.5 * np.abs(E["point"][x, J] - E["point"][y, J]).sum()
+            sep = np.any((E["lo"][x, J] > E["hi"][y, J]) | (E["lo"][y, J] > E["hi"][x, J]))
+            d = bool(tvp > delta and sep); n += d; n_rc += d and ok[x] and ok[y]
+            if d:
+                pair_rows.append(dict(gene=g, event_id=atse, a=types[x], b=types[y], tv=tvp, read_cell_condition=bool(ok[x] and ok[y])))
+        res[g] = dict(ss4_exon=f"{c}:{a}-{b}", event_id=atse, inclusion_junction=inc, skipping_junction=skp,
+                      note5_rule_candidate_atses=cand, junctions=[jid[j] for j in J], neuronal_pairs=len(idx) * (len(idx) - 1) // 2,
+                      pairs_differ=int(n), pairs_differ_with_read_cell_condition=int(n_rc), pass_=bool(n >= 1),
+                      inclusion_psi_median_by_neuronal_group=None)
+        # descriptive (not part of the rule): median point psi of the inclusion junction, excitatory vs inhibitory groups
+        pi = E["point"][:, jx[inc]]
+        res[g]["inclusion_psi_median_excitatory"] = float(np.median(pi[(cls == "Glutamatergic") & ok])) if ((cls == "Glutamatergic") & ok).any() else None
+        res[g]["inclusion_psi_median_inhibitory"] = float(np.median(pi[(cls == "GABAergic") & ok])) if ((cls == "GABAergic") & ok).any() else None
+        res[g].pop("inclusion_psi_median_by_neuronal_group")
+    pd.DataFrame(pair_rows).to_csv(os.path.join(T, "c10_Allen_s0_nrxn_pairs_ss4.tsv"), sep="\t", index=False)
+    return res
+
+
+def _classes(types):
+    m = pd.read_csv(META, usecols=["cluster_label", "class_label"], low_memory=False).drop_duplicates()
+    c2c = dict(zip(m.cluster_label, m.class_label))
+    with h5py.File(vlib.paths("Allen")["train"], "r") as f:
+        cl = vlib._strings(f["obs"]["cell_ontology_class"]).astype(str)
+    grp = np.array([x.split("_", 1)[1] if "_" in x else x for x in cl]); cls = pd.Series(cl).map(c2c).values
+    out = {}
+    for t in types:
+        v = pd.Series(cls[grp == t]).value_counts()
+        out[t] = v.index[0] if len(v) else None
+    return np.array([out[t] for t in types], dtype=object)
+
+
 if __name__ == "__main__":
     F = os.path.join(T, "c10_known_biology_fix.json")
+    if sys.argv[1:] == ["nrxn_ss4"]:
+        out = json.load(open(F)); out["nrxn_ss4"] = nrxn_ss4()
+        json.dump(out, open(F, "w"), indent=1, default=str)
+        print(json.dumps(out["nrxn_ss4"], indent=1, default=str))
+        sys.exit(0)
     out = dict(ptprc=json.load(open(F))["ptprc"], nrxn=nrxn()) if sys.argv[1:] == ["nrxn"] else dict(ptprc=ptprc(), nrxn=nrxn())
     json.dump(out, open(F, "w"), indent=1, default=str)
     print(json.dumps(out, indent=1, default=str))
