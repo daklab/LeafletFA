@@ -122,6 +122,100 @@ The audit was static only: imports, names and keyword arguments resolved against
    - Replace it with the tutorial above, entry point A.
    - Keep a short DM fit on the 1,000-cell file, without junction subsetting that splits ATSEs, as entry point B.
 
+## 4. Walkthrough: "How LeafletFA works" (plan only; nothing built, no values looked at; Karin 2026-11-12)
+
+**Goal:** one event, followed from raw reads to the catalog value, with pictures. It doubles as a blog post.
+
+**Event:** *Nrxn1* SS4, Allen (`ENSMUSG00000024109.18_atse_7`; SpliceVI §111 definition, the main-figure panel e). Fallback: *Gria2* flip/flop (`atse_3`) if Karin prefers an MXE.
+
+**Two cell groups:** one excitatory and one PV group, fixed now: L2/3 IT CTX and Pvalb (the browser's example pair).
+
+**Steps, one picture each, in the figure theme (LeafletFA teal, raw gray):**
+1. **The event.** Exon structure (GENCODE vM19) with the SS4 exon and its inclusion and skipping junctions, drawn as in the browser.
+2. **Raw reads in single cells.**
+   - Shown: a fixed random sample of 12 TRAIN cells per group (seed 0, drawn from all cells of the group, including cells with no reads at the event).
+   - Each cell's inclusion and skipping junction reads as a small bar.
+   - Point to make: most cells have 0 reads at the event, and covered cells have a few, mostly duplicated, reads.
+3. **Pseudobulk.** Sum the reads over all TRAIN cells of each group to get raw ψ = junction reads / ATSE reads, with the read counts beside it.
+4. **The model in one picture.**
+   - Per cell: ρ = φ·ψ (programs, cell weights).
+   - The per-cell posterior-mean usage ρ̃ = (γ_e ρ + y) / (γ_e + N).
+     - A cell with no reads contributes its prior ρ.
+     - A covered cell is pulled toward its reads.
+   - The 12 example cells are shown again, as ρ and ρ̃.
+5. **The cell-type estimate.** The group mean of ρ̃ (the catalog ψ), beside raw pseudobulk, with the check 12 interval where held-out cells have ≥ 100 reads and ≥ 10 cells with reads.
+   - The interval is a 95 % predictive interval for held-out pseudobulk at its read depth, not for a true ψ.
+   - A user's own fit gets ψ but no interval.
+6. **What it buys and what it costs** (facts from the reports, no new numbers):
+   - Gain over raw pseudobulk: largest where reads are few (check 10.1).
+   - Compression at low coverage, and in the largest types raw is slightly better (check 10.1).
+   - Programs themselves are not reproducible (checks 3, 8), so the tutorial does not interpret them.
+
+**Code needed:**
+- `leafletfa.catalog.celltype_psi` (exists).
+- A per-cell helper returning ρ and ρ̃ for chosen cells (new, about 20 lines).
+- The figure's `event_panel` style.
+- Reads from the seed-0 Allen fit and the TRAIN counts.
+
+**Cost:** CPU only. Reading the Allen TRAIN counts dominates (about 20–30 min, about 25 GB, sbatch). Drawing takes minutes. No GPU.
+
+## 5. Descriptive section: "Which cell types differ most in splicing?" (plan only; rule to be fixed before any value is looked at)
+
+**Not LeafletFA calls.** LeafletFA's cell-type-specificity calls failed their pre-registered checks (10.2 and 10.7: not confirmed above the null, not reproducible across seeds; check 9: differential splicing not reproducible). This section makes no calls and uses no LeafletFA test. It is a descriptive, power-matched summary of how often two cell types' splicing differs, shown as a heatmap of cell-type pairs. The text and the figure must say so.
+
+**Why matching is needed:** a raw count of differences mostly measures power. Types with more cells and reads show more differences.
+
+**Proposed rule (to be written into VALIDATION_PREREG.md as a dated record before anything is run):**
+- **Units:**
+  - **Allen:** all pairs of the 68 cell groups (2,278 pairs). Inhibitory groups are labeled with the PV / SST / VIP / Lamp5 lineages of `cell_type_maps/mouse_lineage_map.json`.
+  - **TMS:** all pairs of the 132 tissue-cell types (8,646 pairs), shown within tissue and within lineage blocks.
+- **Testable event for a pair:** an ATSE where **both** types have ≥ 200 TRAIN reads at the ATSE and ≥ 10 TRAIN cells with reads (above the browser's 20 / 3 so that depth matching below is possible).
+- **Depth matching:** for each testable (pair, ATSE), thin both types' pseudobulk junction counts to the same depth D = 200 reads at the ATSE.
+  - Thinning: multivariate hypergeometric draw of D reads from each type's TRAIN junction counts.
+  - 20 independent draws, seeds 0–19.
+- **Quantity:** Δψ at the ATSE = the largest |ψ_A − ψ_B| over its junctions, computed on the thinned raw pseudobulk.
+  - The pair's score = the fraction of its testable ATSEs with |Δψ| ≥ 0.10, averaged over the 20 draws.
+  - Also reported: the number of testable ATSEs per pair.
+- **Noise floor per type:** the same score for a type against itself.
+  - Its TRAIN cells are split into two halves by mouse (the 10.2a mouse halves), thinned to the same D.
+  - The heatmap shows score(A, B) − ½ [floor(A) + floor(B)], with the raw score and the floor alongside.
+  - Types without cells in both mouse halves get no floor and are marked.
+- **Primary view:** raw pseudobulk (model-free).
+  - **Secondary view (descriptive):** the same rule on LeafletFA ψ, recomputed from per-cell reads thinned to the same depth. Needs per-cell thinning, not pseudobulk thinning.
+  - **Optional third view:** SpliceVI's read-supported calls (posterior sample + read support ≥ 3) for the Allen pairs it covers, from the SpliceVI paper. Labeled as SpliceVI, not LeafletFA.
+- **Minimum:** pairs with < 50 testable ATSEs are shown gray (no score).
+- **Readout:** descriptive only, no pass rule.
+  - Heatmap of cell-type pairs, ordered by lineage.
+  - The most and least different pairs listed with their testable-event counts.
+
+**What could bias it (stated in the text and the figure legend):**
+- **Cell numbers:** depth matching equalizes reads at the event, not the number of cells contributing them. A type of 20 cells at 200 reads is noisier than one of 2,000 cells at 200 reads, because duplicates dominate (Supp. Note 1). The noise floor partly corrects this; cells contributing reads will be reported per pair.
+- **Depth and testability:** deep, large types have more testable events, so their scores rest on different (more weakly expressed) events than small types. Scores across pairs compare different event sets. Report testable counts and a version restricted to events testable in all types of a lineage block.
+- **Event complexity:** the largest |Δψ| over junctions grows with the number of junctions in the ATSE. Report by event class (alt 3′, alt 5′, skipped exon, complex) as well as overall.
+- **Cell-type resolution:**
+  - TMS types are tissue × broad cell type.
+  - Allen groups are cluster names (finer, and defined from expression clusters, so expression-related splicing differences are built into the labels).
+  - Pairs within one atlas are comparable; scores across atlases are not.
+- **Per-cell split and donors:**
+  - TRAIN cells only, from mice shared with TEST, so there is no held-out confirmation of the differences.
+  - In Allen, donors were sampled by Cre line, so cell-group and donor composition are confounded (check 10.2 null diagnostics). The within-type mouse-half floor inherits that.
+- **Duplicates and γ floor:** reads are largely PCR duplicates. Thinning reads, not molecules, overstates effective depth equally for both types of a pair, but not equally across pairs.
+
+**Cost:**
+- **Raw pseudobulk view:** reads only the browser's TRAIN tables (type × junction counts, 17 MB / 11 MB) and, for the floor, per-mouse-half pseudobulks (one pass over the TRAIN counts per atlas, about 20–30 min).
+  - Thinning and scoring all pairs × 20 draws is light: about 10⁷ (pair, ATSE) thinning draws for TMS. Under 1 CPU-h per atlas.
+  - Total about 2 CPU-h with I/O, sbatch, no GPU.
+- **LeafletFA view:** per-cell thinning plus recomputing the catalog estimator for every type at each draw. With the estimator port (`leafletfa.catalog.celltype_psi`, a few minutes per atlas per draw after loading), about 20 draws × 2 atlases ≈ 3–5 CPU-h plus loading. Memory as the port check (TMS peak under 24 GB, Allen under 32 GB).
+- **SpliceVI view:** no compute here; read from the SpliceVI paper's call tables.
+- **Writing the rule into the pre-registration and building the heatmap figure:** about half a day.
+- **Timing:** after Saturday 14 Nov. Tutorial due before the 29 Nov tags; the 28 Nov LeafletFA day has the tutorial slot.
+
+**Decisions for Karin before the rule is recorded:**
+- D (200 reads) and the testable thresholds (≥ 200 reads, ≥ 10 cells).
+- |Δψ| ≥ 0.10 (δ of check 10, the 99th percentile of within-type split-half TV) or TV-based.
+- Whether the LeafletFA view is included or only the raw view.
+- Whether the SpliceVI view is added.
+
 Decisions for Karin:
 - ~~Raw columns in the export; port of the estimator~~: approved and done 2026-11-07.
 - Choose whether the legacy Beta-binomial class stays in the package or only in docs history.
