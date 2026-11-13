@@ -845,3 +845,91 @@ Shipped catalog rows (junction × type). test_cells = TEST cells with reads at t
 
 - Most rows are not thin: 84 % (TMS) and 75 % (Allen) have ≥ 20 TRAIN reads at the ATSE.
 - In TMS the limit is TEST cells with reads, not TEST reads: few TMS rows with 20–99 TEST reads have ≥ 10 TEST cells.
+
+## Check 15 — semi-synthetic recovery vs depth (amendment 10 + note 1; `c15_simulate.py`, `c15_score.py`, `c15_leafcutter.py`; `$V/c15/`)
+
+Descriptive, no pass rule. **Headline: the design has an artifact (below) that makes both measures hard to read as
+intended. Reported in full; no rerun without a new amendment.**
+
+**Runs.**
+- Simulation: job 23274876 (15 min, peak 14.3 GB). 132 types, 23,319 scored ATSEs, 6,996 planted; reads full 5.12 B,
+  f30 1.54 B, f10 0.51 B.
+- Fits (GPU, b6k RTX PRO 6000): jobs 23288309 / 23288310 / 23288311; 13.3 / 12.3 / 10.8 min; 0 non-finite restarts.
+  `run_record.json` `recipe`: 16,200 × 8,192, lr 0.025 → 0.0025, γ floor 2, sparse, δ = 20, float64 φ.
+- Scoring: jobs 23288939–41 (peak 10.7 GB). LeafCutter: arrays 23289061–63 (121 types × 3, all COMPLETED, peak 1.1 GB);
+  collect 23289818–20.
+- Comparator B: c = 100 (full), 50 (f30), 50 (f10); none at the grid end.
+- **Code check** (`c15_check_estimator.py`, job 23289168): the c15 LeafletFA estimator on real TMS TRAIN with the
+  production fit reproduces the saved 10.1 errors, max |diff| 3.0 × 10⁻⁸ over 1,038,848 units.
+
+**Design artifact (found after scoring; diagnosis only).** The planted shift is the same 6,996 ATSEs, same direction,
+in the B half of every type (note 1, item 3), so half of all cells share one large global signal. Each fit learns it:
+
+| Depth | Program separating halves: AUROC for half B | Top 3 programs' A − B mean φ | Their mean φ |
+|---|---|---|---|
+| full | **1.00** | −0.46, +0.33, +0.19 | 0.28, 0.17, 0.10 |
+| f30 | 1.00 | −0.43, +0.29, +0.22 | 0.27, 0.15, 0.11 |
+| f10 | 1.00 | +0.26, −0.26, +0.23 | 0.14, 0.17, 0.12 |
+
+- Consequence for Measure 2: LeafletFA's A-vs-B score borrows the global half signal from all types. At **0 reads** in the
+  type it still ranks planted vs null with AUROC 0.93–0.95. This is not type-specific detection.
+- Consequence for Measure 1 (UNTESTED hypothesis, VERIFY): programs spent on the A/B axis are not available for cell-type
+  structure; copied truth also breaks low-rank structure (stated limit).
+
+**Measure 1 — cell-type ψ vs truth, null ATSEs, halves pooled. Primary = own-truth pairs (589,342 units, 132 types).**
+Mean TV error; Δ = LeafletFA − comparator, 95 % CI by type bootstrap.
+
+| Depth | LeafletFA | Raw | B | Δ raw [CI] | Δ B [CI] |
+|---|---|---|---|---|---|
+| full | 0.0562 | 0.0445 | 0.0432 | **+0.0118** [0.0106, 0.0129] | +0.0130 [0.0118, 0.0141] |
+| f30 | 0.0610 | 0.0470 | 0.0455 | **+0.0140** [0.0130, 0.0149] | +0.0155 [0.0146, 0.0164] |
+| f10 | 0.0676 | 0.0536 | 0.0516 | **+0.0140** [0.0125, 0.0155] | +0.0160 [0.0151, 0.0169] |
+
+- LeafletFA is worse than raw and B on own-truth pairs at every depth (CIs exclude 0).
+- Opposite in direction to real-data 10.1 TMS at ≥ 100 TRAIN reads (LeafletFA −5 % vs raw).
+- By type size (own-truth): 10–49 cells is a tie with raw at all depths (Δ raw CI includes 0); 50–199, 200–999 and
+  ≥ 1,000 are worse for LeafletFA.
+- By reads (own-truth): full depth has all own pairs at ≥ 100 reads. f10: 1–19 +0.028, 20–99 +0.020, ≥ 100 +0.008 vs raw.
+
+**Secondary: all pairs (2,154,636 units).**
+
+| Depth | Reads | LeafletFA | Raw | B | Δ raw [CI] | Δ B [CI] |
+|---|---|---|---|---|---|---|
+| full | all | 0.0890 | 0.0951 | 0.0773 | −0.0062 [−0.0081, −0.0040] | +0.0117 [0.0105, 0.0131] |
+| full | 0 | 0.1144 | 0.0965 | 0.0965 | +0.0179 | +0.0179 |
+| full | 1–19 | 0.0990 | 0.1811 | 0.0904 | **−0.0821** [−0.0853, −0.0785] | +0.0087 |
+| full | 20–99 | 0.0890 | 0.1162 | 0.0786 | −0.0272 | +0.0103 |
+| full | ≥ 100 | 0.0621 | 0.0631 | 0.0551 | −0.0010 (n.s.) | +0.0071 |
+| f30 | all | 0.0914 | 0.0985 | 0.0783 | −0.0071 | +0.0131 |
+| f10 | all | 0.0950 | 0.1045 | 0.0808 | −0.0095 | +0.0142 |
+
+- LeafletFA beats raw overall and at 1–19 reads (all depths), as on real data; B beats LeafletFA in every bin.
+- At 0 reads LeafletFA is worse than the pooled average (raw fallback = B = pooled ψ).
+- B's target is tilted toward copied truth (note 1, item 1); hence secondary.
+
+**Measure 2 — planted vs null, A vs B (121 types with ≥ 4 mice in both halves; 2,821,599 units, 845,170 planted).**
+
+| Depth | LeafletFA AUROC [CI] | Raw TV AUROC | LeafletFA prec@R0.5 | Raw prec@R0.5 |
+|---|---|---|---|---|
+| full | 0.975 [0.974, 0.976] | 0.641 | 0.985 | 0.513 |
+| f30 | 0.970 [0.968, 0.972] | 0.629 | 0.990 | 0.494 |
+| f10 | 0.966 [0.965, 0.967] | 0.613 | 0.998 | 0.461 |
+
+- By δ (full): 0.1 → 0.930, 0.3 → 0.995, 0.5 → 1.000. By reads (full): 0 → 0.952, 1–19 → 0.974, 20–99 → 0.981,
+  ≥ 100 → 0.991. Inflated by the artifact above.
+
+**LeafCutter vs LeafletFA on units both score.** LeafCutter tests only units with ≥ 100 reads in the type.
+
+| Depth | LeafCutter coverage | Units both | LeafCutter AUROC [CI] | LeafletFA AUROC [CI] | Raw TV AUROC | Prec@R0.5 LC / LFA |
+|---|---|---|---|---|---|---|
+| full | 14.9 % | 419,616 | 0.962 [0.959, 0.964] | 0.995 [0.994, 0.995] | 0.912 | 1.000 / 0.999 |
+| f30 | 9.6 % | 272,230 | 0.971 [0.968, 0.974] | 0.996 [0.995, 0.997] | 0.934 | 1.000 / 0.999 |
+| f10 | 5.1 % | 143,158 | 0.982 [0.980, 0.984] | 0.999 [0.998, 0.999] | 0.957 | 1.000 / 1.000 |
+
+- δ = 0.1 (full): LeafCutter 0.900, LeafletFA 0.984. Precision at recall 0.5: LeafCutter 0.947, LeafletFA 0.881.
+- LeafCutter AUROC rises as depth falls because its tested set shrinks to the best-covered units.
+
+**What a fix would need (not run; requires a new amendment).**
+- Plant type-specific shifts: per ATSE, a random subset of types (or a random direction per type), so no global half signal.
+- A Measure 1 arm with no planted shifts.
+- Cost: same 3 fits, about 0.6 GPU-h.
