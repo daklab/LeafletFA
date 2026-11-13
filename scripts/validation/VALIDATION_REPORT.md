@@ -739,3 +739,51 @@ Jobs 22816659 (TMS, 40 GB requested, peak 13.9 GB, 1.9 h) and 22815095 (Allen, 2
   - Row counts, interval rows and asserts are unchanged; the interval arrays are byte-identical.
   - New md5: TMS d5ad92c81dec67ada5c942b09a1eb45d (167 MB), Allen 1969a84f2efd275dbc28372c34663b98 (117 MB).
 - **Port** (jobs 22870583, 22870584). `leafletfa.catalog.celltype_psi` reproduces the saved check 10 point estimates: max |diff| is 5.9e-8 in both atlases. ATSE reads, junction reads, cells with reads, mice, cells and raw ψ all equal the browser's TRAIN tables exactly. **Pass.**
+
+## Check 14 — simple-shrinkage comparators for 10.1 (amendment 9; `c14_shrinkage.py`, `c14_shrinkage/`)
+
+Pre-registered before any code ran (07a0d56). Jobs 23263717 (TMS), 23263718 (Allen), about 2 min each, 2 CPUs. Facts only.
+
+**Step 0:** no earlier check computed a simple-shrinkage comparator (check 13 shrinks toward the program prior, a
+LeafletFA quantity).
+
+**Setup check:** raw error recomputed from counts matches the saved 10.1 `err_raw` on every unit (max |diff| 1.1e-16,
+both atlases). Same 10.1 units: TMS 1,038,848 (130 types), Allen 763,823 (68 types).
+
+**B's c, chosen on the inner TRAIN split (TEST not used):** TMS **c = 200**, Allen **c = 100**; neither at a grid end.
+Inner mean error (TV), c = 0 → chosen: TMS 0.10116 → 0.09759 (c = 500 gives 0.09759 to 5 decimals; 200 is the exact
+minimum); Allen 0.06460 → 0.06252.
+
+**Overall** (mean TV error vs TEST pseudobulk; differences with 95 % bootstrap CI over cell types):
+
+| Atlas | LeafletFA | Raw | A (pseudocount) | B (shrink to across-type mean) | LeafletFA − A | LeafletFA − B | LeafletFA − raw (10.1) |
+|---|---|---|---|---|---|---|---|
+| TMS | 0.09399 | 0.10121 | 0.10352 | 0.09687 | −0.00953 (−0.01198, −0.00704) | **−0.00288 (−0.00435, −0.00135)** | −0.00722 (−0.00939, −0.00495) |
+| Allen | 0.06255 | 0.06467 | 0.06559 | 0.06194 | −0.00305 (−0.00497, −0.00126) | **+0.00060 (−0.00077, +0.00188)** | −0.00213 (−0.00386, −0.00046) |
+
+**Per bin, LeafletFA − B (95 % CI):**
+
+| Bin | TMS | Allen |
+|---|---|---|
+| 10–49 TRAIN cells | −0.01016 (−0.01198, −0.00860) | −0.00374 (−0.00469, −0.00281) |
+| 50–199 | −0.00863 (−0.01016, −0.00718) | −0.00365 (−0.00439, −0.00302) |
+| 200–999 | −0.00282 (−0.00447, −0.00136) | +0.00008 (−0.00075, +0.00100) |
+| ≥ 1,000 | +0.00647 (+0.00438, +0.00908) | +0.00654 (+0.00519, +0.00804) |
+| 0 TRAIN reads | −0.01376 (−0.01639, −0.01077) | −0.00954 (−0.01724, −0.00001) |
+| 1–19 | −0.01563 (−0.01732, −0.01375) | −0.00941 (−0.01290, −0.00630) |
+| 20–99 | −0.01367 (−0.01488, −0.01252) | −0.00507 (−0.00594, −0.00426) |
+| ≥ 100 | −0.00164 (−0.00315, −0.00008) | +0.00203 (+0.00056, +0.00335) |
+
+- At 0 TRAIN reads B equals raw's population fallback (p_j), so the 0-read row of B equals LeafletFA − raw there.
+- A at 0 reads is uniform 1/m_e, as defined (error 0.50 TMS, 0.47 Allen in that bin); this drives A's overall error.
+- Per-bin and LeafletFA − A rows do not enter the reading.
+
+**Reading (pre-registered):** "the model adds beyond shrinkage" needs LeafletFA − B below 0 with the CI excluding 0
+overall in **both** atlases. TMS meets it; **Allen does not** (+0.0006, CI −0.0008 to +0.0019). **Verdict: not met.**
+Per the amendment, the result is reported as is and the text says smoothing accounts for the gain.
+- Facts beside the verdict: in TMS LeafletFA − B is about 40 % of LeafletFA − raw (−0.0029 vs −0.0072); in Allen,
+  B alone is slightly better than LeafletFA overall. Below 200 TRAIN cells and below 100 TRAIN reads LeafletFA is
+  better than B in both atlases; at ≥ 1,000 TRAIN cells B (and raw) are better than LeafletFA in both.
+- Limits (stated in advance): TEST cells are new cells of the same mice; one c per atlas; B borrows only across cell
+  types at the same event.
+- Outputs: `c14_shrinkage/{TMS,Allen}_{accuracy.tsv,units.tsv.gz,inner_grid.tsv,summary.json}`. No figure changed.
