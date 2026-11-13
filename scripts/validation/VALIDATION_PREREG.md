@@ -822,3 +822,23 @@ atlas; per-ATSE or per-type shrinkage strengths are not tried. The comparators b
 same event; LeafletFA also borrows across events through the programs.
 
 **Cost.** Estimated < 2 CPU-h for both atlases (counts only, no posterior draws); one CPU job per atlas.
+
+### Amendment 9, note 1 (Karin 2026-11-13; written after the check 14 result above, before any reference level was computed)
+Amendment 9 had already been committed and run when this request came, so the reference levels are added here as a
+dated note, not inside the original amendment. They are **reference levels, not tests**: no pass rule, no effect on
+the check 14 reading. Same units and bins as 10.1; per-bin means with the 10.1 bootstrap over cell types (1,000,
+seed 0) for display.
+- **Upper reference, "no cell-type information":** per unit, TV between the across-type pooled TRAIN ψ (p_j over all
+  TRAIN cells, the ψ raw falls back to at 0 reads; B's limit as c → ∞) and the TEST pseudobulk.
+- **Lower reference, "noise floor" — method chosen now: split halves of the held-out cells, scaled to full depth.**
+  For each type, its TEST cells are split at random into two halves (10 splits, seeds 0–9; split by cell, not by
+  mouse). Per unit and split, with ψ^A, ψ^B the two halves' pseudobulks and n_A, n_B their reads at the ATSE:
+  floor = TV(ψ^A, ψ^B) · √(n_A n_B) / (n_A + n_B). The factor converts the half-vs-half difference to the expected
+  error of a perfect estimate against the full TEST pseudobulk, if the error scales like its standard deviation
+  (Var(ψ^A − ψ^B) ∝ 1/n_A + 1/n_B vs Var(ψ^TEST − ψ) ∝ 1/(n_A + n_B)); equal halves give a factor of ½. Splits with
+  0 reads in either half are skipped; the unit's floor is the mean over the remaining splits; units with none are
+  left out of the floor mean, and their number is reported.
+- **Limits stated now:** the scaling is an approximation (TV is not exactly proportional to the SD at very low depth);
+  splitting cells keeps between-cell overdispersion in the floor, but reads within a cell are not independent, so
+  the floor is approximate. The simulation alternative (sampling counts from ψ^TEST at its depth) was not chosen
+  because a multinomial draw ignores between-cell overdispersion and would understate the floor.
