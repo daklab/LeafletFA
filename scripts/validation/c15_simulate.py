@@ -74,7 +74,7 @@ for e in pl:
 # ---- groups: type x half (+ unscored A/B) ----
 grp = g * 2 + half_b.astype(int); G2 = 2 * (T + 1)
 psi_g = np.vstack([np.vstack([truth[k], truthB[k]]) if k < T else np.vstack([pool, pool]) for k in range(T + 1)])
-phi = np.zeros((len(g), G2)); phi[np.arange(len(g)), grp] = 1.0
+phi = grp.astype(np.int64)                                    # group index per cell (vlib.simulate_fast 1-D mode)
 pd.DataFrame({"cell_id": cells}).to_csv(os.path.join(OUT, "cells.tsv"), sep="\t", index=False)
 pd.DataFrame({"junction_id": jid, "event_id": ev}).to_csv(os.path.join(OUT, "var.tsv"), sep="\t", index=False)
 np.savez_compressed(os.path.join(OUT, "truth.npz"), types=np.array(types), g=g, half_b=half_b, truth=truth, truthB=truthB,

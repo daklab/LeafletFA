@@ -229,7 +229,10 @@ def simulate_fast(Y_template, inv, phi, psi, conc_e, thin=None, seed=0, chunk=40
         N = np.bincount(seg, weights=y, minlength=n_seg).round().astype(np.int64)
         if thin is not None:
             N = rng.binomial(N, thin)
-        mu = np.einsum("nk,nk->n", phi[a:b][rows], psi.T[cols])
+        if phi.ndim == 1:      # phi given as one group index per cell (check 15): mu = psi[group, junction], no dense one-hot
+            mu = psi[phi[a:b][rows], cols]
+        else:
+            mu = np.einsum("nk,nk->n", phi[a:b][rows], psi.T[cols])
         al = np.clip(conc_e[inv[cols]] * np.clip(mu, CLIP, 1 - CLIP), EPS, None)
         g = rng.gamma(al)
         gs = np.bincount(seg, weights=g, minlength=n_seg)
