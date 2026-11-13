@@ -787,3 +787,45 @@ Per the amendment, the result is reported as is and the text says smoothing acco
 - Limits (stated in advance): TEST cells are new cells of the same mice; one c per atlas; B borrows only across cell
   types at the same event.
 - Outputs: `c14_shrinkage/{TMS,Allen}_{accuracy.tsv,units.tsv.gz,inner_grid.tsv,summary.json}`. No figure changed.
+
+### Check 14 — reference levels (amendment 9 note 1; `c14_reference.py`, jobs 23263938, 23263939; not tests)
+Same 10.1 units; mean TV vs TEST pseudobulk with the 10.1 bootstrap CI (cell types, 1,000, seed 0). Floor defined on
+every unit (no unit had all 10 splits with an empty half). LeafletFA and raw means asserted equal to the saved 10.1 table.
+"Closed" = share of the gap from "no cell-type information" (upper) to the noise floor covered by the method:
+(upper − method) / (upper − floor).
+
+| Atlas | Bin | Upper | Raw | LeafletFA | Floor | Closed: raw | Closed: LeafletFA | Catalog rows |
+|---|---|---|---|---|---|---|---|---|
+| TMS | 10–49 cells | 0.119 | 0.126 | 0.107 | 0.066 | −0.12 | 0.24 | 15 % |
+| TMS | 50–199 | 0.114 | 0.118 | 0.103 | 0.064 | −0.08 | 0.23 | 36 % |
+| TMS | 200–999 | 0.103 | 0.099 | 0.093 | 0.059 | 0.08 | 0.22 | 35 % |
+| TMS | ≥ 1,000 | 0.087 | 0.076 | 0.082 | 0.049 | 0.28 | 0.14 | 14 % |
+| TMS | 0 reads | 0.164 | 0.164 | 0.150 | 0.081 | 0 | 0.17 | 0 % |
+| TMS | 1–19 | 0.169 | 0.215 | 0.152 | 0.078 | −0.50 | 0.18 | 16 % |
+| TMS | 20–99 | 0.154 | 0.160 | 0.136 | 0.075 | −0.08 | 0.23 | 21 % |
+| TMS | ≥ 100 | 0.098 | 0.094 | 0.089 | 0.057 | 0.10 | 0.21 | 63 % |
+| Allen | 10–49 cells | 0.081 | 0.087 | 0.075 | 0.063 | −0.32 | 0.31 | 14 % |
+| Allen | 50–199 | 0.088 | 0.083 | 0.075 | 0.058 | 0.17 | 0.43 | 43 % |
+| Allen | 200–999 | 0.070 | 0.063 | 0.061 | 0.047 | 0.30 | 0.40 | 24 % |
+| Allen | ≥ 1,000 | 0.054 | 0.043 | 0.048 | 0.033 | 0.53 | 0.26 | 20 % |
+| Allen | 0 reads | 0.186 | 0.186 | 0.176 | 0.101 | 0 | 0.11 | 0 % |
+| Allen | 1–19 | 0.157 | 0.200 | 0.146 | 0.099 | −0.74 | 0.19 | 25 % |
+| Allen | 20–99 | 0.110 | 0.112 | 0.100 | 0.077 | −0.07 | 0.31 | 25 % |
+| Allen | ≥ 100 | 0.062 | 0.052 | 0.053 | 0.040 | 0.43 | 0.40 | 50 % |
+
+- Values rounded from `c14_shrinkage/{TMS,Allen}_abs_panel.tsv` (closed fractions computed from the unrounded values).
+- At 0 TRAIN reads, raw is the pooled TRAIN ψ (its fallback), so raw = upper there by construction.
+- **At 1–19 TRAIN reads raw is worse than using no cell-type information** (TMS 0.215 vs 0.169; Allen 0.200 vs 0.157); LeafletFA is below the upper reference in every bin.
+- Catalog rows = shipped catalog rows (junction × type) by TRAIN cells per type and TRAIN reads at the ATSE; no catalog row has 0 TRAIN reads.
+- LeafletFA closes 11–43 % of the gap from no cell-type information to the noise floor, depending on bin; the floor is approximate (split halves scaled by √(n_A n_B)/(n_A + n_B); limits in the note).
+
+### Fact: cell types with TRAIN and TEST cells from ≥ k mice (Karin 2026-11-13; `mice_per_type_fact.py`, job 23263810; no analysis)
+
+| Atlas (mice/donors) | ≥ 2 | ≥ 3 | ≥ 4 | ≥ 5 |
+|---|---|---|---|---|
+| TMS types (of 132), 18 mice | 131 | 126 | **123** | 116 |
+| TMS share of rows with an interval | 1.000 | 1.000 | **1.000** (1,829,401 of 1,829,935) | 0.956 |
+| Allen groups (of 68), 512 donors | 68 | 65 | **60** | 53 |
+| Allen share of rows with an interval | 1.000 | 0.991 | **0.970** | 0.934 |
+
+- Mice counted per type from TRAIN and TEST obs labels (`mouse.id`). The catalog's `mice` column is per row (mice with reads at the event), not per type.
