@@ -776,3 +776,49 @@ Code: `scripts/validation/c13_pooled.py`. Results: `$V/c13_pooled/`, section "Ch
 - **Check 13 coverage is descriptive only** and has no consequence for check 12 or for any interval shipped. The
   point-estimate comparison and its reading are unchanged.
 - Check 13 jobs (22814975, 22814976) were already running when this was written; none of their output had been read.
+
+## Amendment 9 (Karin 2026-11-13; written and committed before any code ran) — check 14: simple-shrinkage comparators for 10.1
+
+**Step 0 (done before writing this).** No earlier check computed a simple-shrinkage comparator. Check 10 compares
+LeafletFA with raw TRAIN pseudobulk only (population ψ fallback at 0 reads); check 13 (amendment 8) shrinks toward the
+program prior ρ̄ = mean of φψ, which is a LeafletFA quantity, not simple shrinkage; the browser-gap scripts decompose
+LeafletFA's own shrinkage. So check 14 runs.
+
+**Question:** does LeafletFA's gain over raw in check 10.1 exceed what simple shrinkage gives?
+
+**Data and estimates.** Read-only; the 10.1 units, TRAIN and TEST counts of the seed-0 data split (per-cell 70/30); no
+refit; CPU only. For type t, junction j in ATSE e (m_e junctions), with y_tj, n_te the TRAIN pseudobulk junction and
+ATSE reads of t:
+- **LeafletFA:** the saved check 10 point estimate (its 10.1 per-unit error is read from `c10/<ds>_s0_accuracy_units.tsv.gz`).
+- **Comparator A (pseudocount):** ψ_tj = (y_tj + 1/m_e) / (n_te + 1): one read spread evenly over the junctions of e.
+  At 0 TRAIN reads this is uniform 1/m_e (no population fallback; A is applied as defined).
+- **Comparator B (shrinkage to the across-type mean):** ψ_tj = (y_tj + c · p_j) / (n_te + c), with p_j the pooled
+  TRAIN ψ over all TRAIN cells (all cell types, the same population ψ used as raw's fallback). At 0 reads it equals p_j.
+- **Choice of c (TRAIN only; TEST never used to choose anything):** one c per atlas. Inner split of TRAIN cells, 70/30
+  within each cell type × mouse (seed 1; rounding gives the inner-test part ⌊0.3 n⌋ of each stratum). On the inner split,
+  p_j and pseudobulks come from the inner-train part; units follow the 10.1 rule applied to the inner-test part (types
+  with ≥ 10 inner-train and ≥ 5 inner-test cells; ≥ 20 inner-test reads and ≥ 3 covered inner-test cells at e); error =
+  TV vs the inner-test pseudobulk; c = the grid value with the lowest mean error over units. Grid, fixed now:
+  {0, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000}. The chosen c is then applied to the full TRAIN pseudobulk and
+  full-TRAIN p_j. The inner-split error curve is reported. If the minimum is at a grid end, that is reported as is.
+- **Check on alignment:** raw's error is recomputed from the counts and must match the saved 10.1 `err_raw` per unit
+  (max |difference| < 1e-6), else the run stops.
+
+**Readouts.** Same units, same error (TV vs TEST pseudobulk), same bins (TRAIN cells per type: 10–49, 50–199, 200–999,
+≥ 1,000; TRAIN reads at the event: 0, 1–19, 20–99, ≥ 100) and the same bootstrap as 10.1 (cell types resampled,
+1,000 resamples, seed 0; ratio of summed differences to summed units). Reported, overall and per bin, both atlases: mean
+error of LeafletFA, raw, A, B; paired differences LeafletFA − A and LeafletFA − B with 95 % CI; LeafletFA − raw
+quoted from 10.1 for reference.
+
+**Reading (fixed now, Karin).**
+- **"The model adds beyond shrinkage"** only if LeafletFA − B is below 0 with the 95 % CI excluding 0, **overall, in both
+  atlases.**
+- Otherwise the result is reported as is, and the text says smoothing accounts for the gain.
+- LeafletFA − A and the per-bin rows are reported; they do not enter the reading.
+- The result is kept whichever way it goes. No figure changes.
+
+**Limits stated in advance.** TEST cells are new cells of the same mice (per-cell split). B's c is one number per
+atlas; per-ATSE or per-type shrinkage strengths are not tried. The comparators borrow only across cell types at the
+same event; LeafletFA also borrows across events through the programs.
+
+**Cost.** Estimated < 2 CPU-h for both atlases (counts only, no posterior draws); one CPU job per atlas.
