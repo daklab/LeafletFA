@@ -842,3 +842,85 @@ seed 0) for display.
   splitting cells keeps between-cell overdispersion in the floor, but reads within a cell are not independent, so
   the floor is approximate. The simulation alternative (sampling counts from ψ^TEST at its depth) was not chosen
   because a multinomial draw ignores between-cell overdispersion and would understate the floor.
+
+## Amendment 10 (Karin 2026-11-13; written and committed before any code ran) — check 15: semi-synthetic recovery of cell-type ψ and planted differences vs depth
+
+**Purpose:** a supplementary figure showing whether LeafletFA recovers known cell-type ψ, and known differences, as a
+function of read depth. Descriptive: **no pass rule; every result is reported whichever way it goes.** The real-data
+checks 10.2 and 10.7 (failed) stay as reported; this check does not replace them.
+
+**Base data.** TMS TRAIN (54,694 cells): real cells, real labels (`tissue_cell_type`; types with ≥ 10 TRAIN cells, as
+check 10; other cells are simulated but not scored), real mice, real per-cell ATSE totals N_ce, the shared event list.
+
+**Truth ψ (not from a LeafletFA fit).**
+- Well covered (t, e): ≥ 100 real TRAIN reads and ≥ 10 TRAIN cells with reads at e (the check 12 depth rule).
+- Truth ψ_t,e = real raw TRAIN pseudobulk where (t, e) is well covered.
+- Elsewhere ψ_t,e is copied from one well-covered type at e, chosen at random (seed 11). This keeps between-type
+  differences real at every scored pair, without shrinking toward the all-cells average, which would favor comparator B.
+  The source (own vs copied) is recorded, and results are also reported separately for own-truth pairs.
+- ATSEs with no well-covered type: truth = pooled TRAIN ψ; simulated, not scored. Unscored cells (types < 10 cells) use
+  the pooled ψ.
+
+**Overdispersion (not from a LeafletFA fit).** Per ATSE, γ_e by method of moments on the real counts:
+- Cells in well-covered types with N_ce ≥ 2; S_c = Σ_j (y_cj − N_ce ψ_t,j)² / ψ_t,j over junctions with ψ_t,j > 0
+  (m_c of them).
+- Under DM, E[S_c] = (m_c − 1) N_ce (N_ce + γ) / (1 + γ). Solving Σ_c gives γ_e = (S2 − X) / (X − S1), with X = Σ S_c,
+  S1 = Σ (m_c − 1) N_ce, S2 = Σ (m_c − 1) N_ce².
+- Clipped to [0.5, 10⁴]. ATSEs without a well-covered type take the median γ_e.
+- ψ is estimated from the same cells (a small bias, stated). The distribution is reported next to the production fit's
+  γ_e (descriptive).
+
+**Part 2, planted differences (one deviation from the request, stated before any run).** The request was a shift between
+two groups of cell types. With real truth ψ, two groups of types already differ at almost every ATSE, so there are no
+clean nulls. Instead:
+- Every type's cells are split at random into halves A and B within type × mouse (seed 10).
+- A random 30 % of scored ATSEs (seed 12) are planted, with δ ∈ {0.1, 0.3, 0.5} in equal thirds (random). In every
+  type's B half, usage δ moves from the type's largest-ψ junction to the ATSE's target junction (the one with the
+  lowest pooled ψ).
+- The realized shift is min(δ, ψ_from); it is recorded per (t, e) and used as the truth difference.
+- Null ATSEs: the A and B truths are identical. The real cell-type structure is unchanged in A.
+- **Karin to confirm this design before the GPU fits run.**
+
+**Counts.** Per depth f ∈ {1, 0.3, 0.1}: N′_ce ~ Binomial(N_ce, f) (seeds 21, 22, 23); then
+y_c ~ DirichletMultinomial(N′_ce, γ_e ψ_{group(c), e}), with group = type × half (`vlib.simulate_fast` with one-hot φ).
+The same truth is used at all depths.
+
+**Fits (GPU).** Production recipe unchanged: `run_leafletfa_baseline.py --K 20 --seed 0 --phi-dtype float64 --device cuda`
+(defaults = production), one fit per depth, **3 fits**, seed 0 only. LeafletFA sees no labels and no halves.
+
+**Estimates.** Per group (type, or type × half), from the simulated counts:
+- LeafletFA: the catalog estimator (mean ρ̃ over the group's cells, the sim fit's γ_e).
+- Raw pseudobulk: with pooled fallback.
+- Comparator B: c chosen per depth on an inner 70/30 split of the simulated cells, amendment 9 grid; truth never used.
+
+**Measure 1 — recovery of cell-type ψ** (null ATSEs only, where A and B truths are equal; per real type t, halves
+pooled):
+- Error TV(estimate_t, truth_t) per scored (t, e).
+- Bins: simulated TRAIN reads at (t, e) (0, 1–19, 20–99, ≥ 100) and type size (10–49, 50–199, 200–999, ≥ 1,000);
+  per depth.
+- Mean error for LeafletFA, raw and B. Paired differences LeafletFA − raw and LeafletFA − B with the 10.1 bootstrap
+  (types, 1,000, seed 0).
+- Also reported on own-truth pairs only.
+
+**Measure 2 — ranking planted vs null differences.** Units = (t, e) over scored ATSEs; label = planted or null.
+- LeafletFA score: TV between its t|A and t|B estimates. Raw TV: descriptive.
+- **LeafCutter** on pseudobulk: per type, A vs B on per-mouse pseudobulks of each half (`leafcutter_ds`; ≥ 4 samples
+  per group per intron, as the LeafCutter control). Score = −log10 p of the cluster.
+- Types with ≥ 4 mice having cells in both halves.
+- AUROC and precision at recall 0.5, overall, by δ, and by simulated reads bin, per depth.
+- Units LeafCutter does not test are reported as a coverage fraction; the AUROC comparison uses units both methods
+  score, and LeafletFA alone is also reported on all units.
+- CIs by bootstrap over types (1,000, seed 0).
+
+**Limits stated now.**
+- Simulated counts follow the model's likelihood family (DM). This favors the model's noise assumptions, though the
+  truth ψ and γ_e do not come from LeafletFA.
+- There is no within-type heterogeneity beyond DM noise.
+- Copied truth breaks the co-variation of ATSEs within a type for those pairs (if anything, against LeafletFA's shared
+  patterns).
+- TMS only; one seed. Halves are random within type × mouse, so A and B share mice.
+
+**Compute.**
+- GPU: 3 fits at about 13 min (full), ≤ 10 min (thinned), check 4 run times; about **0.6 GPU-h**, with b6k allowed.
+- CPU: simulation about 1 h. LeafCutter ≤ 3 × 123 type runs, upper bound about 230 core-h (scaled from the 77 core-h
+  TMS catalog). Scoring about 3 CPU-h.
