@@ -924,3 +924,27 @@ pooled):
 - GPU: 3 fits at about 13 min (full), ≤ 10 min (thinned), check 4 run times; about **0.6 GPU-h**, with b6k allowed.
 - CPU: simulation about 1 h. LeafCutter ≤ 3 × 123 type runs, upper bound about 230 core-h (scaled from the 77 core-h
   TMS catalog). Scoring about 3 CPU-h.
+
+### Amendment 10, note 1 (Karin 2026-11-13; written after the simulation ran, before any fit was submitted or any score computed)
+Karin approved the halves design and the 3 GPU fits. Facts below are read from `c15_simulate.py` and `$V/c15/truth.npz`.
+
+1. **Source of copied truth.** Where a (type, ATSE) pair is not well covered (< 100 reads or < 10 cells with reads),
+   its truth ψ is the raw TRAIN pseudobulk of **one randomly chosen well-covered type at the same ATSE** (uniform draw,
+   seed 11; donor stored in `truth.npz["donor"]`). It is **not** the all-cells average. Well-covered types per scored
+   ATSE: median 29 (10th–90th percentile 3–85); 4.2 % of scored ATSEs have a single well-covered type, so every type
+   copies the same donor there. Cells of types below MIN_TRAIN (unscored) get the pooled TRAIN ψ in both halves.
+   Remaining tilt: the pooled ψ that comparator B shrinks toward is computed from simulated data whose truths are
+   draws from the well-covered types, so for copied pairs B's target is an average of the same donor values. This is
+   why the copied pairs are secondary.
+2. **Primary reading for Measure 1** (cell-type ψ against truth) = **own-truth pairs only** (27 % of scored pairs).
+   The all-pairs result is reported as secondary. The Measure 1 reading in amendment 10 applies to the own-truth pairs.
+3. **Same events, same direction.** The planted set is one global set of 6,996 ATSEs, shifted in the B half of
+   **every** scored type. The receiving junction is fixed per ATSE (its lowest pooled-ψ junction), so the direction
+   is the same in every type. The donating junction is that type's most-used other junction, so it can differ between
+   types. Size = min(δ, donor ψ): the full δ in 94.3 % of planted (type, ATSE) pairs (95.0 % of own-truth pairs);
+   by δ: 0.1 → 99.7 %, 0.3 → 98.1 %, 0.5 → 85.2 %; zero shift in 0.16 %. The applied shift is stored per pair
+   (`truth.npz["shift"]`); Measure 2 truth labels use applied shift > 0.
+4. **Recipe check.** `run_leafletfa_baseline.py` defaults equal the production recipe and the production TMS fit's
+   `run_record.json` settings: 16,200 steps × 8,192 cells, lr 0.025 → 0.1× (`--gamma 0.1`), γ floor 2
+   (`--conc-min 2`), sparse likelihood (`dense` False), float64 φ, δ = K (hard-coded, `fixed_dir_conc = K`).
+   The driver now also writes these values to a `recipe` field in each `run_record.json`.

@@ -216,7 +216,9 @@ def main(argv=None):
                                 leafletfa=leafletfa.__version__),
                   leafletfa_git=git_state(REPO), torch_threads=torch.get_num_threads(),
                   gpu=(torch.cuda.get_device_name(0) if a.device == "cuda" and torch.cuda.is_available() else None),
-                  stages={}, inputs_md5={})
+                  stages={}, inputs_md5={},
+                  recipe=dict(steps=a.fit_steps, minibatch=a.fit_batch, lr=a.fit_lr, lr_final=a.fit_lr * a.gamma,
+                              gamma_floor=a.conc_min, sparse=not a.dense, delta=float(a.K), phi_dtype=a.phi_dtype))
     if os.path.exists(rec_path):                                     # resumed run: keep history
         with open(rec_path) as fh:
             record["previous_runs"] = [json.load(fh)]
