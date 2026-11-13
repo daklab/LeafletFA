@@ -829,3 +829,19 @@ every unit (no unit had all 10 splits with an empty half). LeafletFA and raw mea
 | Allen share of rows with an interval | 1.000 | 0.991 | **0.970** | 0.934 |
 
 - Mice counted per type from TRAIN and TEST obs labels (`mouse.id`). The catalog's `mice` column is per row (mice with reads at the event), not per type.
+
+### Fact: what a 20–99 TEST-read interval band would add (Karin 2026-11-13; `c12_band_fact.py`, job 23274553; no analysis)
+Shipped catalog rows (junction × type). test_cells = TEST cells with reads at the ATSE.
+
+| | TMS | Allen |
+|---|---|---|
+| Rows | 6,478,290 | 4,420,578 |
+| With an interval now | 28.2 % | 34.6 % |
+| Band 20–99 TEST reads, ≥ 10 TEST cells | 62,796 rows → **29.2 %** if it passed | 732,836 rows → **51.2 %** if it passed |
+| Band 20–99 TEST reads, ≥ 5 TEST cells | 315,620 → 33.1 % | 978,230 → 56.7 % |
+| Rows with ≥ 20 TRAIN reads | 5,423,717 (84 % of rows) | 3,328,185 (75 %) |
+| … of those with an interval now / if the ≥ 10-cell band passed | 33.7 % / 34.9 % | 46.0 % / 67.9 % |
+| Rows with ≥ 100 TRAIN reads: with an interval now / if band passed | 44.7 % / 46.1 % | 69.2 % / 89.3 % |
+
+- Most rows are not thin: 84 % (TMS) and 75 % (Allen) have ≥ 20 TRAIN reads at the ATSE.
+- In TMS the limit is TEST cells with reads, not TEST reads: few TMS rows with 20–99 TEST reads have ≥ 10 TEST cells.
