@@ -948,3 +948,72 @@ Karin approved the halves design and the 3 GPU fits. Facts below are read from `
    `run_record.json` settings: 16,200 steps × 8,192 cells, lr 0.025 → 0.1× (`--gamma 0.1`), γ floor 2
    (`--conc-min 2`), sparse likelihood (`dense` False), float64 φ, δ = K (hard-coded, `fixed_dir_conc = K`).
    The driver now also writes these values to a `recipe` field in each `run_record.json`.
+
+## Amendment 11 (Karin 2026-11-14; written and committed before any code ran) — check 15b: check 15 rerun with the design flaw removed
+
+**Reason.** In amendment 10 the same 6,996 ATSEs were shifted, in the same direction, in half B of every cell type.
+That made one atlas-wide signal: in every fit one program separated half A from half B (AUROC 1.00), and about half
+of the mean φ mass went to that axis. The amendment 10 results stay in `VALIDATION_REPORT.md` as reported; this check
+does not replace them. Descriptive: **every result is reported whichever way it goes.**
+
+**Shared with amendment 10, unchanged:** TMS TRAIN cells, labels, mice and real per-cell ATSE totals; truth ψ
+construction (seed 11; own where well covered, else copied from a random well-covered type at the ATSE); γ_e by
+method of moments; depths f ∈ {1, 0.3, 0.1} by Binomial thinning; DM counts (`vlib.simulate_fast`); fits with the
+production recipe (`run_leafletfa_baseline.py --K 20 --seed 0 --phi-dtype float64 --device cuda`, defaults =
+production, recipe recorded in `run_record.json`); comparators raw (pooled fallback) and B (c on an inner 70/30 split
+of the simulated cells within type × mouse, seed 1, amendment 9 grid; truth never used); TV error; bootstrap over
+types (1,000, seed 0). Outputs under `$V/c15b/{acc,diff}/`.
+
+**Own-truth pairs are, by construction, the well-covered ones** (≥ 100 real TRAIN reads and ≥ 10 cells with reads).
+That reading tests LeafletFA where raw is expected to be strongest.
+
+### Accuracy arm (primary for cell-type ψ) — no planted shifts
+- Counts from the truth ψ of each cell's type only (no halves, no shifts). Thinning seeds 31, 32, 33; DM seeds per depth
+  as given to `simulate_fast`.
+- Units: every scored (type, ATSE). Error TV(estimate_t, truth_t) for LeafletFA (catalog estimator, the fit's γ_e),
+  raw and B.
+- **Primary:** own-truth pairs, overall, per depth. Also within own-truth pairs by simulated TRAIN reads at (t, e)
+  (0, 1–19, 20–99, ≥ 100) and by type size (10–49, 50–199, 200–999, ≥ 1,000). Secondary: all pairs, same bins.
+- **Reading rule (per depth and bin):** Δ = LeafletFA − comparator, 95 % CI by type bootstrap. CI upper < 0 →
+  LeafletFA better; CI lower > 0 → LeafletFA worse; otherwise tie.
+- **Comparison with amendment 10 (own-truth, overall, per depth):** the amendment 10 gap vs raw (+0.0118 full, +0.0140
+  f30, +0.0140 f10) is
+  - *gone* if the new Δ raw CI includes 0 or lies below 0;
+  - *survives in full* if the new CI lower > 0 and the CI includes the amendment 10 point;
+  - *survives in part* if the new CI lower > 0 and the CI lies below the amendment 10 point.
+  The ratio new Δ / amendment 10 Δ is reported.
+
+### Differential arm — type-specific shifts
+- Halves A/B within type × mouse (seed 10, as amendment 10). Planted ATSEs: the same random 30 % of scored ATSEs and the
+  same δ ∈ {0.1, 0.3, 0.5} per ATSE (seed 12, as amendment 10).
+- **For each planted ATSE, half B is shifted in a random 20 % of scored types only** (independent per ATSE, seed 13).
+  The receiving junction is chosen at random per (type, ATSE) among the junctions other than the donor (seed 13), so
+  the direction also differs between types. Donor = that type's largest-ψ junction; applied shift = min(δ, donor ψ),
+  recorded per pair. Per type, about 6 % of scored ATSEs are planted.
+- Thinning seeds 41, 42, 43.
+- **Check before scoring (fixed now):** for each fit, the best single-program AUROC for half B over scored cells,
+  max_k max(AUC_k, 1 − AUC_k). The same number is reported for the accuracy-arm fits (no halves in the data; reference).
+  - ≤ 0.60: no atlas-wide half signal; Measure 2 read as intended.
+  - 0.60–0.75: partial; reported, and Measure 2 read with that caveat.
+  - > 0.75: Measure 2 is confounded; numbers reported, not read as type-specific detection.
+- **Measure 2:** units (t, e) over scored ATSEs in types with ≥ 4 mice having cells in both halves; label = applied
+  shift > 0 (planted ATSEs in unchosen types are nulls). Scores: LeafletFA TV(t|A, t|B); raw TV (descriptive);
+  LeafCutter A vs B on per-mouse pseudobulks (check 10 settings), −log10 p of the cluster.
+- **Ranking per cell type:** AUROC within each type; reported as the median and mean over types (mean with a type
+  bootstrap CI), plus the pooled AUROC and precision at recall 0.5.
+- Bins by simulated reads in the type at the ATSE (both halves): **0, 1–19, 20–99, ≥ 100**, reported separately; also by δ.
+- LeafCutter: coverage fraction; AUROC on units both methods score; Δ AUROC (LeafletFA − LeafCutter) with a type
+  bootstrap CI. CI excludes 0 → that method ranks better on shared units; otherwise tie.
+- **Reading at 0 reads:** with no shared signal, LeafletFA should not rank above chance where the type has no reads. CI
+  of the per-type mean AUROC including 0.5 → as expected; above 0.5 → reported as borrowing from outside the type's reads.
+
+### Limits (unchanged from amendment 10, plus)
+- DM counts favor the model's noise family; no within-type heterogeneity beyond DM; copied truth breaks within-type
+  co-variation; TMS only; one seed; A and B share mice.
+- The 20 % fraction and random direction are choices made to remove the shared signal, not estimates of real biology.
+
+### Compute
+- GPU: 6 fits (3 accuracy + 3 differential), about 13 / 12 / 11 min each by depth: about **1.2 GPU-h**, b6k allowed.
+  Approved by Karin 2026-11-14.
+- CPU: two simulations about 15 min each (peak 14.3 GB, so 20 GB); scoring about 35 min per depth (peak 10.7 GB, so
+  14 GB); LeafCutter 3 × ≤ 132 tasks (peak 1.1 GB, so 2 GB).
