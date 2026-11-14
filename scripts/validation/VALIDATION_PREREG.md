@@ -1017,3 +1017,50 @@ That reading tests LeafletFA where raw is expected to be strongest.
   Approved by Karin 2026-11-14.
 - CPU: two simulations about 15 min each (peak 14.3 GB, so 20 GB); scoring about 35 min per depth (peak 10.7 GB, so
   14 GB); LeafCutter 3 × ≤ 132 tasks (peak 1.1 GB, so 2 GB).
+
+## Record, scaling and runtime for the supplement (Karin 2026-11-14; written and committed before any scaling run)
+Descriptive cost measurement; no pass rule; reported as measured. GPU approved by Karin for these short runs.
+
+**1. Existing records (no runs).** Production fits, the 10.6 atlas-size run, scQuint 22725257 and the LeafCutter catalog
+array 22780123. Sources: job logs, `run_record.json`, sacct.
+- Correction found while assembling the records: the production TMS and Allen run records (jobs 22400620, 22400623) are
+  resumed jobs (`resumed_from_step` 16,200), so their 10.6 and 31.6 min are projection time, not fit time. The fits ran in
+  jobs 22400619 (TMS) and 22400622 (Allen), which crashed while saving, after step 16,199. Fit times come from those logs.
+
+**2. Controlled LeafletFA scaling (GPU).**
+- Data: TMS TRAIN, random cell subsets via the driver's `--n-train` (`--subset-seed 0`): 5,000, 10,000, 25,000, 50,000,
+  plus the full 54,694.
+- Recipe: production (`run_leafletfa_baseline.py --K 20 --seed 0 --phi-dtype float64 --device cuda`), with two
+  changes, both stated:
+  - **Fixed number of steps = 2,000** (`--fit-steps 2000`), the length of the 10.6 atlas timing run. The lr decay
+    spans those 2,000 steps; it does not affect time per step.
+  - Minibatch = min(8,192, n): `--fit-batch 5000` at n = 5,000 (all cells per step). Every other size uses 8,192.
+- Hardware: all GPU runs on b6k (RTX PRO 6000 Blackwell, `--gres=gpu:b6k:1`), 8 CPUs. A node holds 2 GPUs, so another
+  job may share the node; the node and card are recorded per run.
+- Measured per run:
+  - seconds per step: median over the 500-step checkpoint intervals after step 500;
+  - time to 2,000 steps: fit minutes in `run_record.json`, plus whole-job wall time from sacct;
+  - peak GPU memory: `torch.cuda.max_memory_allocated`;
+  - peak host memory: `ru_maxrss` and sacct MaxRSS.
+- No projection or E-step is run.
+- **CPU reference:** one run at n = 5,000, same settings, `--device cpu`, 16 CPUs, on the cpu partition. Reported:
+  CPU / GPU seconds-per-step ratio at 5,000 cells.
+- Full-recipe times (16,200 steps) are taken from item 1, not rerun.
+
+**3. scQuint at the same sizes (CPU, as in 10.6).**
+- `c10_benchmark_scquint.py` settings: scQuint VAE, `use_cuda=False`, its default early stopping, seed 20261170, 16 CPUs.
+- Subsets: the same cell indices as item 2 (`np.random.default_rng(0).choice` over the same TRAIN row order).
+- The full size is job 22725257 (not rerun): 20 epochs to early stop, about 245 s per epoch, training 86.0 min.
+- Measured: training time to early stop, epochs, seconds per epoch, peak memory (sacct).
+- Wall limit 3 h per size. A run that hits the limit is reported as "> 3 h, stopped".
+- LeafCutter: item 1 only.
+
+**4. Output.** `$V/scaling/scaling.tsv` (one table) and `scaling.{pdf,png}`: time and peak memory against cells, built with
+the figure theme.
+
+**Memory requests** (measured peak + 30 %):
+- GPU runs 16 GB host: TMS full fit peak 9.2 GB (job 22400619).
+- CPU LeafletFA 16 GB.
+- scQuint 4 GB: peak 1.7 GB (job 22725257).
+
+**Compute:** GPU about 5 × ≤ 3 min plus load, under 0.5 GPU-h. CPU LeafletFA 1 run, ≤ 3 h. scQuint 4 runs, ≤ 3 h wall each.
