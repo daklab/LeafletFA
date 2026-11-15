@@ -1031,14 +1031,15 @@ Descriptive; no pass rule. Plan: VALIDATION_PREREG "Record, scaling and runtime 
 
 | Run | Job | Cells | Hardware | Time | Peak memory |
 |---|---|---|---|---|---|
-| LeafletFA TMS production fit (16,200 steps) | 22400619 | 54,694 | GPU (type: VERIFY) | ≈ 13.2 min fit, 0.05 s/step | 9.2 GB host; GPU UNSOURCED |
-| LeafletFA Allen production fit (16,200 steps) | 22400622 | VERIFY | GPU (type: VERIFY) | ≈ 38.5 min fit, 0.14 s/step | 21.3 GB host; GPU UNSOURCED |
+| LeafletFA TMS production fit (16,200 steps) | 22400619 | 54,694 (all TRAIN cells) | RTX PRO 6000 Blackwell (b6k, ne1dg7), 8 cores | ≈ 13.2 min fit, 0.05 s/step | 9.2 GB host; peak GPU not recorded |
+| LeafletFA Allen production fit (16,200 steps) | 22400622 | 38,199 training (of 54,571) | RTX PRO 6000 Blackwell (b6k, ne1dg7), 8 cores | ≈ 38.5 min fit, 0.14 s/step | 21.3 GB host; peak GPU not recorded |
 | LeafletFA atlas-size run (10.6) | 22597359 | 132,706 | b6k RTX PRO 6000 Blackwell | 73.2 min fit, 0.271 s/step; 119.4 min job | 40.7 GB host, 25.03 GB GPU |
 | scQuint (10.6) | 22725257 | 54,694 | 16 CPUs | 86.0 min training, 20 epochs, ≈ 245 s/epoch | 1.7 GB |
 | LeafCutter catalog benchmark | 22780123 | per-type pseudobulk | 128 tasks × 4 CPUs | 19.2 task-h, 77 core-h | 1.28 GB per task |
 
 - 22400620/22400623 run records are resumed jobs; their 10.6 / 31.6 min are projection time, not fit time.
-- The 9.0 / 29.7 GB GPU figures in METHODS have no source record: UNSOURCED.
+- Hardware and Allen cell counts: SpliceVI-utils `manuscript/age_analysis/audit_2026_09/RUNTIME_TABLE.md` (Karin, 2026-11-15).
+- Peak GPU memory was not recorded for the production fits. The 9.0 / 29.7 GB GPU figures in METHODS have no source record and should be removed or replaced.
 
 **2–3. Controlled runs** (`$V/scaling/scaling.tsv`, `scaling.{pdf,png}`). LeafletFA: TMS TRAIN subsets (seed 0),
 2,000 steps, minibatch min(8,192, n), all GPU runs on ne1dg7-011 (RTX PRO 6000 Blackwell), 8 CPUs. s/step = median of
