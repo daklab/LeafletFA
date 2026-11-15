@@ -933,3 +933,140 @@ Mean TV error; Δ = LeafletFA − comparator, 95 % CI by type bootstrap.
 - Plant type-specific shifts: per ATSE, a random subset of types (or a random direction per type), so no global half signal.
 - A Measure 1 arm with no planted shifts.
 - Cost: same 3 fits, about 0.6 GPU-h.
+
+## Check 15b — amendment 11 (check 15 rerun without the atlas-wide shift), 2026-11-14
+
+Runs: GPU fits acc 23325015/16/17, diff 23325021/22/23 (production recipe, 0 non-finite restarts, 20–25 min each);
+half check 23328347; scoring 23328348–53; LeafCutter arrays 23328354/55/56 (3 × 121 types, all COMPLETED), collect
+23329316/17/18. Amendment 10 results stand; this run does not replace them. B's c = 20 at every arm and depth.
+
+**Check before scoring — best single-program AUROC for half B.**
+
+| Arm | full | f30 | f10 | Reading |
+|---|---|---|---|---|
+| amendment 10 | 1.000 | 1.000 | 0.999 | confounded |
+| acc (no halves in data; reference) | 0.505 | 0.506 | 0.505 | none |
+| diff | **0.711** | **0.664** | **0.692** | **partial** (0.60–0.75) |
+
+- Shifting 20 % of types per planted ATSE still leaves one program partly tracking half B (max |Δ mean φ| 0.08–0.12,
+  vs 0.26–0.46 in amendment 10). Per rule: Measure 2 numbers below are read with that caveat.
+
+**Accuracy arm, Measure 1 (primary: own-truth pairs, 845,503 pairs, 132 types).** Δ = LeafletFA − comparator TV, type
+bootstrap CI.
+
+| Depth | LeafletFA | Raw | B | Δ raw [CI] | Δ B [CI] | Reading |
+|---|---|---|---|---|---|---|
+| full | 0.0538 | 0.0441 | 0.0433 | +0.0097 [0.0085, 0.0109] | +0.0105 [0.0093, 0.0117] | worse vs both |
+| f30 | 0.0596 | 0.0468 | 0.0449 | +0.0128 [0.0118, 0.0138] | +0.0147 [0.0137, 0.0156] | worse vs both |
+| f10 | 0.0657 | 0.0531 | 0.0494 | +0.0125 [0.0112, 0.0137] | +0.0163 [0.0154, 0.0172] | worse vs both |
+
+- Comparison with amendment 10 (gap vs raw): **survives in part** at all depths; ratio new/old 0.82 (full), 0.91 (f30),
+  0.90 (f10). Most of the amendment 10 accuracy gap was not caused by the shift design.
+- Own-truth pairs are the well-covered ones by construction (own truth requires ≥ 100 reads and ≥ 10 cells).
+- By TRAIN reads (own-truth): worse in every populated bin (f30 20–99 +0.029; f10 1–19 +0.024, 20–99 +0.018,
+  ≥ 100 +0.007). At full depth every own-truth pair has ≥ 100 reads.
+- By type size (own-truth): 10–49 cells tie with raw at all depths (full −0.0027 [−0.0055, 0.0002]); worse in every
+  larger bin.
+
+**Accuracy arm, secondary (all pairs, 3,078,108).**
+
+| Depth | Reads | LeafletFA | Raw | B | Δ raw [CI] | Δ B [CI] |
+|---|---|---|---|---|---|---|
+| full | all | 0.0889 | 0.0949 | 0.0805 | −0.0060 [−0.0078, −0.0040] better | +0.0085 worse |
+| full | 0 | 0.1172 | 0.0967 | 0.0967 | +0.0204 worse | +0.0204 worse |
+| full | 1–19 | 0.0988 | 0.1805 | 0.0885 | **−0.0817** better | +0.0103 worse |
+| full | 20–99 | 0.0879 | 0.1157 | 0.0900 | −0.0278 better | −0.0021 [−0.0047, 0.0008] tie |
+| full | ≥ 100 | 0.0601 | 0.0627 | 0.0597 | −0.0026 [−0.0049, −0.0002] better | +0.0005 tie |
+| f30 | all | 0.0923 | 0.0983 | 0.0794 | −0.0060 better | +0.0129 worse |
+| f10 | all | 0.0936 | 0.1042 | 0.0806 | −0.0106 better | +0.0130 worse |
+
+- Same pattern as amendment 10: LeafletFA beats raw overall and at 1–19 reads; B beats LeafletFA overall at every depth;
+  LeafletFA is worse than the pooled fallback at 0 reads.
+
+**Differential arm, Measure 2 (121 types; 2,821,599 units, 166,809 planted; read with the partial half-signal caveat).**
+
+| Depth | Pooled AUROC LFA [CI] | Raw | Per-type mean LFA [CI] | Per-type mean raw | Prec@R0.5 LFA / raw |
+|---|---|---|---|---|---|
+| full | 0.684 [0.675, 0.692] | 0.632 | 0.697 [0.686, 0.708] | 0.644 | 0.105 / 0.117 |
+| f30 | 0.664 [0.657, 0.671] | 0.620 | 0.685 [0.675, 0.695] | 0.632 | 0.098 / 0.108 |
+| f10 | 0.648 [0.642, 0.655] | 0.604 | 0.665 [0.656, 0.674] | 0.614 | 0.092 / 0.096 |
+
+By reads (per-type mean AUROC [CI]):
+
+| Depth | 0 LFA (raw) | 1–19 LFA (raw) | 20–99 LFA (raw) | ≥ 100 LFA (raw) |
+|---|---|---|---|---|
+| full | 0.544 [0.539, 0.548] (0.500) | 0.614 (0.617) | 0.668 (0.692) | 0.811 (0.808) |
+| f30 | 0.538 [0.534, 0.542] (0.500) | 0.621 (0.630) | 0.708 (0.726) | 0.842 (0.834) |
+| f10 | 0.538 [0.534, 0.542] (0.500) | 0.627 (0.641) | 0.735 (0.752) | 0.875 (0.871) |
+
+- Amendment 10's 0.966–0.975 drops to **0.648–0.684** once the shift is type-specific.
+- Within read bins with reads, LeafletFA ≈ raw (slightly below at 1–99 reads, equal at ≥ 100). The pooled advantage
+  over raw comes from the 0-read bin, where raw is fixed at 0.5.
+- By δ (full, pooled): 0.1 → 0.596, 0.3 → 0.702, 0.5 → 0.753.
+- **0-read reading:** CI of the per-type mean excludes 0.5 at every depth → reported as borrowing from outside the
+  type's reads. Given the partial half-check (0.66–0.71), part of this may be the residual half program rather than
+  type-specific information. VERIFY before any interpretation.
+
+**LeafCutter vs LeafletFA on units both score (diff arm).** LeafCutter tests only units with ≥ 100 reads.
+
+| Depth | LC coverage | Units both | LC AUROC [CI] | LFA AUROC [CI] | Per-type Δ LFA−LC [CI] | Pooled Δ [CI] |
+|---|---|---|---|---|---|---|
+| full | 14.1 % | 398,921 | 0.947 [0.943, 0.952] | 0.873 [0.864, 0.882] | −0.027 [−0.034, −0.021] | −0.075 [−0.083, −0.065] |
+| f30 | 9.3 % | 261,546 | 0.958 [0.955, 0.962] | 0.890 [0.877, 0.904] | −0.024 [−0.031, −0.017] | −0.068 [−0.083, −0.053] |
+| f10 | 4.9 % | 139,236 | 0.971 [0.967, 0.975] | 0.920 [0.912, 0.930] | −0.011 [−0.018, −0.003] | −0.051 [−0.059, −0.040] |
+
+- **LeafCutter ranks better on shared units at every depth** (CI excludes 0). This reverses amendment 10
+  (LeafletFA 0.995–0.999 vs LeafCutter 0.962–0.982), which was inflated by the global half program.
+- By δ (full, per-type Δ): 0.1 −0.058, 0.3 −0.016, 0.5 −0.011, all CI < 0. f10 δ = 0.1: tie (−0.014 [−0.037, 0.012]).
+- LeafletFA scores every unit; LeafCutter covers 4.9–14.1 %. On the units outside LeafCutter's range, the only
+  comparator is raw TV (table above).
+
+Outputs: `$V/c15b/halfcheck.tsv`, `$V/c15b/{acc,diff}/score/`, `$V/c15b/diff/score/*_m2_lc.tsv`.
+
+## Scaling and runtime record for the supplement, 2026-11-14
+
+Descriptive; no pass rule. Plan: VALIDATION_PREREG "Record, scaling and runtime for the supplement" (cc45094).
+
+**1. Existing records (no runs).**
+
+| Run | Job | Cells | Hardware | Time | Peak memory |
+|---|---|---|---|---|---|
+| LeafletFA TMS production fit (16,200 steps) | 22400619 | 54,694 | GPU (type: VERIFY) | ≈ 13.2 min fit, 0.05 s/step | 9.2 GB host; GPU UNSOURCED |
+| LeafletFA Allen production fit (16,200 steps) | 22400622 | VERIFY | GPU (type: VERIFY) | ≈ 38.5 min fit, 0.14 s/step | 21.3 GB host; GPU UNSOURCED |
+| LeafletFA atlas-size run (10.6) | 22597359 | 132,706 | b6k RTX PRO 6000 Blackwell | 73.2 min fit, 0.271 s/step; 119.4 min job | 40.7 GB host, 25.03 GB GPU |
+| scQuint (10.6) | 22725257 | 54,694 | 16 CPUs | 86.0 min training, 20 epochs, ≈ 245 s/epoch | 1.7 GB |
+| LeafCutter catalog benchmark | 22780123 | per-type pseudobulk | 128 tasks × 4 CPUs | 19.2 task-h, 77 core-h | 1.28 GB per task |
+
+- 22400620/22400623 run records are resumed jobs; their 10.6 / 31.6 min are projection time, not fit time.
+- The 9.0 / 29.7 GB GPU figures in METHODS have no source record: UNSOURCED.
+
+**2–3. Controlled runs** (`$V/scaling/scaling.tsv`, `scaling.{pdf,png}`). LeafletFA: TMS TRAIN subsets (seed 0),
+2,000 steps, minibatch min(8,192, n), all GPU runs on ne1dg7-011 (RTX PRO 6000 Blackwell), 8 CPUs. s/step = median of
+500-step intervals after step 500, from log timestamps (checkpoint writes included).
+
+| Method | Device | Cells | Job | s/step | Fit to 2,000 steps (min) | Job (min) | Peak GPU (GB) | Peak host (GB) |
+|---|---|---|---|---|---|---|---|---|
+| LeafletFA | GPU | 5,000 | 23325004 | 0.032 | 1.28 | 2.1 | 2.51 | 2.07 |
+| LeafletFA | GPU | 10,000 | 23325005 | 0.046 | 1.62 | 2.0 | 4.14 | 2.64 |
+| LeafletFA | GPU | 25,000 | 23325006 | 0.046 | 1.63 | 2.1 | 5.11 | 4.82 |
+| LeafletFA | GPU | 50,000 | 23325007 | 0.046 | 1.63 | 2.3 | 6.72 | 8.73 |
+| LeafletFA | GPU | 54,694 (full) | 23325008 | 0.046 | 1.62 | 2.1 | 7.02 | 8.92 |
+| LeafletFA | CPU (16) | 5,000 | 23325009 | 3.27 | 110.1 | 111.0 | — | 3.65 |
+
+- **CPU/GPU s/step ratio at 5,000 cells: 102×.**
+- Time per step is flat from 10,000 cells up (fixed 8,192 minibatch); at 5,000 the minibatch is 5,000.
+- GPU and host memory grow with cells (per-cell parameters and data held in memory).
+- Full TMS at 2,000 steps × 16,200/2,000 ≈ 13.1 min, consistent with the 13.2 min production fit.
+- Host memory = `ru_maxrss`; sacct MaxRSS (sampled) is lower (1.7–4.8 GB) and is in the TSV.
+
+| Method | Cells | Job | Epochs to early stop | s/epoch | Training (min) | Peak host (GB) |
+|---|---|---|---|---|---|---|
+| scQuint (16 CPUs) | 5,000 | 23325010 | 60 | 13.3 | 13.3 | 1.17 |
+| scQuint | 10,000 | 23325011 | 55 | 40.7 | 37.3 | 1.18 |
+| scQuint | 25,000 | 23325012 | 40 | 108.4 | 72.3 | 1.38 |
+| scQuint | 50,000 | 23325013 | 25 | 160.9 | 67.0 | 1.77 |
+| scQuint (item 1) | 54,694 | 22725257 | 20 | ≈ 245 | 86.0 | 1.7 |
+
+- scQuint training time is not monotone in cells: fewer epochs to early stop at larger n.
+- Different CPU nodes per run (ne1dc4/dc6); s/epoch at 50k (161) vs full (245) partly reflects the node.
+- All sizes finished under the 3 h limit.
