@@ -1388,3 +1388,19 @@ direction.
 - LeafCutter: 50-task array, 18-min cap per task (≤ 60 CPU-h).
 - `c18_score.py` (CPU, about 20 min).
 - Results: `$V/c18/`, section "Check 18" in VALIDATION_REPORT.md. Report whichever way it goes.
+
+### Amendment 14, note 1 (2026-11-16; written after the first split run was read for mouse ids only, before any fit or score) — composite mouse labels
+- TMS `mouse.id` has two composite labels, `3_10_M/3_11_M` (30 TRAIN, 15 TEST cells) and `3_38_F/3_39_F` (34 TRAIN,
+  27 TEST cells). A split over the 18 labels can put a composite in one half and its mice in the other. The first
+  run (job 23370697, cancelled before writing counts) did exactly that, so half B would have held cells of half-A mice.
+- **Fix:** split units are the connected groups of labels:
+  - {`3_10_M`, `3_11_M`, `3_10_M/3_11_M`};
+  - {`3_38_F`, `3_39_F`, `3_38_F/3_39_F`};
+  - the 12 other mice, one unit each.
+  - 14 units in all, split 7 / 7 units, with draws from `np.random.default_rng(18).permutation` over the sorted unit
+    list.
+  - Score, tie rule and everything else as amendment 14.
+- **Recorded fact about the 10.2a halves** (used in checks 10.2, 10.7, 12, 16 and 17; no verdict changes):
+  - `3_10_M/3_11_M` is in half B while `3_11_M` is in half A.
+  - `3_38_F/3_39_F` is in half A while `3_38_F` and `3_39_F` are in half B.
+  - So 106 of about 78,000 TMS cells sit in a half that does not match all their possible mice.

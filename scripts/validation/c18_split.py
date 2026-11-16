@@ -29,15 +29,24 @@ def main():
     n = C.cell_type.value_counts(); types = np.array(sorted(n[n >= 10].index))
     R = pd.read_csv(os.path.join(vlib.V, "c10_lc", f"{DS}_halfA", "types.tsv"), sep="\t"); keep = np.isin(types, R.type.values); assert keep.sum() == 100
     ct = pd.crosstab(C.cell_type, C.mouse).reindex(index=types, columns=mice).fillna(0).values > 0
+    # amendment 14 note 1: units = connected groups of labels (composite labels join their mice)
+    unit = {m: m for m in mice}
+    for m in mice:
+        if "/" in m:
+            for p in m.split("/"):
+                unit[p] = m
+    units = np.array(sorted(set(unit.values()))); mu = np.array([unit[m] for m in mice]); assert len(units) == 14, units
     rng = np.random.default_rng(18); best, bi, bA = None, -1, None
     for i in range(N_SPLIT):
-        A = np.isin(mice, rng.permutation(mice)[:9]); s = scores(ct, A, keep)
+        A = np.isin(mu, rng.permutation(units)[:7]); s = scores(ct, A, keep)
         if best is None or s > best:
             best, bi, bA = s, i, A
     trm = np.unique(mtr); old = set(np.random.default_rng(0).permutation(trm)[: len(trm) // 2])         # the 10.2a split
     s_old = scores(ct, np.isin(mice, list(old)), keep)
     mA = mice[bA]; C["half"] = np.where(C.mouse.isin(mA), "A", "B")
-    rec = dict(n_mice=len(mice), draws=N_SPLIT, chosen_draw=bi, half_A=mA.tolist(), half_B=mice[~bA].tolist(),
+    for m in mice:                                                              # no label shares a mouse with the other half
+        assert all((p in mA) == (m in mA) for p in m.split("/") if p in unit), m
+    rec = dict(n_mice=len(mice), n_units=len(units), units=units.tolist(), draws=N_SPLIT, chosen_draw=bi, half_A=mA.tolist(), half_B=mice[~bA].tolist(),
                scores_chosen=dict(check16_types_4_mice_each=best[0], types_1_mouse_each=best[1], types_2_mice_each=best[2]),
                scores_10_2a_split=dict(check16_types_4_mice_each=s_old[0], types_1_mouse_each=s_old[1], types_2_mice_each=s_old[2]),
                n_types_ge10_cells=len(types), cells_A=int((C.half == "A").sum()), cells_B=int((C.half == "B").sum()))
