@@ -1273,3 +1273,71 @@ The first split run (23370796's predecessor, 23370697) was cancelled for the com
 - Both designs keep the direction of check 17 and of check 16b design 1, now with confirmation only in mice the half-A
   fit never saw.
 - The limit "the model saw cells from the confirming mice" no longer applies to 18a and 18b.
+
+## Allen sense checks — descriptive, no rule (record a2a0d5d; `allen_sense.py` c969134; `$V/allen_sense/`)
+- **Job 23371679:** 2.5 min, 1.5 GB. Earlier runs 23371006, 23371598, 23371611, 23371627, 23371630 and 23371653 were
+  cancelled, failed or superseded; none is used.
+- **Units:** pairs of the 68 groups, ranked by |Δψ_lead| among ATSEs with ≥ 20 TRAIN reads and ≥ 3 cells in both groups.
+- **Pairs:** 705 excitatory × inhibitory; 186 neuron × glia (glia = Astro, Oligo, Micro-PVM); 1,162 same class, different
+  subclass; 39 same subclass.
+
+**1. Known switches (excitatory × inhibitory pairs).**
+
+| Control | Pairs | Median rank (percentile) | Share in top 200 | Δ inclusion exc − inh: median, share < 0 | Expected |
+|---|---|---|---|---|---|
+| *Nrxn1* SS4 | 705 | 16 (0.16 %) | 87 % | −0.212, 97 % | < 0 (Nguyen 2016) |
+| *Nrxn2* SS4 | 448 | 94.5 (0.72 %) | 87 % | −0.144, 100 % | < 0 |
+| *Nrxn3* SS4 | 555 | 152 (1.19 %) | 61 % | −0.154, 99 % | < 0 |
+| *Grin1* exon 5 | 574 | 221 (1.7 %) | 47 % | −0.117, 98 % | UNSOURCED |
+| *Gria2* flip/flop (one MXE ATSE) | 705 | 688 (6.2 %) | 23 % | flip +0.082 (higher in excitatory in 81 %) | UNSOURCED |
+
+- *Grin1* exon 5 = ENSMUSE00000698910 (63 nt). Its identity as N1 is VERIFY.
+
+**2. Neuron × glia, published lists in the top 200.** Expected count from a background matched on depth and junction
+count.
+
+| List (ATSEs matched) | Observed / expected | Fold | Expected direction | Top 1,000: fold, direction |
+|---|---|---|---|---|
+| Irimia 2014 microexons, 3–27 nt (273) | 8,941 / 185 | **48.2** | 98.1 % | 20.3, 96.7 % |
+| Irimia 2014 neural alternative exons > 27 nt (857) | 14,726 / 834 | 17.7 | 97.3 % | 9.5, 92.5 % |
+| Irimia 2014, other event types (105) | 1,060 / 102 | 10.4 | 79.4 % | 6.9, 85.7 % |
+| Weyn-Vanhentenryck 2014 Rbfox targets, cassette (523) | 6,644 / 765 | 8.7 | 88.0 % | 6.1, 71.1 % |
+
+- Counts are pair × ATSE occurrences, and pairs share ATSEs, so Fisher *P* is approximate.
+- The Irimia lists compare neural with non-neural tissues, not neurons with glia.
+- The Rbfox direction (higher Rbfox activity in neurons) is an assumption stated in the record.
+- Nova and Srrm4 lists were not obtained.
+
+**3. Hierarchy.**
+
+| Pair set | Pairs | Median fraction \|Δψ\| ≥ 0.1 | Median fraction ≥ 0.2 | Median top-200 \|Δψ\| |
+|---|---|---|---|---|
+| Neuron vs glia | 186 | 0.259 | 0.141 | 0.860 |
+| Excitatory vs inhibitory | 705 | 0.079 | 0.024 | 0.288 |
+| Same class, other subclass | 1,162 | 0.024 | 0.002 | 0.128 |
+| Same subclass | 39 | 0.004 | 0.0002 | 0.078 |
+
+- **Clustering** (average linkage on mean |Δψ|):
+  - Cophenetic distance vs taxonomy distance: Spearman 0.81.
+  - Adjusted Rand index: 0.33 vs class (k = 3) and 0.22 vs subclass (k = 42).
+  - Non-neuronal groups form one branch and GABAergic groups one sub-branch.
+  - Exceptions: Meis2 (GABAergic) sits with excitatory groups, and CR (glutamatergic) joins the GABAergic branch.
+
+**4. Reading frame.** Share of variable lengths that are a multiple of 3, top 200 vs matched background:
+
+| ATSE class | All pairs: top / background | Neuron vs glia: top / background |
+|---|---|---|
+| Skipped exon | 0.816 / 0.478 | 0.922 / 0.456 |
+| Alt 5′ | 0.320 / 0.354 | 0.399 / 0.349 |
+| Alt 3′ | 0.405 / 0.467 | 0.248 / 0.475 |
+
+- Enrichment holds for skipped exons only.
+
+**Sources** (copies, URLs and checksums in `$V/allen_sense/sources/SOURCES.md`, `SHA256SUMS`):
+- **Irimia et al. 2014**, Cell 159:1511, Table S2 "TableS2-Mouse" (mm9).
+  - Lifted to mm10 with the UCSC mm9ToMm10 chain, keeping only rows whose exon length is preserved.
+  - 1,362 of 2,603 rows matched a catalog ATSE.
+- **Weyn-Vanhentenryck et al. 2014**, Cell Rep, Table S1 sheet "6 BN target exons" (mm10); 658 of 772 rows matched.
+- ***Gria2*** flip/flop from UniProt P19491 and P42262 module sequences, via the Ensembl translations of
+  ENSMUST00000107745 (flip) and ENSMUST00000075316 (flop).
+- **SS4** exons: amendment 6 note 6.
