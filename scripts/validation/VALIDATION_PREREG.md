@@ -1218,3 +1218,94 @@ the **cell type**. Karin's "per cell-type pair" is applied as "per cell type (ty
 **Cost.** CPU only. The rerun with dump takes about 15 min (check 16: 13.9 min, peak 10.1 GB; request 14 GB). Scoring
 takes a few minutes. Code: `c16_ds_heldout.py` (dump flag) and `c16b_type_matched.py`. Results: `$V/c16b/`, section
 "Check 16b" in VALIDATION_REPORT.md. Report on Monday 2026-11-16, whichever way it goes.
+
+## Amendment 13 (Karin 2026-11-15; written and committed before any code ran) — check 17: held-out confirmation of pairwise cell-type calls, TMS; and an Allen donor count
+
+**Scope (Karin).**
+- CPU only. TMS pairwise check: LeafletFA against raw pseudobulk on all sampled pairs, and LeafCutter on a pre-set
+  random subset of 50 pairs.
+- The Allen part is a donor count, reported only.
+- The design is 16b design 1, applied to pairs. No earlier verdict changes.
+- No significance cutoff is tested here, so the browser shows no significance flag.
+
+**Question.** For two TMS cell types, at an equal number of calls per pair, do LeafletFA's top differential ATSEs
+confirm in held-out cells of other mice more often than raw pseudobulk's (and LeafCutter's, on the subset), by
+coverage bin and by kind of pair?
+
+**Cells and separation (as amendment 12).**
+- Calls: half-A TRAIN cells. Confirmation: half-B TEST cells only.
+- The halves are the 10.2a split (`mouse_halves`, seed 0); TEST cells take the half of their `mouse.id`.
+- δ = 0.10. No τ² is used, because the ranking is by the size of the difference.
+- Stated limit: the seed-0 fit saw half-B mice's TRAIN cells.
+
+**Pair sample (fixed now).**
+- **Types:** the 100 TMS types of the LeafCutter control (`c10_lc/TMS_halfA/types.tsv`: ≥ 4 mice in each half).
+  - Type name = `<tissue>_<cell type>`, split at the first underscore.
+- **Classes over the 4,950 unordered pairs of these types:**
+  - (i) **same tissue**, different cell type;
+  - (ii) **same cell type across tissues** (identical cell-type part, different tissue);
+  - (iii) **unrelated** (different tissue and different cell type).
+- **Sample:** 100 pairs per class, drawn with `np.random.default_rng(17)` over the class's pairs in sorted order. If a
+  class has fewer than 100 pairs, all of them are used.
+- **Pair orientation:** the type that sorts first is A.
+- **LeafCutter subset:** 50 pairs drawn from the sample with `np.random.default_rng(1717)`, stratified 17 / 17 / 16
+  over classes (i) / (ii) / (iii), fewer if a class is short.
+
+**Units and bins.**
+- A unit is a (pair, ATSE) with ≥ 1 half-A TRAIN read in each type that is evaluable in half-B TEST: ≥ 20 reads and
+  ≥ 3 covering cells in **each** type.
+- **Coverage bin:** the smaller of the two types' half-A TRAIN reads at the ATSE: 1–19, 20–99, 100–499, ≥ 500.
+
+**Rankings (half-A TRAIN cells).** Lead junction = argmax |Δψ| of the method's own estimate; its sign gives the
+direction.
+- **LeafletFA:** |Δψ_lead| between the two types' check 10 estimates restricted to half-A TRAIN cells (point estimates
+  from the fit's φ and ψ).
+- **Raw pseudobulk:** |Δψ_lead| from half-A TRAIN Σy/ΣN.
+- **LeafCutter (subset only):**
+  - Input: one pseudobulk sample per half-A mouse for each type (≥ 1 cell), ATSEs as clusters.
+  - Run: `leafcutter-ds` with type B as baseline, and `--min_samples_per_intron 4 --min_samples_per_group 4`, as in
+    the LeafCutter control.
+  - Scorable = Success. Ranked by the cluster `p`, ties broken by |deltapsi| at the lead intron.
+
+**Matched calls (16b design 1).**
+- Cap **c = 5 per pair per bin**.
+- For each comparison (LeafletFA vs raw on the full sample; LeafletFA vs LeafCutter on the subset) and bin, the pairs
+  used are those where both methods have ≥ 5 scorable units in the bin.
+- In each such pair, each method takes its own top 5. Ties are broken as in check 16.
+
+**Confirmation and null.**
+- **Confirmed:** in half-B TEST raw pseudobulk of the two types, TV > δ/2 = 0.05 and the same sign at the call's lead
+  junction.
+- **Null:** the two types' labels are permuted among their half-B TEST cells within each mouse, 20 permutations (seeds
+  1000–1019).
+- **Excess** = confirmed − null, per call, averaged.
+- **Intervals:** bootstrap over pairs, 2,000 resamples, seed 0. The difference is taken within each resample. Pairs share
+  types, so this interval is approximate (stated).
+
+**Pass rule (fixed now; the amendment 12 rule).**
+- **Comparisons:** vs raw on the full sample, and vs LeafCutter on the subset, in bins 20–99, 100–499 and ≥ 500. A
+  comparison is made only where ≥ 10 pairs qualify.
+- **Non-inferior:** every compared lower bound of (LeafletFA − comparator) excess is > −0.05.
+- **Better:** non-inferior, and against each comparator a lower bound > 0 in ≥ 1 of those bins.
+- **Fail:** anything else.
+- **Thin data (1–19), separate reading:** supported if LeafletFA's excess and (LeafletFA − raw) both have lower bounds > 0.
+
+**Descriptive, reported beside the rule.**
+- The same table per pair class (i)–(iii).
+- **The rate shown in the browser:** confirmed fraction and excess for LeafletFA and raw by bin and by rank band within
+  a pair (ranks 1–5, 6–20, 21–100), on the full sample. Unit selection is as above; no cap within a band.
+- Count of qualifying pairs per bin.
+
+**Allen donor count (report only).**
+- For each of the 2,278 pairs of the 68 Allen cell groups: the number of donors with ≥ 1 TRAIN cell of **both** groups.
+- Also reported: the same count within mouse half A and within half B (the 10.2a donor split), and among TEST cells.
+- Reported as a distribution (0, 1, 2–3, ≥ 4 donors) and per pair (TSV).
+- No analysis follows from it without Karin.
+
+**Cost and code.**
+- `c17_pairs.py` (LeafletFA and raw on all sampled pairs, LeafCutter inputs and collection, scoring): one CPU job,
+  ≤ 1 h, memory from the check 16 peak (10.9 GB) + 30 %.
+- LeafCutter: a 50-task array with settings as the control, peak 1.1 GB per task there, so 2 GB. Expected about 15–30
+  CPU-h; a ceiling of 60 CPU-h, at which the array is cancelled and the partial state reported.
+- `c17_allen_donors.py`: one small CPU job.
+- Results: `$V/c17/`, section "Check 17" in VALIDATION_REPORT.md. Report on Monday 2026-11-16, whichever way it goes.
