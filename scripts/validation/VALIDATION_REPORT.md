@@ -1153,3 +1153,57 @@ Descriptive; no pass rule. Plan: VALIDATION_PREREG "Record, scaling and runtime 
     raw's fewer calls confirm about as often as LeafletFA's at ≥ 20 reads (raw 0.31–0.54 against LeafletFA 0.40–0.50).
 - Design 2 has few types (14 at 100–499) and unbalanced call counts, so its intervals are wide.
 - The 1–19 advantage over raw is the only one with a lower bound > 0 in check 16 and in both 16b designs.
+
+## Check 17 — held-out confirmation of pairwise cell-type calls, TMS; Allen donor count (amendment 13; `c17_pairs.py`, `c17_allen_donors.py`, `$V/c17/`)
+- **Jobs:**
+  - prepare 23367290 (4.6 min, peak 8.4 GB);
+  - LeafCutter array 23367291 (50 of 50 completed, **4.5 CPU-h**, none hit the 18-min cap);
+  - score 23367292 (8.7 min, 8.5 GB);
+  - Allen 23367293 (0.9 min).
+- **Sample:** 100 pairs per class, from 274 same-tissue, 210 same-cell-type and 4,466 unrelated pairs. 285 of the 300 pairs have evaluable units.
+- **Design:** cap 5 per pair per bin. Intervals are a bootstrap over pairs, approximate because pairs share types.
+
+**All sampled pairs.**
+
+| Bin | vs raw: pairs | LeafletFA / raw excess | LeafletFA − raw (CI) | vs LeafCutter: pairs | LeafletFA / LC excess | LeafletFA − LC (CI) |
+|---|---|---|---|---|---|---|
+| 1–19 | 244 | 0.105 / 0.026 | **+0.079 (+0.048, +0.109)** | 0 | — | — |
+| 20–99 | 267 | 0.157 / 0.089 | **+0.068 (+0.041, +0.095)** | 0 | — | not compared |
+| 100–499 | 280 | 0.236 / 0.166 | **+0.070 (+0.045, +0.095)** | 41 | 0.197 / 0.116 | **+0.081 (+0.008, +0.154)** |
+| ≥ 500 | 285 | 0.275 / 0.221 | **+0.055 (+0.031, +0.077)** | 48 | 0.255 / 0.195 | **+0.061 (+0.004, +0.119)** |
+
+**Pre-registered reading: BETTER.**
+- All five compared lower bounds are > 0.
+- Thin data (1–19 reads) supported: LeafletFA's excess lower bound is 0.078, and its lead over raw has a lower bound of +0.048.
+- At 20–99 reads, no subset pair has ≥ 5 LeafCutter-scorable units.
+
+**By pair class (descriptive).** LeafletFA − raw (CI):
+
+| Bin | Same tissue | Same cell type, other tissue | Unrelated |
+|---|---|---|---|
+| 1–19 | +0.084 (+0.029, +0.144) | +0.009 (−0.036, +0.055) | +0.145 (+0.096, +0.193) |
+| 20–99 | +0.094 (+0.048, +0.141) | +0.012 (−0.035, +0.058) | +0.097 (+0.053, +0.140) |
+| 100–499 | +0.101 (+0.062, +0.141) | −0.002 (−0.052, +0.044) | +0.113 (+0.074, +0.151) |
+| ≥ 500 | +0.035 (−0.001, +0.071) | +0.091 (+0.046, +0.139) | +0.037 (+0.008, +0.065) |
+
+- For the same cell type in different tissues, below 500 reads, LeafletFA is not distinguishable from raw. Its own excess at 1–19 has a lower bound below 0 (−0.030).
+- LeafCutter per class has 12–17 pairs, so its intervals are wide.
+
+**Rank bands (descriptive; the rate the browser can show).** LeafletFA excess (confirmed), by rank within pair:
+- 1–5: 0.27–0.29 (0.67–0.83);
+- 6–20: 0.22–0.26 (0.71–0.81);
+- 21–100: 0.13–0.15 (0.56–0.62).
+
+Raw pseudobulk at 1–19 reads: 0.04 / 0.05 / 0.01. Full table: `rank_bands.tsv`. The bands are uncapped, so calls are not matched between methods.
+
+**Allen donors with cells of both groups (2,278 pairs; report only).**
+
+| Donors with both groups | TRAIN | half A | half B | TEST |
+|---|---|---|---|---|
+| 0 | 1,094 | 1,317 | 1,270 | 1,339 |
+| 1 | 216 | 304 | 288 | 235 |
+| 2–3 | 326 | 243 | 379 | 308 |
+| ≥ 4 | 642 | 414 | 341 | 396 |
+
+- Median: 1 donor in TRAIN, 0 in each half.
+- 48 % of pairs have no donor contributing both groups.
