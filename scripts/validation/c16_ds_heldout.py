@@ -106,6 +106,8 @@ def main():
         rows_all.append(pd.DataFrame(dict(k=K, a=E, method=name, stat=stat, tie=tie2.get(name, np.zeros(len(K))), scorable=ok,
                                           real=real.astype(float), null=nul, sign=sign_only.astype(float), bin=U.bin.values, lead=lj)))
     A = pd.concat(rows_all, ignore_index=True)
+    if os.environ.get("C16_DUMP"):                                              # amendment 12 note 1 (check 16b): every unit, every method
+        A.to_parquet(os.path.join(OUT, "units.parquet"), index=False)
 
     def top(sub, N):
         sub = sub[sub.scorable]
