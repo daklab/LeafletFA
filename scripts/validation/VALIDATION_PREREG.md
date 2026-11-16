@@ -1468,3 +1468,93 @@ direction.
   memory (request = peak + 30 %).
 - Results: `$V/c19/`. The report is in `REPORT_check19_allen_pairs.md`, merged into VALIDATION_REPORT.md as
   "Check 19". Reported whichever way it goes.
+
+## Record (Karin 2026-11-16; written before any computation) — Allen sense checks (descriptive)
+Descriptive only. There are no pass rules and no verdict changes. CPU. Code: `allen_sense.py`. Outputs: `$V/allen_sense/`.
+Report: `REPORT_allen_sense.md`.
+
+**Data.**
+- The saved Allen seed-0 check 10 catalog: `c10/Allen_s0_estimates.npz` (`point`: 68 groups × 79,768 junctions;
+  `reads`, `cov`: TRAIN reads and covering cells per group × ATSE).
+- Junction annotation: `portal_browser/precomputed/catalog_junctions.parquet` and `catalog_events.json` (ATSE class and
+  exon structure). Their junction order is asserted equal to the Allen fit's `junction_id`.
+- No refit and no new draws.
+
+**Taxonomy.**
+- Each of the 68 cell groups (check 10's "cell groups (cluster names)") gets the majority `class_label`
+  (Glutamatergic / GABAergic / Non-Neuronal) and `subclass_label` over its TRAIN cells' clusters (Allen
+  `metadata.csv`).
+- **Pair sets:**
+  - excitatory vs inhibitory: every Glutamatergic × GABAergic group pair;
+  - neuron vs glia: every neuronal group × {Astro, Oligo, Micro-PVM}; Endo, VLMC and SMC-Peri are not glia here;
+  - close: pairs of groups with the same official subclass;
+  - intermediate, reported only: same class, different subclass.
+
+**Ranking (as the browser).**
+- Per pair, units are the ATSEs with ≥ 20 TRAIN reads and ≥ 3 covering TRAIN cells in **both** groups.
+- Statistic: |Δψ_lead|, the largest absolute difference of the two groups' point ψ over the ATSE's junctions.
+- **Top** = the 200 largest per pair; sensitivity at 1,000.
+- **Matched background** = units of the same pair not in its top 1,000, reweighted to the top's joint distribution of
+  read-depth decile (the smaller of the two groups' TRAIN reads; deciles over all units of all pairs) × junction count
+  (2, 3, ≥ 4).
+
+**1. Positive controls**, ATSEs identified from annotation before any usage is read:
+- **Nrxn1–3 SS4:** the amendment 6 note 6 ATSEs and inclusion junctions.
+  - Expected: SS4 skipped in excitatory, included in PV and SST interneurons (Nguyen et al. 2016, as recorded there).
+  - So Δ inclusion (excitatory − inhibitory) < 0 is expected.
+- ***Gria2* flip/flop:**
+  - GENCODE vM19 mutually exclusive 115-nt exons: flip chr3:80,690,404–80,690,518 (ENSMUSE00000674299, Gria2-202 /
+    ENSMUST00000107745); flop chr3:80,691,320–80,691,434 (ENSMUSE00000567532, Gria2-201 / ENSMUST00000075316).
+  - Flip/flop assignment: UniProt P19491 (rat) and P42262 (human) VAR_SEQ. Flip = "TPVNLAVLKLSEQGVLDK…AKDSG",
+    flop = "NAVNLAVLKLNEQGLLDK…SGGGD", matched to the Ensembl translations of the two transcripts.
+- ***Grin1* exon 5 (N1 cassette):** the only 63-nt alternative exon of Grin1 in GENCODE vM19, chr2:25,311,343–25,311,405
+  (ENSMUSE00000698910). 63 nt = 21 codons, the N1 cassette length (VERIFY).
+- For Gria2 and Grin1, no expected excitatory-vs-inhibitory direction was found in a literature search (Europe PMC,
+  2026-11-16). The observed direction is reported as UNSOURCED-expectation.
+- **Matching an exon to an ATSE** (note 5 convention): the catalog ATSE holding a junction that ends at exon start − 1
+  or starts at exon end.
+  - Inclusion ψ = that junction's ψ: the left one if present, otherwise the right.
+  - For Gria2, the flip-inclusion junction is used.
+- **Reported per excitatory × inhibitory pair:** rank among units (1 = largest), rank percentile, in top 200 (yes/no),
+  Δ inclusion (excitatory − inhibitory). Summary: median percentile, share in top 200, share with the expected sign
+  (SS4).
+
+**2. Neuron vs glia, against published lists** (files downloaded 2026-11-16 from the Elsevier CDN; sha256 recorded in
+the output):
+- **Irimia et al. 2014, Cell 159:1511** (doi 10.1016/j.cell.2014.11.035).
+  - File: `https://ars.els-cdn.com/content/image/1-s2.0-S0092867414015128-mmc2.xlsx`, sheet "TableS2-Mouse" (mm9;
+    columns GENE, Coordenates (mm9), Length, Full Coordinate, Type, Neural Regulation).
+  - Microexons = Type AltEx, Length 3–27; longer AltEx are reported separately.
+  - Direction: NEURAL-UP means higher inclusion in neurons is expected; NEURAL-DOWN the reverse.
+- **Weyn-Vanhentenryck et al. 2014, Cell Rep 6:1139** (doi 10.1016/j.celrep.2014.02.005).
+  - File: `https://ars.els-cdn.com/content/image/1-s2.0-S2211124714000849-mmc2.xlsx`, sheet "6 BN target exons"
+    (columns exonStart, exonEnd, direction).
+  - Rbfox target exons predicted by the Bayesian network; cassette exons only.
+  - Expected direction, stated as an assumption: Rbfox activity is higher in neurons (Rbfox3 is NeuN), so
+    direction +1 means higher inclusion in neurons.
+- Nova and Srrm4 (Raj et al. 2014) target lists were not obtained and are not used.
+- **Build:** each list's coordinates are mapped to mm10 with the UCSC `mm9ToMm10.over.chain.gz` (point liftover in
+  Python), or used as-is. The choice is whichever matches more catalog exon boundaries (annotation only), and is
+  reported. Exon → ATSE uses the rule of 1.
+- **Statistic, pooled over the neuron × glia pairs:** listed ATSEs in the top 200, against the expected count from the
+  matched background.
+  - Reported: fold enrichment; Fisher exact P on the pooled 2 × 2 (approximate: pairs share ATSEs); median per-pair
+    fold.
+  - Direction share: among listed ATSEs in the top, the share whose inclusion is higher in the neuronal group.
+
+**3. Hierarchy.**
+- Per pair: the number and the fraction of units with |Δψ_lead| ≥ 0.1 and ≥ 0.2, and the median |Δψ_lead| of the top
+  200.
+- Compared across pair sets: neuron vs glia, excitatory vs inhibitory, same class different subclass, and close.
+- **Clustering:**
+  - Distance between two groups = the mean |Δψ_lead| over their pair's units. Average linkage on the 68 groups.
+  - Adjusted Rand index against class (k = 3) and against official subclass (k = the number of subclasses).
+  - Cophenetic correlation with a taxonomy distance (0 same subclass, 1 same class, 2 different class).
+
+**4. Frame.**
+- **Variable length:**
+  - skipped_exon ATSEs: the middle exon of the catalog structure;
+  - alt5 / alt3 ATSEs with two junctions: the distance between the two alternative splice sites.
+  - Complex and mxe_linked ATSEs are excluded.
+- **Share with length ≡ 0 (mod 3):** in the top 200 of every pair (all 2,278 pairs pooled, and neuron vs glia
+  separately) against the matched background. Reported by class.
