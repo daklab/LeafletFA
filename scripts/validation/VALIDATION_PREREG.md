@@ -1309,3 +1309,82 @@ direction.
   CPU-h; a ceiling of 60 CPU-h, at which the array is cancelled and the partial state reported.
 - `c17_allen_donors.py`: one small CPU job.
 - Results: `$V/c17/`, section "Check 17" in VALIDATION_REPORT.md. Report on Monday 2026-11-16, whichever way it goes.
+
+## Amendment 14 (Karin 2026-11-16; written and committed before any code ran) — check 18: refit on half the mice, confirm in mice the model never saw (TMS)
+
+**Scope (Karin).**
+- One GPU refit of TMS, approved, with the production recipe. Everything else is CPU.
+- Check 17's pairwise design and check 16's type-vs-rest design are rerun with calls from half-A mice and confirmation
+  only in half-B mice. The model never saw half-B mice.
+- No earlier verdict changes.
+
+**Mouse split (fixed now).**
+- **Mice:** the 18 TMS mice (`mouse.id`), with all cells of the TMS-only TRAIN and TEST files pooled. The per-cell 70/30
+  split is not used in check 18.
+- **Candidates:** 10,000 random 9 / 9 splits, `np.random.default_rng(18).permutation` over the sorted mouse ids, first 9
+  = half A.
+- **Score, compared lexicographically, with mice per type counted over all cells:**
+  1. the number of the 100 check 16 types (`c10_lc/TMS_halfA/types.tsv`) with ≥ 4 mice in each half;
+  2. the number of TMS types (≥ 10 cells in total) with ≥ 1 mouse in each half;
+  3. the same with ≥ 2 mice in each half.
+- **Choice:** the highest-scoring split. Ties go to the lowest draw index.
+- Reported: the chosen split, its three scores, and the scores of the 10.2a split for comparison.
+
+**Refit (GPU, production recipe).**
+- Command: `run_leafletfa_baseline.py` with the seed-0 production settings:
+  - K = 20, seed 0, `--fit-steps 16200`, `--fit-batch 8192`, `--fit-lr 0.025`, γ 0.1, `--conc-min 2.0`;
+  - `--phi-dtype float64`, sparse, `--device cuda`.
+- Input: the junction counts of every half-A cell (TRAIN and TEST rows), as an npz with its cell list. The junction
+  order is fixed by the TRAIN file (`--npz-var`). No projection.
+- Hardware: b6k (RTX PRO 6000 Blackwell), allowed for LeafletFA, 8 CPUs, 16 GB host (production peak 9.2 GB + 30 %).
+- Wall limit 2 h.
+- A fit with NaN restarts exhausted, or with non-finite φ, is reported and not scored.
+
+**Calls (half-A cells only) and confirmation (half-B cells only).**
+- **LeafletFA:** the check 10 estimator from the half-A fit: type mean of ρ̃ over the type's half-A cells, point
+  estimate. Ranked by |Δψ_lead|, as in check 17. Check 16's z is not used (in check 16 it matched the point ranking).
+- **Raw pseudobulk:** half-A cells, Σy/ΣN.
+- **LeafCutter:** check 17's 50-pair subset, unchanged.
+  - Rerun on half-A cells: one pseudobulk per half-A mouse per type (≥ 1 cell).
+  - Settings as check 17. A pair whose type lacks 4 half-A mice gives no scorable unit.
+- **Confirmation:** raw pseudobulk of **all half-B cells** (TRAIN and TEST): TV > δ/2 = 0.05 and the same sign at the
+  call's lead junction.
+- **Null:** labels permuted among the compared half-B cells within each mouse, 20 permutations, seeds 1000–1019.
+- **Excess** = confirmed − null.
+- **Evaluable unit:** ≥ 20 half-B reads and ≥ 3 covering half-B cells in each compared type. For type vs rest, the
+  rest needs no minimum.
+- **Bins:** reads of the type at the ATSE in half-A cells; for pairs, the smaller of the two types: 1–19, 20–99,
+  100–499, ≥ 500.
+
+**Design 18a, pairwise (check 17 design).**
+- Check 17's 300 sampled pairs and pair classes, unchanged.
+- A unit needs ≥ 1 half-A read in each type.
+- Cap 5 per pair per bin; pairs where both methods have ≥ 5 scorable units.
+- Comparators: raw on all pairs, LeafCutter on the subset.
+- Bootstrap over pairs, 2,000, seed 0. Reported by class as in check 17, plus rank bands.
+
+**Design 18b, type vs rest (check 16 design, matched as 16b design 1).**
+- The 100 check 16 types; rest = all other half-A cells.
+- Cap 5 per type per bin; types where both methods have ≥ 5 scorable units.
+- Comparator: raw pseudobulk only. LeafCutter type-vs-rest is not rerun: about 70 CPU-h, and not in scope.
+- Bootstrap over types, 2,000, seed 0.
+
+**Pass rule (check 17's, applied to 18a and 18b separately).**
+- Comparisons in bins 20–99, 100–499 and ≥ 500, made where ≥ 10 pairs (types) qualify.
+- **Non-inferior:** every compared lower bound of (LeafletFA − comparator) excess is > −0.05.
+- **Better:** non-inferior, and against each comparator a lower bound > 0 in ≥ 1 of those bins.
+- **Fail:** anything else.
+- **Thin data (1–19):** supported if LeafletFA's excess and (LeafletFA − raw) both have lower bounds > 0.
+
+**Readings (stated now).**
+- If 18a and 18b keep check 17's / 16b design 1's direction, the stated limit "the model saw cells from the confirming
+  mice" no longer applies to them.
+- If either fails, the result is reported as it is, beside checks 16–17.
+
+**Cost and code.**
+- `c18_split.py` (split and half-A input; CPU, about 10 min).
+- The GPU fit: about 0.86 s/step at production was a 16,200-step CPU-checkpointed run, and on b6k it is expected to
+  take about 15 min; wall limit 2 h.
+- LeafCutter: 50-task array, 18-min cap per task (≤ 60 CPU-h).
+- `c18_score.py` (CPU, about 20 min).
+- Results: `$V/c18/`, section "Check 18" in VALIDATION_REPORT.md. Report whichever way it goes.
