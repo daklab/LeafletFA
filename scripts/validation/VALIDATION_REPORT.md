@@ -1071,3 +1071,42 @@ Descriptive; no pass rule. Plan: VALIDATION_PREREG "Record, scaling and runtime 
 - scQuint training time is not monotone in cells: fewer epochs to early stop at larger n.
 - Different CPU nodes per run (ne1dc4/dc6); s/epoch at 50k (161) vs full (245) partly reflects the node.
 - All sizes finished under the 3 h limit.
+
+## Check 16 — held-out confirmation of type-vs-rest calls at a matched number of calls (amendment 12; `c16_ds_heldout.py`, `$V/c16/`)
+- **Job 23362809:** 4 CPUs, 13.9 min, peak 10.1 GB. Smoke runs: 23361314 failed (empty LeafCutter set at 1–19, a code fix only); 23362086 passed. Only status and cost were read from them.
+- **Data:** TMS, 100 types. Calls from half-A TRAIN cells; confirmation on 11,913 half-B TEST cells; 200 draws; 20 permutations.
+- **Units:** U = 682,521 (1–19 reads: 21,862; 20–99: 75,292; 100–499: 215,805; ≥ 500: 369,562).
+- **LeafCutter scorable units:** 0 at 1–19, **13 at 20–99** (not compared, by the rule), 59,547 at 100–499, 325,551 at ≥ 500.
+
+**Primary, N_b = 500 per bin.** Excess = confirmed − within-mouse null. Intervals: type bootstrap, 2,000 resamples.
+
+| Bin (half-A reads) | LeafletFA z: confirmed / null / **excess** (CI) | Raw pseudobulk | LeafCutter | Types with calls (LFA / raw / LC) |
+|---|---|---|---|---|
+| 1–19 | 0.684 / 0.420 / **0.264** (0.209, 0.310) | 0.274 / 0.168 / **0.106** (0.067, 0.150) | none scorable | 50 / 79 / — |
+| 20–99 | 0.830 / 0.426 / **0.404** (0.356, 0.477) | 0.442 / 0.201 / **0.241** (0.171, 0.309) | 13 calls, not compared | 26 / 81 / 11 |
+| 100–499 | 0.874 / 0.422 / **0.452** (0.384, 0.549) | 0.698 / 0.281 / **0.417** (0.352, 0.475) | 0.434 / 0.319 / **0.115** (0.070, 0.164) | 17 / 80 / 84 |
+| ≥ 500 | 0.982 / 0.483 / **0.499** (0.434, 0.624) | 0.946 / 0.419 / **0.527** (0.460, 0.603) | 0.632 / 0.399 / **0.233** (0.178, 0.285) | 38 / 73 / 85 |
+
+| LeafletFA z − comparator, excess (95 % CI) | 1–19 | 20–99 | 100–499 | ≥ 500 |
+|---|---|---|---|---|
+| Raw pseudobulk | +0.157 (+0.098, +0.214) | +0.163 (+0.083, +0.272) | +0.035 (−0.044, +0.151) | **−0.028 (−0.077, +0.086)** |
+| LeafCutter | — | not compared (13 units) | +0.337 (+0.262, +0.444) | +0.266 (+0.192, +0.413) |
+| LeafletFA point \|Δψ\| (descriptive) | −0.003 (−0.016, +0.012) | +0.027 (−0.021, +0.056) | +0.009 (−0.027, +0.019) | +0.007 (−0.018, +0.033) |
+
+**Pre-registered reading: FAIL** (not non-inferior).
+- Five comparisons were made. Four clear the −0.05 margin.
+- **≥ 500 reads vs raw pseudobulk does not:** lower bound −0.077. The point difference is −0.028.
+- No "better" reading is possible, because non-inferiority failed.
+- **Thin data (1–19 reads): supported.**
+  - LeafletFA's excess is 0.264, with a lower bound > 0.
+  - LeafletFA − raw is +0.157 (+0.098, +0.214).
+  - LeafCutter has no scorable unit in this bin.
+
+**Descriptive, outside the reading.**
+- **LeafCutter:** LeafletFA's excess is above LeafCutter's in both bins where LeafCutter could be compared (+0.27, +0.34). LeafCutter can score 13 of 75,292 units at 20–99 reads and none at 1–19.
+- **20–99 reads:** LeafletFA is above raw (+0.163, CI above 0).
+- **The z statistic adds nothing over the point estimate:** LeafletFA z − LeafletFA |Δψ| is −0.003 to +0.027, with every CI including 0. Any gain comes from the estimator, not from the uncertainty term.
+- **Sensitivity, N_b′ = 2,000** (1–19 reads: 2,000 of 21,862): LeafletFA − raw is +0.089, +0.069, +0.073 and +0.030 by bin, all lower bounds > 0 (≥ 500: +0.0005). Against LeafCutter: +0.26 and +0.29.
+- **Pooled ranking, N = 2,000:** excess LeafletFA z 0.515, raw 0.271, LeafCutter 0.213.
+- **LeafletFA's top calls sit in fewer types:** 17–50 types per bin, against 73–85 for raw and LeafCutter. Its null is higher (0.42–0.48, against 0.17–0.42 for raw). Few types make the type bootstrap wide; at ≥ 500 reads, 38 types.
+- **Limit stated in advance:** the fit saw half-B mice's TRAIN cells. The confirming half-B TEST cells did not enter the fit, the calls or τ².
