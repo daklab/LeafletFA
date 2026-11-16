@@ -1064,3 +1064,114 @@ the figure theme.
 - scQuint 4 GB: peak 1.7 GB (job 22725257).
 
 **Compute:** GPU about 5 × ≤ 3 min plus load, under 0.5 GPU-h. CPU LeafletFA 1 run, ≤ 3 h. scQuint 4 runs, ≤ 3 h wall each.
+
+## Amendment 12 (Karin 2026-11-15; written and committed before any code ran) — check 16: held-out confirmation of between-cell-type calls at a matched number of calls
+
+**Scope (Karin).** Item 2 of the 2026-11-15 proposal only, CPU only. Item 1 (pool reads, then shrink) is check 13's
+group-pooled estimate and is not rerun. Items 3 and 4 are not approved. The 10.2 LeafCutter note stays descriptive. No
+verdict of 10.2, 10.7, 15 or 15b changes.
+
+**Question.** On real TMS data, when LeafletFA ranks cell type vs rest differences by an evidence-based statistic, do
+its top calls confirm in held-out cells at least as often as the same number of top calls from raw pseudobulk and from
+LeafCutter, within each coverage bin?
+
+**Separation of cells (Karin's condition: nothing used to make a call is fit on the cells used to confirm it).**
+- Mouse halves A/B: the 10.2a split (`mouse_halves`, seed 0 over TRAIN mice). TEST cells take the half of their
+  `mouse.id`. TEST cells of mice with no TRAIN cells are not used.
+- **Calls:** half-A TRAIN cells only, for all three methods.
+- **Model-error term:** check 12's τ² calibrated on half A (`tsv/c12_TMS_tau2.tsv`, combined draws, `calibrated_on = A`):
+  0.01024 (100–499 TEST reads) and 0.00256 (≥ 500). It was set on half-A TEST cells, so it is half A only. The
+  τ² from B and the shipped interval (set on both halves) are not used.
+- **Confirmation:** half-B TEST cells only. They were not in the LeafletFA fit (fit on TRAIN cells), not in τ², and
+  not in any call.
+- δ = 0.10 (the 10.2 TMS value, from within-type split halves of TRAIN cells; no TEST cell).
+- **Stated limit:** the seed-0 fit (programs ψ_k, per-cell φ, γ_e) was trained on TRAIN cells of all 18 mice. That
+  includes half-B mice's TRAIN cells, so the confirmation cells share mice with cells the fit saw. Removing this needs
+  a refit on half-A mice (GPU, not approved).
+- **Recorded fact about 10.2 (no verdict changes):** 10.2a (ii), 10.7 and the LeafCutter control confirmed on half-B
+  **TRAIN** cells. For LeafletFA these cells were in the fit. Check 16 confirms on half-B TEST cells instead.
+
+**Cell types and units.**
+- Types: the 100 TMS types of the LeafCutter control (`c10_lc/TMS_halfA/types.tsv`: eligible in check 10, ≥ 4 mice
+  in each half).
+- Contrast: type vs rest. Rest = all other cells of the same half, as in 10.2 and the LeafCutter control. Pairwise
+  contrasts (10.7) are not part of this check.
+- Universe U: (type, ATSE) with ≥ 1 half-A TRAIN read of the type at the ATSE that is evaluable in half-B TEST. The
+  evaluability condition is ≥ 20 half-B TEST reads and ≥ 3 covering half-B TEST cells of the type at the ATSE.
+  - Evaluability uses B's coverage, not B's ψ.
+  - It is applied identically to every method.
+- **Coverage bins:** the type's half-A TRAIN reads at the ATSE: **1–19, 20–99, 100–499, ≥ 500**.
+
+**Ranking statistics, all from half-A TRAIN cells.** Lead junction = argmax |Δψ| of the method's own estimate. The sign
+of Δψ there is the call's direction.
+- **LeafletFA (primary): z = |Δψ_lead| / √(Var_s(Δψ_lead^(s)) + τ²_b).**
+  - Δψ is the check 10 estimator restricted to half-A TRAIN cells: type mean of ρ̃ minus rest mean, point estimate from
+    the fit's φ and ψ.
+  - Var_s is over 200 combined draws: q(φ), q(ψ) and the mouse bootstrap of amendment 6 note 3, within half A, seed 101
+    as in 10.2a.
+  - The mouse bootstrap resamples the type's half-A mice, i.e. the per-mouse pseudoreplicates. It carries the variance
+    across mice.
+  - τ²_b = 0.01024 if half-A TRAIN reads < 500, else 0.00256. Below 100 reads this extrapolates check 12's lowest bin.
+    It is also applied by TRAIN reads, where check 12 binned by TEST reads.
+- **Raw pseudobulk:** |Δψ_lead|, from half-A TRAIN Σy/ΣN of the type minus the rest.
+- **LeafCutter:** the existing half-A runs of the LeafCutter control (`c10_lc/TMS_halfA/<type>/`; settings as recorded
+  there; not rerun).
+  - Scorable = cluster status Success.
+  - Ranked by the cluster's `p`, ties broken by |deltapsi| at the lead intron.
+  - Lead and sign from `deltapsi_armT`, as in the control.
+- **Descriptive only:** LeafletFA ranked by |Δψ_lead| (point estimate, no uncertainty), to separate the effect of the
+  statistic from the estimator.
+- Ties: stable sort, then by (type code, ATSE index).
+
+**Matched number of calls.**
+- In each bin b, each method calls its top **N_b = min(500, ⌊0.10 · |U_b|⌋)** units of U_b.
+- A method with fewer than N_b scorable units in the bin is reported but not compared in that bin (expected for
+  LeafCutter at 1–19 reads).
+- Sensitivity, descriptive: N_b′ = min(2,000, ⌊0.25 · |U_b|⌋).
+- Also descriptive: one pooled ranking over all bins at N = 2,000.
+
+**Confirmation (model-free, half-B TEST cells only).**
+- A call is **confirmed** if both hold in half-B TEST raw pseudobulk:
+  - TV between the type and the rest > δ/2 = 0.05;
+  - the same sign at the call's lead junction.
+  - This is 10.2 (ii) applied to half-B TEST cells.
+- **Null:** the type labels of half-B TEST cells are permuted within each mouse, 20 permutations (seeds 1000–1019),
+  and the same confirmation is recomputed for each method's calls.
+- **Excess confirmation** of a method in a bin = mean over its calls of (confirmed − null confirmation rate of that
+  call).
+- Also reported, descriptive:
+  - the confirmed fraction and null;
+  - sign agreement alone, as in SpliceVI Fig 4d.
+- **Intervals:** bootstrap over the 100 cell types, 2,000 resamples, seed 0. Each method's excess is recomputed on its
+  own calls in the resampled types. The difference LeafletFA − comparator is taken within each resample, giving a 95 %
+  percentile interval.
+
+**Pass rule (fixed now).**
+- **Comparisons:** LeafletFA (z) vs raw pseudobulk and vs LeafCutter, in bins 20–99, 100–499 and ≥ 500. Only bins where
+  both methods have ≥ N_b scorable units are compared.
+- **Non-inferior:** in every comparison, the lower 95 % bound of (LeafletFA − comparator) excess is > −0.05.
+- **Better:** non-inferior, and against both comparators the lower bound is > 0 in at least one of the three bins.
+- **Fail:** anything else.
+- **Thin data, bin 1–19 (separate reading, "more useful"): supported** if LeafletFA's excess has a lower bound > 0
+  **and** (LeafletFA − raw pseudobulk) has a lower bound > 0. LeafCutter's scorable count in this bin is reported.
+
+**Readings (stated now).**
+- *Better or non-inferior:* LeafletFA's between-type calls confirm in held-out cells of held-out mice at least as
+  often as pseudobulk and LeafCutter at an equal number of calls, within the stated limit on the fit.
+- *Fail:* reported as is. Differential splicing stays unclaimed, and no further estimator or statistic variant is
+  tried for this question.
+- In every case, the use of this result in any text is Karin's decision.
+
+**Other limits stated in advance.**
+- Half-B TEST cells are about 15 % of cells, so confirmation is noisy for every method. The per-method null accounts
+  for each method's own selection.
+- Units of one type and junctions of one ATSE are not independent; the type bootstrap is the only interval.
+- LeafCutter's own call rule (p.adjust < 0.05 and δ) is not used. At a matched N, its ranking is by `p`.
+
+**Cost and code.**
+- CPU only, from the seed-0 checkpoint and counts; no refit.
+- One job: the half-A draws plus confirmation and 20 nulls for three rankings. Expected ≤ 3 h on 4 CPUs.
+- A 4-draw smoke run first, to measure peak memory (request = peak + 30 %) and to check that outputs parse. Only cost
+  and status are read from it.
+- Code: `scripts/validation/c16_ds_heldout.py`. Results: `$V/c16/`, section "Check 16" in VALIDATION_REPORT.md.
+- Report on Monday 2026-11-16, whichever way it goes.
