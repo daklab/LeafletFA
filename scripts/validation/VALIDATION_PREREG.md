@@ -1404,3 +1404,67 @@ direction.
   - `3_10_M/3_11_M` is in half B while `3_11_M` is in half A.
   - `3_38_F/3_39_F` is in half A while `3_38_F` and `3_39_F` are in half B.
   - So 106 of about 78,000 TMS cells sit in a half that does not match all their possible mice.
+
+## Amendment 15 (Karin 2026-11-16; written and committed before any code ran) — check 19: within-donor pairwise confirmation on Allen pairs with ≥ 4 shared donors; and a descriptive export of all Allen pairs
+
+**Scope (Karin).**
+- CPU only. No refit. Seed-0 Allen fit and saved estimates. No earlier verdict changes. No manuscript text.
+- Browser labels (Karin):
+  - TMS pairs: "validated", with the measured rate.
+  - Allen pairs: "computed, not validated", with the per-pair donor count shown.
+
+**Part 1, descriptive export (no rule).**
+- **Pairs:** all 2,278 pairs of the 68 Allen cell groups of check 10 (cluster label without its number; donors =
+  `mouse.id`).
+- **Per pair:** the top 200 ATSEs by |Δψ_lead| of the saved check 10 point estimates (catalog export
+  `c12/export/catalog_Allen_s0.tsv.gz`; lead = argmax |Δψ| over the ATSE's junctions).
+  - Eligible ATSEs: ≥ 20 TRAIN reads and ≥ 3 covering TRAIN cells in each group (the browser defaults).
+  - Columns: gene, event id, lead junction, ψ of both groups, raw TRAIN pseudobulk ψ of both, ATSE reads and covering
+    cells of both, Δψ.
+- **Per-pair index:**
+  - `donors_both` = donors with ≥ 1 TRAIN cell of both groups (`c17/allen_donors_per_pair.tsv`);
+  - the number of eligible ATSEs;
+  - for `donors_both` = 0, the flag "cell type and donor not separable; differences may reflect donor or batch".
+- Outputs: `$V/c19/allen_pairs_top200.tsv.gz`, `$V/c19/allen_pairs_index.tsv`.
+
+**Part 2, check 19.**
+- **Pairs:** the 642 pairs with ≥ 4 donors contributing TRAIN cells of both groups (`donors_both_train` ≥ 4).
+  - Both groups are restricted to their **shared donors**: donors with TRAIN cells of both groups.
+- **Calls (TRAIN cells of shared donors).** Within-donor Δψ_j = equal-weight mean, over the shared donors with ≥ 1 TRAIN
+  read in both groups at the ATSE, of the per-donor (ψ_A,d,j − ψ_B,d,j).
+  - LeafletFA: ψ_t,d = mean of ρ̃ over group t's TRAIN cells of donor d (check 10 per-cell estimator, the fit's φ and
+    ψ, point).
+  - Raw pseudobulk: ψ_t,d = Σy/ΣN over group t's TRAIN cells of donor d.
+  - Lead junction = argmax |Δψ_j|; ranked by |Δψ_lead|; sign = direction.
+  - A unit with no donor having reads in both groups is not scorable.
+- **Confirmation (TEST cells of the shared donors).**
+  - Statistic: the same within-donor mean of per-donor TEST pseudobulk differences, over shared donors with ≥ 1 TEST
+    read in both groups at the ATSE.
+  - Confirmed if TV(mean Δψ) > δ/2 = 0.05 and the same sign at the call's lead junction (δ = 0.10, the check 10 value).
+- **Null:** the two groups' labels are permuted among their TEST cells within each donor, 20 permutations, seeds
+  1000–1019. Excess = confirmed − null.
+- **Evaluable unit:** ≥ 20 TEST reads and ≥ 3 covering TEST cells in each group, over the shared donors.
+- **Bin:** the smaller of the two groups' TRAIN reads at the ATSE over the shared donors: 1–19, 20–99, 100–499, ≥ 500.
+- **Matched calls:** cap 5 per pair per bin; pairs where both methods have ≥ 5 scorable units in the bin.
+- **Comparator:** raw pseudobulk only (no LeafCutter).
+- **Intervals:** bootstrap over pairs, 2,000 resamples, seed 0. Pairs share groups, so this is approximate.
+- **Pass rule (check 17's):**
+  - **Non-inferior:** all compared lower bounds of (LeafletFA − raw) excess are > −0.05 in 20–99, 100–499 and ≥ 500,
+    in bins where ≥ 10 pairs qualify.
+  - **Better:** non-inferior, and a lower bound > 0 in ≥ 1 of those bins.
+  - **Thin data (1–19):** supported if LeafletFA's excess and (LeafletFA − raw) both have lower bounds > 0.
+- **Pair kind (descriptive):** class of each group = Allen `class_label` of its majority official subclass
+  (`tsv/c10_Allen_group_subclass.tsv` with the metadata's subclass → class map; Glutamatergic, GABAergic,
+  Non-Neuronal). Kinds are same class and different class. Also reported:
+  - rank bands as in check 17;
+  - the distribution of shared donors among the 642 pairs.
+- **Limit stated in advance:** the seed-0 Allen fit saw all TRAIN cells. TEST cells are held out by the per-cell split
+  but come from the same donors, so the confirmation cells are unseen and their donors are not.
+- **If the design proves impossible as written** (for example, too few evaluable units), this is reported, not changed
+  silently. Any change goes in a dated note written before scoring.
+
+**Cost and code.**
+- `c19_allen_pairs.py`: one job for part 1 (table only) and one for check 19, after a small smoke run to measure
+  memory (request = peak + 30 %).
+- Results: `$V/c19/`. The report is in `REPORT_check19_allen_pairs.md`, merged into VALIDATION_REPORT.md as
+  "Check 19". Reported whichever way it goes.
