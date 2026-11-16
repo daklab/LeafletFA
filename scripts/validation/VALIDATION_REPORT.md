@@ -1207,3 +1207,69 @@ Raw pseudobulk at 1–19 reads: 0.04 / 0.05 / 0.01. Full table: `rank_bands.tsv`
 
 - Median: 1 donor in TRAIN, 0 in each half.
 - 48 % of pairs have no donor contributing both groups.
+
+## Check 18 — refit on half the mice, confirmation only in mice the model never saw (amendment 14 + note 1; `c18_split.py`, `c18_score.py`, `$V/c18/`)
+**Jobs.**
+
+| Job | ID | Time | Peak | Notes |
+|---|---|---|---|---|
+| Split | 23370796 | 2.7 min | 3.5 GB | — |
+| GPU refit | 23370799 | 13.4 min | host 7.6 GB, GPU 6.6 GB | b6k ne1dg7-002 (RTX PRO 6000 Blackwell); 16,200 steps, 0.048 s/step, fit 12.9 min, 0 NaN restarts, φ finite |
+| LeafCutter prepare | 23370800 | 3.1 min | 2.6 GB | — |
+| LeafCutter array | 23370801 | 9.1 CPU-h | — | 50 of 50 done |
+| Score | 23370802 | 7.4 min | 11.8 GB | — |
+
+The first split run (23370796's predecessor, 23370697) was cancelled for the composite labels (note 1).
+
+**Split.**
+- Units: 14 (composite labels joined with their mice). Draw 1,521 of 10,000 was chosen.
+- Half A: 46,479 cells; half B: 31,656 cells.
+- Scores: 100 check 16 types with ≥ 4 mice per half, 137 types with ≥ 1 mouse per half, 126 with ≥ 2. The 10.2a split
+  scored 100 / 131 / 120.
+- Confirmation uses all half-B cells (TRAIN and TEST), so all 300 pairs and 100 types are scored.
+
+**18a, pairwise (check 17 design).** LeafletFA − comparator excess (95 % pair-bootstrap CI):
+
+| Bin | vs raw (300 pairs): LeafletFA / raw excess | Difference | vs LeafCutter (subset): pairs, LeafletFA / LC | Difference |
+|---|---|---|---|---|
+| 1–19 | 0.144 / 0.056 | **+0.088 (+0.059, +0.118)** | — | — |
+| 20–99 | 0.184 / 0.117 | **+0.068 (+0.041, +0.096)** | 0 qualifying pairs | not compared |
+| 100–499 | 0.261 / 0.167 | **+0.094 (+0.069, +0.120)** | 49: 0.293 / 0.137 | **+0.156 (+0.093, +0.223)** |
+| ≥ 500 | 0.282 / 0.221 | **+0.061 (+0.037, +0.084)** | 50: 0.285 / 0.225 | +0.059 (−0.0002, +0.127) |
+
+- **Pre-registered reading: BETTER.**
+  - Every compared lower bound is > −0.05.
+  - Against raw, the lower bound is > 0 in all bins; against LeafCutter, at 100–499.
+- Thin data (1–19) supported.
+- By class, LeafletFA − raw:
+
+| Class | 1–19 | 20–99 | 100–499 | ≥ 500 |
+|---|---|---|---|---|
+| Same tissue | +0.131 | +0.105 | +0.119 | +0.053 |
+| Same cell type across tissues | +0.025 (−0.022, +0.068) | +0.027 (−0.017, +0.070) | +0.059 (+0.012, +0.106) | +0.091 (+0.043, +0.138) |
+| Unrelated | +0.108 | +0.071 | +0.103 | +0.038 |
+
+  - Every lower bound is > 0 except same cell type at 1–19 and 20–99.
+  - Same-cell-type pairs again show no gain below 100 reads. LeafletFA's own excess there has a lower bound of −0.001
+    (1–19) and +0.027 (20–99).
+- Rank bands, LeafletFA excess (confirmed):
+  - 1–5: 0.27–0.39 (0.83–0.93);
+  - 6–20: 0.23–0.27 (0.77–0.82);
+  - 21–100: 0.16–0.17 (0.63–0.67).
+  - Raw at 1–19: 0.07 / 0.04 / 0.05.
+
+**18b, type vs rest (100 types, cap 5 per type).**
+
+| Bin | LeafletFA / raw excess | LeafletFA − raw (CI) |
+|---|---|---|
+| 1–19 | 0.302 / 0.088 | **+0.214 (+0.147, +0.276)** |
+| 20–99 | 0.327 / 0.240 | **+0.087 (+0.026, +0.148)** |
+| 100–499 | 0.452 / 0.373 | **+0.079 (+0.021, +0.139)** |
+| ≥ 500 | 0.555 / 0.519 | +0.036 (−0.006, +0.082) |
+
+- **Pre-registered reading: BETTER.** Thin data supported.
+
+**Reading (amendment 14).**
+- Both designs keep the direction of check 17 and of check 16b design 1, now with confirmation only in mice the half-A
+  fit never saw.
+- The limit "the model saw cells from the confirming mice" no longer applies to 18a and 18b.
