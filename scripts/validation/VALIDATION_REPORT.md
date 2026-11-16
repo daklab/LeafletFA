@@ -1110,3 +1110,46 @@ Descriptive; no pass rule. Plan: VALIDATION_PREREG "Record, scaling and runtime 
 - **Pooled ranking, N = 2,000:** excess LeafletFA z 0.515, raw 0.271, LeafCutter 0.213.
 - **LeafletFA's top calls sit in fewer types:** 17–50 types per bin, against 73–85 for raw and LeafCutter. Its null is higher (0.42–0.48, against 0.17–0.42 for raw). Few types make the type bootstrap wide; at ≥ 500 reads, 38 types.
 - **Limit stated in advance:** the fit saw half-B mice's TRAIN cells. The confirming half-B TEST cells did not enter the fit, the calls or τ².
+
+## Check 16b — type-matched follow-up (amendment 12 note 1; `c16b_type_matched.py`, `$V/c16b/`)
+- **Jobs:** 23365160 (rebuild with the per-unit table; 32 min, peak 10.9 GB) and 23365161 (scoring; 38 s, 0.3 GB).
+- The regenerated check 16 summary equals the reported one (asserted). Cap = 5 calls per cell type per bin.
+
+**Design 1, capped and type-matched.** Same types for both methods, 5 calls each per type.
+
+| Bin | Types | LeafletFA z excess | Comparator excess | LeafletFA − comparator (CI) |
+|---|---|---|---|---|
+| 1–19 vs raw | 93 | 0.188 | 0.086 | **+0.102 (+0.046, +0.160)** |
+| 20–99 vs raw | 96 | 0.339 | 0.187 | **+0.152 (+0.088, +0.215)** |
+| 100–499 vs raw | 97 | 0.444 | 0.366 | **+0.077 (+0.023, +0.129)** |
+| ≥ 500 vs raw | 98 | 0.523 | 0.475 | **+0.048 (+0.007, +0.091)** |
+| 100–499 vs LeafCutter | 93 | 0.458 | 0.135 | **+0.323 (+0.266, +0.380)** |
+| ≥ 500 vs LeafCutter | 98 | 0.523 | 0.212 | **+0.311 (+0.251, +0.367)** |
+
+- At 20–99 vs LeafCutter, no type has ≥ 5 LeafCutter-scorable units, so there is no comparison.
+- **Design 1 reading: BETTER.** All five compared lower bounds are > 0. Thin-data: lower bound > 0 at 1–19 and 20–99.
+
+**Design 2, restricted to types where every compared method made a check 16 call.**
+
+| Bin | Types | Calls LFA / raw / LC | LeafletFA − raw (CI) | LeafletFA − LeafCutter (CI) |
+|---|---|---|---|---|
+| 1–19 | 47 | 495 / 359 / — | **+0.152 (+0.085, +0.219)** | — |
+| 20–99 | 25 | 498 / 255 / — | +0.095 (−0.024, +0.229) | — |
+| 100–499 | 14 | 460 / 169 / 68 | **−0.081 (−0.150, +0.033)** | +0.108 (−0.038, +0.275) |
+| ≥ 500 | 33 | 488 / 361 / 246 | +0.003 (−0.051, +0.128) | **+0.242 (+0.159, +0.404)** |
+
+- **Design 2 reading: FAIL.** Non-inferiority fails vs raw at 100–499 (lower bound −0.150) and at ≥ 500 (−0.051).
+- Thin-data: lower bound > 0 at 1–19, not at 20–99.
+
+**Pre-registered concentration reading: "at least partly explained by concentration".**
+- Design 2 does not keep a lower bound > 0 at 20–99.
+- The LeafCutter advantage holds in both designs at ≥ 500 reads, but not at 100–499 in design 2.
+
+**Descriptive, outside the reading.**
+- The two designs answer different questions:
+  - Design 1 forces equal calls from the same ~95 types. Within a cell type, LeafletFA's top units confirm more often
+    than raw's and LeafCutter's in every bin.
+  - Design 2 keeps check 16's own calls but only in the 14–47 types where all methods called. Within those types,
+    raw's fewer calls confirm about as often as LeafletFA's at ≥ 20 reads (raw 0.31–0.54 against LeafletFA 0.40–0.50).
+- Design 2 has few types (14 at 100–499) and unbalanced call counts, so its intervals are wide.
+- The 1–19 advantage over raw is the only one with a lower bound > 0 in check 16 and in both 16b designs.
