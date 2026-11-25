@@ -26,15 +26,9 @@
 
 **Allen sense checks:** descriptive, no rule. Recorded `a2a0d5d`. Job 23371679. Superseded runs, none used: 23371006,
 23371598, 23371611, 23371627, 23371630, 23371653.
-- **Positive controls:**
-  - *Nrxn1/2/3* SS4: median rank 16 / 94.5 / 152; expected direction in 97 / 100 / 99 % of exc × inh pairs (as
-    expected).
-  - *Grin1* exon 5: rank 221. *Gria2* flip/flop: rank 688.
-  - The expected direction for *Grin1* and *Gria2* is UNSOURCED.
-- **Neuron vs glia:**
-  - Irimia microexons 48×, 98 % in the neuronal direction.
-  - Irimia exons > 27 nt 18×, 97 %.
-  - Rbfox targets 9×, 88 %.
+- **Positive controls:** *Nrxn1/2/3* SS4 median rank 16 / 94.5 / 152, expected direction in 97 / 100 / 99 % of
+  exc × inh pairs. *Grin1* exon 5 rank 221, *Gria2* flip/flop rank 688; their expected direction is UNSOURCED.
+- **Neuron vs glia:** Irimia microexons 48× (98 % neuronal direction); Irimia exons > 27 nt 18× (97 %); Rbfox targets 9× (88 %).
 - **Hierarchy:** fraction of ATSEs with \|Δψ\| ≥ 0.1 goes 0.259 (neuron vs glia) > 0.079 > 0.024 > 0.004 (same
   subclass). Cophenetic Spearman 0.81; adjusted Rand 0.33 (class) and 0.22 (subclass).
 - **Frame:** skipped exons 0.816 vs background 0.478 (holds). Alt 5′ 0.320 vs 0.354 and alt 3′ 0.405 vs 0.467 (no
@@ -42,11 +36,8 @@
 
 **Still running:** nothing (squeue holds only interactive bash 23629898).
 
-**Never started:**
-- Coordinated-shift simulation and call-set biology (DS items 3–4; not approved).
-- LeafCutter type vs rest in 18b (out of scope).
-- Nova and Srrm4 target lists (not obtained).
-- Refit on 100 % of cells (deferred by Karin).
+**Never started:** coordinated-shift simulation and call-set biology (DS items 3–4, not approved); LeafCutter type vs
+rest in 18b (out of scope); Nova and Srrm4 lists (not obtained); refit on 100 % of cells (deferred).
 
 ## 3. Numbers that contradict or qualify VALIDATION_REPORT.md as of 18 Nov
 - **No later computation changed a reported number.** No LeafletFA commits since 18 Nov.
@@ -66,10 +57,8 @@
   - The site is the 10 Nov preview (`portal_browser/site`, 597 MB) on the 70 % TRAIN fit (seed 0, K = 20).
   - Raw TRAIN pseudobulk ψ is shown beside each estimate in the compare and one-vs-rest views and their TSV downloads.
   - The source notes were updated for checks 16–17 (`3e4dbb0`, `7c86aa9`); the site was not rebuilt.
-  - Not yet in the browser:
-    - rank-band rates (checks 17–18);
-    - Allen donor counts and the "not separable" flag (`c19/allen_pairs_index.tsv` is ready);
-    - "validated" / "computed, not validated" labels.
+  - Not yet in it: rank-band rates (17–18); Allen donor counts and the "not separable" flag (`c19/allen_pairs_index.tsv`
+    is ready); "validated" / "computed, not validated" labels.
 - **Simulation:** candidate supplementary figure from checks 15 and 15b
   (`paper_figures/figS_simulation/panels/Ssim_a_review.png`, `2e1942a`). No new simulation.
 - **Scaling:**
@@ -81,8 +70,5 @@
 ## 5. Crecerelle (tuVI / TRVI, unobserved junctions): answered 18 Nov
 - Source: `~/SpliceVI_paper_notes/working_notes/LANGUAGE_PASS.md` §6, from fa5e04b, Zenodo 22959716 and Weberling
   2026 (doi 10.64898/2026.09.23.753495).
-- **Encoder:** log1p-normalized counts, with unobserved junctions entered as 0 and no mask.
-- **DM likelihood:** an ATSE with N = 0 contributes exactly 0 (no mask).
-- **ZIDM:** adds an excess-zero term for all-zero groups; all TRVI analyses used ZIDM.
-- **TRVI expression:** ZINB.
-- `docs/conceptual-model.md` says nothing on this.
+- Encoder: log1p counts, unobserved junctions entered as 0, no mask. DM: an ATSE with N = 0 contributes exactly 0.
+  ZIDM adds an excess-zero term (all TRVI analyses used ZIDM); TRVI expression ZINB. `conceptual-model.md` is silent.
