@@ -19,8 +19,8 @@
 | Pairwise DS, TMS (full-data fit) | 17 | BETTER | vs raw +0.079 / +0.068 / +0.070 / +0.055, all lower bounds > 0; vs LeafCutter +0.081 [+0.008], +0.061 [+0.004] (41 / 48 pairs) | R "Check 17"; NL |
 | Type vs rest, TMS (mice unseen by the fit) | 18b | BETTER | vs raw +0.214 / +0.087 / +0.079 / +0.036 [−0.006] | R "Check 18"; NL |
 | Allen pairs with ≥ 4 shared donors | 19 | BETTER | vs raw +0.029 / +0.091 / +0.060 / +0.064, all > 0 (564 pairs) | R "Check 19"; NL |
-| Allen differences behave like known biology | sense checks (descriptive) | — | *Nrxn1* SS4 median rank 16, 97 % in the expected direction; Irimia microexons 48× enriched (98 % neuronal); hierarchy 0.259 → 0.004; skipped-exon frame 0.816 vs 0.478 | R "Allen sense checks"; NL |
-| Speed and scaling | 10.6, scaling record | descriptive | Fits on one RTX PRO 6000 Blackwell: TMS 13.2 min, Allen 38.5 min, 132,706 cells 73.2 min. GPU 0.032–0.046 s/step, flat ≥ 10,000 cells. CPU 102× slower per step. scQuint 86.0 min (16 CPUs). LeafCutter catalog benchmark 19.2 task-h / 77 core-h (different product: per-type tests) | R "Check 10" 10.6, "Scaling and runtime record"; NL |
+| Allen differences behave like known biology | sense checks (descriptive) | — | *Nrxn1/2/3* SS4 in the expected direction in 97 / 100 / 99 % of excitatory × inhibitory pairs (median rank 16 / 94.5 / 152); Irimia 2014 microexons 48× enriched, 98 % neuronal direction; share of ATSEs with \|Δψ\| ≥ 0.1: 0.259 (neuron vs glia) → 0.004 (same subclass), cophenetic Spearman 0.81; skipped-exon frame 0.816 vs 0.478 | R "Allen sense checks"; NL |
+| Speed and scaling | 10.6, scaling record | descriptive | Fits on one RTX PRO 6000 Blackwell (source chosen: RUNTIME_TABLE rows 26, 28, run records of seeds 1–2): TMS 12.9 min, Allen 37.7 min; 132,706 cells 73.2 min. GPU 0.032–0.046 s/step, flat ≥ 10,000 cells. CPU 102× slower per step. scQuint 86.0 min (16 CPUs). LeafCutter catalog benchmark 19.2 task-h / 77 core-h (different product: per-type tests) | R "Check 10" 10.6, "Scaling and runtime record"; NL |
 | Known biology, TMS | 10.4 | PASS | *Fgfr2* IIIb: epithelial min 0.704 > mesenchymal max 0.649; *Ptprc* 25 of 27 confirmed; *Nrxn1–3* SS4 in 1,256 / 946 / 1,129 of 1,891 pairs | R "Check 10"; NL |
 
 ### Claims the note cannot make, and the check that rules each out
@@ -37,6 +37,9 @@
 | Programs are reproducible units | 3, 5a, 6, 8 | — |
 | The posterior DS test is reproducible | 9a | — |
 | DS gain for the same cell type across tissues below 100 reads | 17, 18a | No gain; CIs include 0 |
+| *Grin1* exon 5 and *Gria2* flip/flop as positive controls | Allen sense checks | Expected direction UNSOURCED (*Gria2* rank 688) |
+| Frame preservation for alt 5′ / alt 3′ sites | Allen sense checks | No enrichment (0.320 vs 0.354; 0.405 vs 0.467) |
+| Type vs rest at ≥ 500 reads as a gain (limit, not a claim) | 16, 16b, 18b | 16 FAIL; 16b concentration; 18b ≥ 500 lower bound −0.006 |
 
 ## 2. Journal format (Bioinformatics, OUP)
 - **Source:** https://academic.oup.com/bioinformatics/pages/author-guidelines (fetched 25 Nov 2026). The
@@ -110,7 +113,7 @@
 - **Results, accuracy:** 10.1 numbers (NL).
 - **Results, intervals:** check 12 coverage 0.950–0.963 (NL).
 - **Results, DS:** check 18a / 17 table and the Allen check 19 (NL); sense checks (NL).
-- **Results, scale:** TMS 13.2 min, Allen 38.5 min, GPU flat per step, CPU 102× (NL).
+- **Results, scale:** TMS 12.9 min, Allen 37.7 min (RUNTIME_TABLE rows 26, 28), GPU flat per step, CPU 102× (NL).
 - **Availability:** GitHub, PyPI, Zenodo DOI (catalog, fits), browser URL; all placeholders (section 5).
 - **Limitations:**
   - No gain for the same cell type across tissues below 100 reads.
@@ -149,9 +152,40 @@
 - **Drop *Gria2* from the main figure; keep it in the gallery.** Its Allen rank is 688 and its expected direction is
   unsourced.
 - **DS section budget about 250 words, taken from Limits and Results slack.** It carries the new main claim.
-- **Quote fit times from seed 0 (13.2 / 38.5 min).** These are the fits behind the catalog.
+- **Fit times: quote 12.9 / 37.7 min (RUNTIME_TABLE, seeds 1–2 run records).** Changed from my 25 Nov first draft (seed 0): the seed-0 fits failed while saving and were resumed, so their ≈ 13.2 / 38.5 min come from logs. Same recipe and GPU; applied in OUTLINE_PREP (35b8715).
 - **Browser labels:** "validated" for TMS pairs (17–18) and Allen pairs with ≥ 4 shared donors (19); "computed, not
   validated" plus the shared-donor count for the rest. This matches what was tested.
 - **Push LeafletFA (14 commits) and bioinformatics (9) before writing.** The text should cite pushed commits.
 - **Add the validation numbers to the ledger before writing.** Rule: numbers from the ledger only.
 - **Ask David for the daklab/leafletfa-browser repo now.** It is needed for the availability URL.
+
+## 7. Browser rebuild: what it would add (not rebuilt; Karin decides Thursday)
+**What it would add.** Code changes are in `portal/web/app.js` and `config.js`, with data shards from `precompute.py` /
+`build_portal.py`.
+- **Rank-band rates** beside each pair's ranked list: confirmed fraction and excess by rank band (1–5, 6–20, 21–100) and
+  read bin.
+  - TMS from check 18a: `$V/c18/18a_rank_bands.tsv`. Allen from check 19: `$V/c19/rank_bands.tsv`.
+  - Shown only where the pair is in a validated class.
+- **Allen donor counts:** donors contributing both groups, per pair (`$V/c19/allen_pairs_index.tsv`).
+  - Pairs with 0 donors are flagged "cell type and donor not separable; differences may reflect donor or batch".
+- **Labels:**
+  - "validated (checks 17–18)" on TMS pairs;
+  - "validated within donors (check 19)" on Allen pairs with ≥ 4 shared donors;
+  - "computed, not validated" on the other Allen pairs.
+  - The same cell type across tissues gets a note that there is no gain below 100 reads.
+- **Updated notes:** add checks 18 and 19 (currently they cite checks 16–17 only).
+- Unchanged: the 70 % TRAIN fit (seed 0); raw ψ beside each estimate; no significance flag.
+
+**Build time** (last measured runs; the precompute steps are independent jobs):
+
+| Step | Job | Time | Peak memory |
+|---|---|---|---|
+| Precompute catalog | 22652532 | 2.5 min | 0.58 GiB |
+| Precompute TMS | 22652533 | 2.9 min | 6.05 GiB |
+| Precompute Allen | 22652534 | 3.4 min | 13.8 GiB |
+| `build_portal.py all` | 23156524 | 0.3 min | 1.24 GiB |
+| Screenshot checks | 23156576 | 0.5 min | — |
+
+- **About 5 min of compute**, plus writing the new views.
+- The site is 597 MB today, and the new data are small: 2,278 Allen rows and rank-band tables.
+- Publishing also needs the daklab/leafletfa-browser repo, which currently returns 404.
