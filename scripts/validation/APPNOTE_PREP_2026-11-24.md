@@ -20,7 +20,7 @@
 | Type vs rest, TMS (mice unseen by the fit) | 18b | BETTER | vs raw +0.214 / +0.087 / +0.079 / +0.036 [−0.006] | R "Check 18"; NL |
 | Allen pairs with ≥ 4 shared donors | 19 | BETTER | vs raw +0.029 / +0.091 / +0.060 / +0.064, all > 0 (564 pairs) | R "Check 19"; NL |
 | Allen differences behave like known biology | sense checks (descriptive) | — | *Nrxn1/2/3* SS4 in the expected direction in 97 / 100 / 99 % of excitatory × inhibitory pairs (median rank 16 / 94.5 / 152); Irimia 2014 microexons 48× enriched, 98 % neuronal direction; share of ATSEs with \|Δψ\| ≥ 0.1: 0.259 (neuron vs glia) → 0.004 (same subclass), cophenetic Spearman 0.81; skipped-exon frame 0.816 vs 0.478 | R "Allen sense checks"; NL |
-| Speed and scaling | 10.6, scaling record | descriptive | Fits on one RTX PRO 6000 Blackwell (source chosen: RUNTIME_TABLE rows 26, 28, run records of seeds 1–2): TMS 12.9 min, Allen 37.7 min; 132,706 cells 73.2 min. GPU 0.032–0.046 s/step, flat ≥ 10,000 cells. CPU 102× slower per step. scQuint 86.0 min (16 CPUs). LeafCutter catalog benchmark 19.2 task-h / 77 core-h (different product: per-type tests) | R "Check 10" 10.6, "Scaling and runtime record"; NL |
+| Speed and scaling | 10.6, scaling record | descriptive | Fits on one RTX PRO 6000 Blackwell (seed 0, Karin 26 Nov; ledger `FitMinutesTMS`, `FitMinutesAllen`): TMS 13.2 min, Allen 38.5 min; 132,706 cells 73.2 min. GPU 0.032–0.046 s/step, flat ≥ 10,000 cells. CPU 102× slower per step. scQuint 86.0 min (16 CPUs). LeafCutter catalog benchmark 19.2 task-h / 77 core-h (different product: per-type tests) | R "Check 10" 10.6, "Scaling and runtime record"; NL |
 | Known biology, TMS | 10.4 | PASS | *Fgfr2* IIIb: epithelial min 0.704 > mesenchymal max 0.649; *Ptprc* 25 of 27 confirmed; *Nrxn1–3* SS4 in 1,256 / 946 / 1,129 of 1,891 pairs | R "Check 10"; NL |
 
 ### Claims the note cannot make, and the check that rules each out
@@ -113,7 +113,7 @@
 - **Results, accuracy:** 10.1 numbers (NL).
 - **Results, intervals:** check 12 coverage 0.950–0.963 (NL).
 - **Results, DS:** check 18a / 17 table and the Allen check 19 (NL); sense checks (NL).
-- **Results, scale:** TMS 12.9 min, Allen 37.7 min (RUNTIME_TABLE rows 26, 28), GPU flat per step, CPU 102× (NL).
+- **Results, scale:** TMS 13.2 min, Allen 38.5 min (seed 0; ledger), GPU flat per step, CPU 102× (ledger `ScaleCPUOverGPU`).
 - **Availability:** GitHub, PyPI, Zenodo DOI (catalog, fits), browser URL; all placeholders (section 5).
 - **Limitations:**
   - No gain for the same cell type across tissues below 100 reads.
@@ -152,7 +152,7 @@
 - **Drop *Gria2* from the main figure; keep it in the gallery.** Its Allen rank is 688 and its expected direction is
   unsourced.
 - **DS section budget about 250 words, taken from Limits and Results slack.** It carries the new main claim.
-- **Fit times: quote 12.9 / 37.7 min (RUNTIME_TABLE, seeds 1–2 run records).** Changed from my 25 Nov first draft (seed 0): the seed-0 fits failed while saving and were resumed, so their ≈ 13.2 / 38.5 min come from logs. Same recipe and GPU; applied in OUTLINE_PREP (35b8715).
+- **Fit times: decided by Karin 26 Nov: seed 0, 13.2 / 38.5 min** (from the seed-0 fit logs; ledger `FitMinutesTMS`, `FitMinutesAllen`). Seeds 1–2 run records (12.9 / 37.7 min) are not quoted.
 - **Browser labels:** "validated" for TMS pairs (17–18) and Allen pairs with ≥ 4 shared donors (19); "computed, not
   validated" plus the shared-donor count for the rest. This matches what was tested.
 - **Push LeafletFA (14 commits) and bioinformatics (9) before writing.** The text should cite pushed commits.
